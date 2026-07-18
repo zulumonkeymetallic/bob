@@ -44,11 +44,10 @@ import RecoveryWidget from './metrics/RecoveryWidget';
 import ActivityWidget from './metrics/ActivityWidget';
 import FitnessWidget from './metrics/FitnessWidget';
 import SprintVelocityWidget from './metrics/SprintVelocityWidget';
-import DailyAgendaWidget from './dashboard/DailyAgendaWidget';
 import FinanceSummaryWidget from './dashboard/FinanceSummaryWidget';
 import FitnessKpiDashboardWidget from './dashboard/FitnessKpiDashboardWidget';
 import HabitsKpiWidget from './dashboard/HabitsKpiWidget';
-import AddToCalendarWidget from './dashboard/AddToCalendarWidget';
+import DailyPlanWidget from './dashboard/DailyPlanWidget';
 import { isGoalInHierarchySet } from '../utils/goalHierarchy';
 import {
   callDeltaReplan,
@@ -267,11 +266,10 @@ type DashboardWidgetKey =
   | 'lowHangingFruit'
   | 'dailySummary'
   | 'top3'
-  | 'dailyAgenda'
+  | 'dailyPlan'
   | 'financeOverview'
   | 'fitnessKpiBoxes'
   | 'habitsGrid'
-  | 'addToCalendar'
   | 'themeProgress'
   | 'kpiStudio'
   | 'unifiedTimeline'
@@ -288,7 +286,7 @@ interface DashboardWidgetSize {
   height: number;
 }
 type DashboardWidgetSizes = Partial<Record<DashboardWidgetKey, DashboardWidgetSize>>;
-const SUMMARY_WIDGET_KEYS: DashboardWidgetKey[] = ['unifiedTimeline', 'top3', 'dailyAgenda', 'addToCalendar', 'fitnessKpiBoxes', 'habitsGrid', 'financeOverview', 'dailySummary', 'kpiStudio', 'choresHabits', 'lowHangingFruit', 'themeProgress', 'tasksDueToday', 'calendar', 'recoveryMetrics', 'activityMetrics', 'fitnessMetrics', 'sprintVelocity'];
+const SUMMARY_WIDGET_KEYS: DashboardWidgetKey[] = ['unifiedTimeline', 'top3', 'dailyPlan', 'fitnessKpiBoxes', 'habitsGrid', 'financeOverview', 'dailySummary', 'kpiStudio', 'choresHabits', 'lowHangingFruit', 'themeProgress', 'tasksDueToday', 'calendar', 'recoveryMetrics', 'activityMetrics', 'fitnessMetrics', 'sprintVelocity'];
 const dashboardWidgetOrderStorageKey = (deviceType: DashboardDeviceType) => `${DASHBOARD_WIDGET_ORDER_STORAGE_PREFIX}_${deviceType}`;
 const readDashboardWidgetOrder = (deviceType: DashboardDeviceType): DashboardWidgetKey[] => {
   try {
@@ -524,8 +522,7 @@ const DASHBOARD_WIDGET_CONFIG: Array<{ key: DashboardWidgetKey; label: string }>
   { key: 'lowHangingFruit', label: 'Low hanging fruit' },
   { key: 'dailySummary', label: 'Daily summary' },
   { key: 'top3', label: 'Top 3 priorities' },
-  { key: 'dailyAgenda', label: "Today's Agenda" },
-  { key: 'addToCalendar', label: 'Add to Calendar' },
+  { key: 'dailyPlan', label: "Today's Plan" },
   { key: 'fitnessKpiBoxes', label: 'Fitness KPI boxes (weekly + daily)' },
   { key: 'habitsGrid', label: 'Habits & Routines adherence' },
   { key: 'financeOverview', label: 'Finance Summary' },
@@ -545,8 +542,7 @@ const DASHBOARD_WIDGET_DEFAULT_VISIBILITY: DashboardWidgetVisibility = {
   lowHangingFruit: false,
   dailySummary: true,
   top3: true,
-  dailyAgenda: true,
-  addToCalendar: true,
+  dailyPlan: true,
   fitnessKpiBoxes: true,
   habitsGrid: true,
   financeOverview: false,
@@ -5822,26 +5818,15 @@ const Dashboard: React.FC = () => {
                               {renderWidgetResizeHandle('top3', 260, 'Resize top 3 priorities widget')}
                           </div>
                         )}
-                                    {widgetKey === 'dailyAgenda' && widgetVisibility.dailyAgenda && (
+                                    {widgetKey === 'dailyPlan' && widgetVisibility.dailyPlan && (
                           <div
-                            ref={setWidgetResizeContainer('dailyAgenda')}
+                            ref={setWidgetResizeContainer('dailyPlan')}
                             className="dashboard-widget-shell"
-                            style={getWidgetSizeStyle('dailyAgenda', 400)}
+                            style={getWidgetSizeStyle('dailyPlan', 480)}
                           >
-                            <DailyAgendaWidget />
-                            {renderWidgetEdgeHandles('dailyAgenda')}
-                            {renderWidgetResizeHandle('dailyAgenda', 400, "Resize today's agenda widget")}
-                          </div>
-                        )}
-                                    {widgetKey === 'addToCalendar' && widgetVisibility.addToCalendar && (
-                          <div
-                            ref={setWidgetResizeContainer('addToCalendar')}
-                            className="dashboard-widget-shell"
-                            style={getWidgetSizeStyle('addToCalendar', 320)}
-                          >
-                            <AddToCalendarWidget />
-                            {renderWidgetEdgeHandles('addToCalendar')}
-                            {renderWidgetResizeHandle('addToCalendar', 320, 'Resize add to calendar widget')}
+                            <DailyPlanWidget />
+                            {renderWidgetEdgeHandles('dailyPlan')}
+                            {renderWidgetResizeHandle('dailyPlan', 480, 'Resize daily plan widget')}
                           </div>
                         )}
                                     {widgetKey === 'fitnessKpiBoxes' && widgetVisibility.fitnessKpiBoxes && (

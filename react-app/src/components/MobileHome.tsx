@@ -39,6 +39,8 @@ import {
 import { compareTop3Stories, compareTop3Tasks, isTop3Story, isTop3Task, top3DateForToday } from '../utils/top3';
 import { useFocusGoals } from '../hooks/useFocusGoals';
 import { useDashboardData } from '../hooks/useDashboardData';
+import { bucketFromTime, useDailyPlanTimeline, type DailyPlanBucket } from '../hooks/useDailyPlanTimeline';
+import DailyPlanList from './dashboard/DailyPlanList';
 import { getProtectedFocusGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
 import { schedulePlannerItem as schedulePlannerItemMutation } from '../utils/plannerScheduling';
 import { applyChoreQuickDefer, isRecurringTask } from '../utils/plannerDeferral';
@@ -516,14 +518,6 @@ const MobileHome: React.FC = () => {
     if (sharedFilters.focusAligned && !isStoryFocusAligned(story)) return false;
     return true;
   }, [sharedFilters, isStoryInTop3, isStoryFocusAligned]);
-
-  const matchesTimelineSharedFilters = useCallback((item: MobileTimelineItem) => {
-    if (!sharedFilters.top3 && !sharedFilters.chores && !sharedFilters.focusAligned) return true;
-    if (item.kind === 'event') return false;
-    if (item.story) return matchesStorySharedFilters(item.story);
-    if (item.task) return matchesTaskSharedFilters(item.task);
-    return false;
-  }, [sharedFilters, matchesStorySharedFilters, matchesTaskSharedFilters]);
 
   const sprintDaysLeft = useMemo(() => {
     if (!currentSprint) return null;
@@ -1013,191 +1007,23 @@ const MobileHome: React.FC = () => {
     });
   }, [goals, goalsViewFilter, storiesByGoal, selectedSprintId, currentSprint]);
 
-  type MobileTimelineBucket = 'morning' | 'afternoon' | 'evening';
-  type MobileTimelineItem = {
-    id: string;
-    kind: 'task' | 'story' | 'chore' | 'event';
-    title: string;
-    timeLabel: string;
-    sortMs: number | null;
-    bucket: MobileTimelineBucket;
-    task?: Task;
-    story?: Story;
-  };
-
-  const bucketFromTime = useCallback((ms: number | null | undefined, timeOfDay?: string | null): MobileTimelineBucket => {
-    const tod = String(timeOfDay || '').toLowerCase().trim();
-    if (tod === 'morning' || tod === 'afternoon' || tod === 'evening') return tod as MobileTimelineBucket;
-    if (!ms || !Number.isFinite(ms)) return 'morning';
-    const d = new Date(ms);
-    const minute = d.getHours() * 60 + d.getMinutes();
-    // 00:00–04:59 has no real scheduled time behind it — it's a date-only value (e.g. a recurring
-    // task/story falling back to startOfDay(), or a dueDate stored without a time component).
-    // Treat it the same as "no time" rather than letting it fall through to the evening bucket.
-    if (minute < 300) return 'morning';
-    if (minute <= 779) return 'morning';
-    if (minute <= 1139) return 'afternoon';
-    return 'evening';
-  }, []);
-
-  const timelineTimeLabel = (startMs: number | null | undefined, endMs?: number | null): string => {
-    if (!startMs || !Number.isFinite(startMs)) return 'Anytime';
-    const start = new Date(startMs);
-    const startLabel = start.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-    if (endMs && Number.isFinite(endMs)) {
-      const end = new Date(endMs);
-      const endLabel = end.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-      return `${startLabel} - ${endLabel}`;
-    }
-    return startLabel;
-  };
-
-  const resolveMsFromAny = (value: any): number | null => {
-    if (value == null) return null;
-    if (typeof value === 'number' && Number.isFinite(value)) return value;
-    if (typeof value === 'object' && typeof value.toDate === 'function') {
-      try { return value.toDate().getTime(); } catch { return null; }
-    }
-    const parsed = Date.parse(String(value));
-    return Number.isNaN(parsed) ? null : parsed;
-  };
-
-  const overviewCalendarEvents = useMemo(() => {
-    const candidates = [
-      summary?.calendar?.events,
-      summary?.eventsToday,
-      summary?.upcomingEvents,
-      summary?.calendarEvents,
-      summary?.dailyBrief?.calendar,
-    ];
-    for (const candidate of candidates) {
-      if (!Array.isArray(candidate) || candidate.length === 0) continue;
-      const mapped = candidate
-        .map((item: any, idx: number) => {
-          const title = String(item?.title || item?.summary || item?.name || '').trim();
-          if (!title) return null;
-          const startMs = resolveMsFromAny(item?.start ?? item?.startAt ?? item?.startDate ?? item?.when);
-          const endMs = resolveMsFromAny(item?.end ?? item?.endAt ?? item?.endDate);
-          return {
-            id: String(item?.id || item?.eventId || `${title}-${idx}`),
-            title,
-            startMs,
-            endMs,
-          };
-        })
-        .filter(Boolean) as Array<{ id: string; title: string; startMs: number | null; endMs: number | null }>;
-      if (mapped.length > 0) return mapped;
-    }
-    return [] as Array<{ id: string; title: string; startMs: number | null; endMs: number | null }>;
-  }, [summary]);
-
-  const unifiedTimelineItems = useMemo(() => {
-    const today = new Date();
-    const start = new Date(today);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(today);
-    end.setHours(23, 59, 59, 999);
-    const startMs = start.getTime();
-    const endMs = end.getTime();
-
-    const rows: MobileTimelineItem[] = [];
-    const seen = new Set<string>();
-    const add = (row: MobileTimelineItem) => {
-      const key = `${row.kind}:${row.title.toLowerCase()}:${row.timeLabel}`;
-      if (seen.has(key)) return;
-      seen.add(key);
-      rows.push(row);
-    };
-
-    tasksDueTodayForMobile.forEach((task) => {
-      const dueMs = resolveRecurringDueMs(task, today, startMs) ?? getTaskDueMs(task);
-      add({
-        id: `task-${task.id}`,
-        kind: 'task',
-        title: task.title,
-        timeLabel: timelineTimeLabel(dueMs),
-        sortMs: dueMs,
-        bucket: bucketFromTime(dueMs, (task as any).timeOfDay),
-        task,
-      });
-    });
-
-    choresDueToday.forEach((task) => {
-      const dueMs = resolveRecurringDueMs(task, today, startMs) ?? getTaskDueMs(task);
-      // Midnight/pre-dawn (00:00–05:00) = date-only assignment, not a scheduled block time.
-      // Drop the time label and use timeOfDay preference for bucket placement.
-      const isMidnightFallback = dueMs !== null && dueMs >= startMs && dueMs <= startMs + 5 * 3_600_000;
-      const effectiveSortMs = isMidnightFallback ? null : dueMs;
-      add({
-        id: `chore-${task.id}`,
-        kind: 'chore',
-        title: task.title,
-        timeLabel: isMidnightFallback ? '' : timelineTimeLabel(dueMs),
-        sortMs: effectiveSortMs,
-        bucket: bucketFromTime(effectiveSortMs, (task as any).timeOfDay),
-        task,
-      });
-    });
-
-    const gcalMatchedTitles = new Set<string>();
-    sortedStories
-      .filter((story) => story.status !== 4)
-      .forEach((story) => {
-        const dueMs = resolveDateValue(story.targetDate || story.dueDate);
-        const matchedStartMs = resolveDateValue((story as any).calendarMatchedStart);
-        const matchedEndMs = resolveDateValue((story as any).calendarMatchedEnd);
-        // Include if dueDate is today OR if the story is scheduled via GCal match today
-        const isToday = (ms: number | null) => ms !== null && ms >= startMs && ms <= endMs;
-        if (!isToday(dueMs) && !isToday(matchedStartMs)) return;
-        // Prefer GCal matched start time for sort/label so stories sort at when they begin, not when they end
-        const sortTime = matchedStartMs ?? dueMs;
-        if (matchedStartMs !== null) gcalMatchedTitles.add(story.title.trim().toLowerCase());
-        add({
-          id: `story-${story.id}`,
-          kind: 'story',
-          title: story.title,
-          timeLabel: timelineTimeLabel(matchedStartMs ?? dueMs, matchedEndMs ?? undefined),
-          sortMs: sortTime,
-          bucket: bucketFromTime(sortTime, (story as any).timeOfDay),
-          story,
-        });
-      });
-
-    // Raw GCal events: shown as non-interactive, visually distinct context rows (kind: 'event').
-    // They are not BOB entities — no checkbox/complete affordance, not draggable, no Firestore writes.
-    // Skip any event already represented by a GCal-matched story above, to avoid showing it twice.
-    overviewCalendarEvents.forEach((event) => {
-      if (!event.startMs || event.startMs < startMs || event.startMs > endMs) return;
-      if (gcalMatchedTitles.has(event.title.trim().toLowerCase())) return;
-      add({
-        id: `event-${event.id}`,
-        kind: 'event',
-        title: event.title,
-        timeLabel: timelineTimeLabel(event.startMs, event.endMs),
-        sortMs: event.startMs,
-        bucket: bucketFromTime(event.startMs),
-      });
-    });
-
-    return rows
-      .filter(matchesTimelineSharedFilters)
-      .sort((a, b) => {
-      const aTime = a.sortMs ?? Number.MAX_SAFE_INTEGER;
-      const bTime = b.sortMs ?? Number.MAX_SAFE_INTEGER;
-      if (aTime !== bTime) return aTime - bTime;
-      return a.title.localeCompare(b.title);
-    });
-  }, [tasksDueTodayForMobile, choresDueToday, sortedStories, getTaskDueMs, matchesTimelineSharedFilters, bucketFromTime, overviewCalendarEvents]);
-
-  const dailyPlanBucketCounts = useMemo(() => ({
-    morning: unifiedTimelineItems.filter((item) => item.bucket === 'morning').length,
-    afternoon: unifiedTimelineItems.filter((item) => item.bucket === 'afternoon').length,
-    evening: unifiedTimelineItems.filter((item) => item.bucket === 'evening').length,
-  }), [unifiedTimelineItems]);
+  // Unified daily-plan timeline (tasks/chores/stories due today + shaded GCal event rows),
+  // grouped into morning/afternoon/evening buckets. Shared with the desktop dashboard's
+  // DailyPlanWidget via useDailyPlanTimeline — this call is a pure derivation over data
+  // MobileHome already subscribes to, so it adds no new Firestore reads.
+  const { items: unifiedTimelineItems, bucketCounts: dailyPlanBucketCounts } = useDailyPlanTimeline({
+    tasksDueToday: tasksDueTodayForMobile,
+    choresDueToday,
+    storyCandidates: sortedStories,
+    summary,
+    sharedFilters,
+    matchesTaskFilter: matchesTaskSharedFilters,
+    matchesStoryFilter: matchesStorySharedFilters,
+  });
 
   const upNextItem = useMemo(() => {
     const hour = new Date().getHours();
-    const currentBucket: MobileTimelineBucket =
+    const currentBucket: DailyPlanBucket =
       hour >= 5 && hour < 13 ? 'morning' : hour >= 13 && hour < 19 ? 'afternoon' : 'evening';
     const bucketItems = unifiedTimelineItems.filter((i) => i.bucket === currentBucket);
     if (bucketItems.length > 0) return bucketItems[0];
@@ -1948,7 +1774,7 @@ const MobileHome: React.FC = () => {
           {unifiedTimelineItems.length === 0 ? (
             <div className="text-muted small p-2">No tasks, stories, chores, or calendar events scheduled today.</div>
           ) : (
-            (['morning', 'afternoon', 'evening'] as MobileTimelineBucket[]).map((bucket) => {
+            (['morning', 'afternoon', 'evening'] as DailyPlanBucket[]).map((bucket) => {
               const items = unifiedTimelineItems.filter((row) => row.bucket === bucket);
               if (items.length === 0) return null;
               const label = bucket === 'morning' ? 'Morning' : bucket === 'afternoon' ? 'Afternoon' : 'Evening';
@@ -1958,61 +1784,13 @@ const MobileHome: React.FC = () => {
 
                   {dailyPlanViewType === 'list' ? (
                     /* LIST MODE: simple rows with checkbox + title + clock */
-                    <ListGroup variant="flush">
-                      {items.map((item) => {
-                        const isTask = item.kind === 'task' || item.kind === 'chore';
-                        const isEvent = item.kind === 'event';
-                        const isDone = !!item.task && Number(item.task.status ?? 0) === 2;
-                        const iconBtnStyle: React.CSSProperties = {
-                          background: 'none', border: 'none', padding: '4px 6px',
-                          color: 'var(--bs-secondary)', cursor: 'pointer', flexShrink: 0,
-                        };
-                        return (
-                          <ListGroup.Item
-                            key={item.id}
-                            className="d-flex align-items-center gap-2 py-2"
-                            style={isEvent ? { fontSize: 14, background: '#f8fafc', opacity: 0.85 } : { fontSize: 14 }}
-                          >
-                            {isTask && item.task ? (
-                              <Form.Check
-                                type="checkbox"
-                                checked={isDone || !!choreCompletionBusy[item.task.id]}
-                                disabled={isDone || !!choreCompletionBusy[item.task.id]}
-                                onChange={() => {
-                                  if (item.kind === 'chore') void handleCompleteChoreTask(item.task!);
-                                  else void updateTaskField(item.task!, { status: 2 });
-                                }}
-                                aria-label={`Complete ${item.title}`}
-                                style={{ flexShrink: 0 }}
-                              />
-                            ) : isEvent ? (
-                              <CalendarDays size={14} style={{ flexShrink: 0, color: 'var(--bs-secondary)' }} />
-                            ) : (
-                              <span style={{ width: 18, flexShrink: 0 }} />
-                            )}
-                            <div className="flex-grow-1" style={{ minWidth: 0 }}>
-                              <div className={isEvent ? 'text-truncate text-muted' : 'fw-semibold text-truncate'} style={{ lineHeight: 1.2 }}>{item.title}</div>
-                              {item.timeLabel && <div className="text-muted" style={{ fontSize: 11 }}>{item.timeLabel}</div>}
-                            </div>
-                            {(item.task || item.story) && (
-                              <button
-                                type="button"
-                                style={iconBtnStyle}
-                                title="Defer"
-                                onClick={() => setDeferTarget({
-                                  type: item.story ? 'story' : 'task',
-                                  id: item.story ? item.story.id : item.task!.id,
-                                  title: item.title,
-                                  listView: true,
-                                })}
-                              >
-                                <Clock3 size={14} />
-                              </button>
-                            )}
-                          </ListGroup.Item>
-                        );
-                      })}
-                    </ListGroup>
+                    <DailyPlanList
+                      items={items}
+                      choreCompletionBusy={choreCompletionBusy}
+                      onCompleteTask={(task) => void updateTaskField(task, { status: 2 })}
+                      onCompleteChore={(task) => void handleCompleteChoreTask(task)}
+                      onDefer={(target) => setDeferTarget(target)}
+                    />
                   ) : (
                     /* DETAIL MODE: KanbanCardV2 for tasks/stories/chores, simple row for events */
                     <div>
