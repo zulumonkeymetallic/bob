@@ -16,7 +16,6 @@ import { httpsCallable } from 'firebase/functions';
 import EditGoalModal from '../EditGoalModal';
 import ConfirmSprintChangesModal from './ConfirmSprintChangesModal';
 import type { GoalTimelineAffectedStory } from './goalTimelineImpact';
-import SprintSelector from '../SprintSelector';
 import ThemeMultiSelect from '../shared/ThemeMultiSelect';
 import YearMultiSelect from '../shared/YearMultiSelect';
 import ShareGoalsPanel from '../shared/ShareGoalsPanel';
@@ -1646,8 +1645,6 @@ const GoalRoadmapV6: React.FC = () => {
             </button>
           ))}
         </div>
-        <SprintSelector className="grv6-sprint-selector" />
-
       </div>
       <div className="grv6-zoom-group compact">
         {(['year', 'quarter', 'month', 'week'] as const).map(z => (
