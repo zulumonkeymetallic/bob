@@ -418,6 +418,59 @@ async function matchExternalCalendarEventsToEntities({
   return result;
 }
 
+// matchExternalCalendarEventsToEntities only ever matches forward (unmatched GCal event ->
+// best open candidate) - nothing ever revisits an existing match, so a calendar_blocks doc
+// keeps its storyId/taskId/goalId forever even after that story/task is deleted. Run this
+// before matching so orphaned links get cleared and the block is eligible to be re-matched
+// (or left unmatched) on this same pass, instead of showing a stale "linked" event forever.
+async function unlinkOrphanedCalendarMatches({ db, blocks }) {
+  const result = { unlinkedStories: 0, unlinkedTasks: 0 };
+  const matchedBlocks = (blocks || []).filter((b) => b?.storyId || b?.taskId);
+  if (!matchedBlocks.length) return result;
+
+  const storyIds = [...new Set(matchedBlocks.filter((b) => b.storyId).map((b) => b.storyId))];
+  const taskIds = [...new Set(matchedBlocks.filter((b) => b.taskId).map((b) => b.taskId))];
+
+  const existingStoryIds = new Set();
+  const existingTaskIds = new Set();
+  if (storyIds.length) {
+    const snaps = await db.getAll(...storyIds.map((id) => db.collection('stories').doc(id)));
+    snaps.forEach((snap) => { if (snap.exists) existingStoryIds.add(snap.id); });
+  }
+  if (taskIds.length) {
+    const snaps = await db.getAll(...taskIds.map((id) => db.collection('tasks').doc(id)));
+    snaps.forEach((snap) => { if (snap.exists) existingTaskIds.add(snap.id); });
+  }
+
+  for (const block of matchedBlocks) {
+    const staleStory = block.storyId && !existingStoryIds.has(block.storyId);
+    const staleTask = block.taskId && !existingTaskIds.has(block.taskId);
+    if (!staleStory && !staleTask) continue;
+
+    await db.collection('calendar_blocks').doc(block.id).set({
+      storyId: null,
+      taskId: null,
+      goalId: null,
+      sprintId: null,
+      entityType: null,
+      calendarMatchSource: null,
+      calendarMatchNote: 'Unlinked: previously matched story/task no longer exists',
+      calendarMatchScore: null,
+      calendarMatchConfidence: null,
+      calendarMatchConfidenceTier: null,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    block.storyId = null;
+    block.taskId = null;
+    block.goalId = null;
+
+    if (staleStory) result.unlinkedStories += 1;
+    if (staleTask) result.unlinkedTasks += 1;
+  }
+  return result;
+}
+
 // ===== Helpers
 const PRIORITY_TEXT_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
 
@@ -3734,6 +3787,11 @@ async function runCalendarPlannerJob() {
         if (t.storyId && openStoryIds.has(t.storyId)) return true;
         return false;
       });
+
+    const unlinkResult = await unlinkOrphanedCalendarMatches({ db, blocks: existingBlocks });
+    if (unlinkResult.unlinkedStories > 0 || unlinkResult.unlinkedTasks > 0) {
+      console.log(`[calendar-planner] unlinked orphaned matches for ${userId}: stories=${unlinkResult.unlinkedStories}, tasks=${unlinkResult.unlinkedTasks}`);
+    }
 
     const matchResult = await matchExternalCalendarEventsToEntities({
       db,
