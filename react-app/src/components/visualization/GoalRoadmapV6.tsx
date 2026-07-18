@@ -1652,8 +1652,6 @@ const GoalRoadmapV6: React.FC = () => {
       </div>
       <div className="grv6-topbar-actions">
         <button className="grv6-ghost-btn" onClick={handleClearFilters}>Clear filters</button>
-        <a className="grv6-link" href="/goals" target="_blank" rel="noreferrer">Goals list</a>
-        <a className="grv6-link" href="/goals-management" target="_blank" rel="noreferrer">Card view</a>
         {currentUser?.uid && <ShareGoalsPanel uid={currentUser.uid} />}
         <button
           className="grv6-fullscreen-toggle"

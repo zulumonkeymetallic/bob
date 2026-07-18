@@ -3,7 +3,6 @@ import { Badge, Button, Card } from 'react-bootstrap';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { addDays, format, startOfDay } from 'date-fns';
 import { useLocation, useNavigate } from 'react-router-dom';
-import GoalRoadmapV6 from '../visualization/GoalRoadmapV6';
 import { buildPlannerPath, normalizePlannerLevel, plannerLevelLabel, type UnifiedPlannerLevel } from '../../utils/plannerRoutes';
 import UnifiedGoalPlannerLevels from './UnifiedGoalPlannerLevels';
 import UnifiedRoadmapGanttView from './UnifiedRoadmapGanttView';
@@ -37,11 +36,11 @@ const UnifiedPlannerLevels: React.FC = () => {
   }, [level, query]);
 
   if (level === 'gantt') {
-    return <GoalRoadmapV6 />;
+    return <UnifiedRoadmapGanttView initialSubView="gantt" />;
   }
 
   if (level === 'year') {
-    return <UnifiedRoadmapGanttView />;
+    return <UnifiedRoadmapGanttView initialSubView="roadmap" />;
   }
 
   if (level === 'quarter') {

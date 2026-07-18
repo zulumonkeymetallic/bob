@@ -286,10 +286,43 @@ body.grv6-full-active {
   border-color: var(--primary);
 }
 
+/* Year/Quarter/Month/Week + Fit all: render as one joined segmented strip instead of
+   separate floating pills with gaps - reads as a single control, not five buttons. */
+.grv6-zoom-group.compact {
+  gap: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+}
+
+.grv6-zoom-group.compact .grv6-zoom-btn {
+  border-radius: 0;
+  border-top: none;
+  border-bottom: none;
+  border-right: none;
+  padding: 5px 11px;
+  font-size: 12px;
+  min-width: 0;
+  white-space: nowrap;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.grv6-zoom-group.compact .grv6-zoom-btn:first-child {
+  border-left: none;
+}
+
+.grv6-zoom-group.compact .grv6-zoom-btn:hover:not(.active) {
+  background: var(--bg-secondary);
+}
+
 .grv6-zoom-slider {
   display: flex;
   align-items: center;
   gap: 8px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
 }
 
 .grv6-zoom-slider input[type="range"] {
@@ -332,9 +365,14 @@ body.grv6-full-active {
 }
 
 .grv6-zoom-pct {
-  min-width: 40px;
-  text-align: right;
+  min-width: 38px;
+  text-align: center;
   font-weight: 700;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
 }
 
 .grv6-gantt-wrapper {

@@ -24,7 +24,13 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { computeWindowExpectedProgress, evaluateGoalTargetStatus } from '../utils/goalKpiStatus';
 import { goalNeedsLinkedPot } from '../utils/goalCost';
 
-const GoalsManagement: React.FC = () => {
+interface GoalsManagementProps {
+  /** When true, fills its container's height instead of assuming the full viewport — for
+   * embedding inline elsewhere (e.g. the unified Gantt/Roadmap view's Goals tab). */
+  embedded?: boolean;
+}
+
+const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) => {
   console.log('[GoalsManagement] Component RENDERING');
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
@@ -672,10 +678,12 @@ const GoalsManagement: React.FC = () => {
       padding: '16px',
       backgroundColor: 'var(--notion-bg)',
       color: 'var(--notion-text)',
-      minHeight: '100vh',
-      width: '100%'
+      minHeight: embedded ? '100%' : '100vh',
+      height: embedded ? '100%' : undefined,
+      width: '100%',
+      boxSizing: 'border-box',
     }}>
-      <div style={{ maxWidth: '100%', margin: '0', display: 'flex', flexDirection: 'column', gap: '10px', height: 'calc(100vh - 32px)' }}>
+      <div style={{ maxWidth: '100%', margin: '0', display: 'flex', flexDirection: 'column', gap: '10px', height: embedded ? '100%' : 'calc(100vh - 32px)' }}>
         {/* Header */}
         <div style={{
           display: 'flex',
