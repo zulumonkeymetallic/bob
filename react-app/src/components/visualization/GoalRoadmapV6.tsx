@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { collection, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
-import { Star, Search, Edit3, Wand2, CalendarClock, Activity, Maximize2, Minimize2 } from 'lucide-react';
+import { Star, Search, Edit3, Wand2, CalendarClock, Activity, Maximize2, Minimize2, Layers2, GitBranch, Leaf } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
@@ -41,6 +41,7 @@ interface GanttTask {
   duration: number;
   progress: number; // 0-100 for SVAR gantt
   themeColor: string;
+  goalKind?: string;
   isMilestone?: boolean;
   pointsPct?: number;
   storyPoints?: number;
@@ -213,6 +214,15 @@ function buildAxisRow(
   return segments;
 }
 
+// Same icon/colour/label mapping GoalCard already uses for the goal-type badge, so a goal
+// reads the same way here as it does everywhere else in the app.
+const GOAL_KIND_META: Record<string, { icon: React.ReactNode; color: string; label: string }> = {
+  program: { icon: <Layers2 size={10} />, color: '#0ea5e9', label: 'Program' },
+  phase: { icon: <GitBranch size={10} />, color: '#10b981', label: 'Phase' },
+  leaf: { icon: <Leaf size={10} />, color: '#8b5cf6', label: 'Leaf' },
+};
+const goalKindMeta = (kind?: string) => GOAL_KIND_META[String(kind || 'leaf').toLowerCase()] || GOAL_KIND_META.leaf;
+
 const TaskTemplate: React.FC<{ data: GanttTask }> = ({ data }) => {
   const label = data.labelText || data.text;
   const parentPath = data.parentPath || '';
@@ -257,7 +267,6 @@ const TaskTemplate: React.FC<{ data: GanttTask }> = ({ data }) => {
         : progressSummary;
   const isCriticalMilestone = Boolean(data.isMilestone && data.isCritical);
 
-  const accentBackground = `linear-gradient(180deg, ${data.themeColor || '#2563eb'}14, ${data.themeColor || '#2563eb'}2e)`;
   const rowSpacingFallback = viewLevel === 'year' ? 140 : viewLevel === 'quarter' ? 110 : viewLevel === 'month' ? 90 : 80;
   const rowSpacing = data.rowSpacing ?? rowSpacingFallback;
   const rowOffset = (data.rowIndex ?? 0) * rowSpacing;
@@ -327,13 +336,20 @@ const TaskTemplate: React.FC<{ data: GanttTask }> = ({ data }) => {
     );
   }
 
+  const kindMeta = goalKindMeta(data.goalKind);
+
   return (
     <div className="grv6-task-shell" title={tooltipLabel} style={taskShellStyle}>
         <div
           className="grv6-task"
         style={{
-          background: accentBackground,
-          boxShadow: `inset 0 0 0 1px ${data.themeColor || 'rgba(59,130,246,0.4)'}`,
+          // A consistent, theme-agnostic surface with the theme colour as a left accent
+          // stripe only - using themeColor for both the tint AND the text (as before)
+          // produced unreadable same-hue-on-same-hue text for lighter theme colours
+          // (e.g. green text on a green-tinted background).
+          background: 'var(--bg-primary, #fff)',
+          borderLeft: `4px solid ${data.themeColor || '#2563eb'}`,
+          boxShadow: '0 0 0 1px var(--border-color, rgba(0,0,0,0.08))',
         }}
         aria-label={tooltipLabel}
         >
@@ -343,9 +359,15 @@ const TaskTemplate: React.FC<{ data: GanttTask }> = ({ data }) => {
           </div>
         )}
         <div className="grv6-task-title-row">
+          <span
+            title={kindMeta.label}
+            style={{ display: 'inline-flex', alignItems: 'center', color: kindMeta.color, flexShrink: 0 }}
+          >
+            {kindMeta.icon}
+          </span>
           <div
             className="grv6-task-title"
-            style={{ fontSize: `${Math.max(12, titleSize)}px`, color: data.themeColor }}
+            style={{ fontSize: `${Math.max(12, titleSize)}px`, color: 'var(--text-primary, #212529)' }}
           >
             {label}
           </div>
@@ -884,6 +906,7 @@ const GoalRoadmapV6: React.FC = () => {
         duration: durationDays,
         progress: progressPct,
         themeColor: color,
+        goalKind: (goal as any).goalKind,
         isMilestone,
         pointsPct: totalPts > 0 ? progressPct : undefined,
         storyPoints: totalPts || undefined,
@@ -906,7 +929,11 @@ const GoalRoadmapV6: React.FC = () => {
         onGenerateStories: (g: Goal) => handleGenerateStories(g),
         onOpenStream: (g: Goal) => showSidebar(g, 'goal'),
         isCritical: isCriticalGoal,
-        isFocusAligned: activeFocusGoalIds.size > 0 && activeFocusGoalIds.has(goal.id),
+        // Skip the highlight when the view is already filtered to focus goals only
+        // (showFocusGoalsOnly auto-enables whenever any exist) - every visible bar would
+        // be focus-aligned by definition then, so the outline stops being a signal and is
+        // just noise around every bar.
+        isFocusAligned: activeFocusGoalIds.size > 0 && !showFocusGoalsOnly && activeFocusGoalIds.has(goal.id),
         progressSummary: progressSummaryParts.join(' · '),
         themeId: normalizedThemeId,
         themeName: themeDef?.name || themeDef?.label || `Theme ${normalizedThemeId}`,
@@ -1763,7 +1790,6 @@ const GoalRoadmapV6: React.FC = () => {
                             className="grv6-theme-lane-row"
                             style={{ top: ROADMAP_SECTION_HEADER_HEIGHT + (laneIndex * laneHeight), height: laneHeight }}
                           >
-                            <span className="grv6-theme-lane-label">Line {laneIndex + 1}</span>
                           </div>
                         ))}
                         {section.lanes.flatMap((lane, laneIndex) =>
@@ -1837,8 +1863,7 @@ const GoalRoadmapV6: React.FC = () => {
                               </div>
                               {section.lanes.map((lane, laneIndex) => (
                                 <div key={`${group.key}-${section.key}-lane-${laneIndex}`} className="grv6-theme-lane-row" style={{ top: sectionTop + ROADMAP_SECTION_HEADER_HEIGHT + (laneIndex * laneHeight), height: laneHeight }}>
-                                  <span className="grv6-theme-lane-label">Line {laneIndex + 1}</span>
-                                </div>
+                                      </div>
                               ))}
                               {section.lanes.flatMap((lane, laneIndex) =>
                                 lane.map((task) => {

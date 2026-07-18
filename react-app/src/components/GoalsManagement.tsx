@@ -23,6 +23,7 @@ import { useSidebar } from '../contexts/SidebarContext';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { computeWindowExpectedProgress, evaluateGoalTargetStatus } from '../utils/goalKpiStatus';
 import { goalNeedsLinkedPot } from '../utils/goalCost';
+import PlanActionBar from './planner/PlanActionBar';
 
 interface GoalsManagementProps {
   /** When true, fills its container's height instead of assuming the full viewport — for
@@ -684,6 +685,7 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
       boxSizing: 'border-box',
     }}>
       <div style={{ maxWidth: '100%', margin: '0', display: 'flex', flexDirection: 'column', gap: '10px', height: embedded ? '100%' : 'calc(100vh - 32px)' }}>
+        <PlanActionBar />
         {/* Header */}
         <div style={{
           display: 'flex',
