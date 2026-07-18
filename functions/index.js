@@ -100,6 +100,7 @@ const {
   normalizeSprintPersona,
 } = require('./lib/sprintStatus');
 const { resolveThemeAllocationsForDate } = require('./lib/themeAllocations');
+const { resolveThemeTimeOfDay } = require('./services/schedulingService');
 const crypto = require('crypto');
 const { KeyManagementServiceClient } = require('@google-cloud/kms');
 const MS_IN_DAY = 24 * 60 * 60 * 1000;
@@ -9798,7 +9799,11 @@ async function adjustTopTaskDueDates({ db, userId, profile, priorityResult, runI
       continue;
     }
 
-    const desired = nowLocal.endOf('day');
+    // Assign a real, theme-appropriate hour instead of blanket endOf('day') (23:59:59.999).
+    // Date stays "today" (nowLocal); only the time-of-day changes.
+    const topThemeLabel = task.theme || task.category || null;
+    const topTime = resolveThemeTimeOfDay(topThemeLabel, nowLocal);
+    const desired = nowLocal.set({ hour: topTime.hour, minute: topTime.minute, second: 0, millisecond: 0 });
     const newDueDateMs = desired.toMillis();
 
     await updateTaskDueDate(db, task.id, {
@@ -9813,8 +9818,10 @@ async function adjustTopTaskDueDates({ db, userId, profile, priorityResult, runI
     adjustedTop += 1;
   }
 
+  // demoteCutoff is boundary-only eligibility math (is this task's due date stale enough to
+  // demote?) — it is never written back, so endOf('day') here is fine as an inclusive upper bound.
   const demoteCutoff = nowLocal.plus({ days: 1 }).endOf('day').toMillis();
-  const deferTarget = nowLocal.plus({ days: 4 }).endOf('day').toMillis();
+  const deferDay = nowLocal.plus({ days: 4 });
   let deferred = 0;
 
   for (const task of tasks.values()) {
@@ -9823,6 +9830,13 @@ async function adjustTopTaskDueDates({ db, userId, profile, priorityResult, runI
     const dueMs = toMillis(task.dueDate || task.dueDateMs || task.targetDate);
     if (!dueMs) continue;
     if (dueMs > demoteCutoff) continue;
+
+    // Real theme-appropriate hour on the deferred day, not endOf('day').
+    const deferThemeLabel = task.theme || task.category || null;
+    const deferTime = resolveThemeTimeOfDay(deferThemeLabel, deferDay);
+    const deferTarget = deferDay
+      .set({ hour: deferTime.hour, minute: deferTime.minute, second: 0, millisecond: 0 })
+      .toMillis();
 
     await updateTaskDueDate(db, task.id, {
       newDueDateMs: deferTarget,
@@ -20750,7 +20764,14 @@ exports.runDailySchedulerAdjustments = schedulerV2.onSchedule({
           reason = reason || 'capacity_conflict';
         }
 
-        const newDueMs = candidate.endOf('day').toMillis();
+        // Real theme-appropriate hour instead of blanket endOf('day') (23:59:59.999).
+        // `candidate` already carries the decided date (today/overdue-pulled-forward/
+        // capacity-shifted/dependency-aligned) — only the time-of-day changes here.
+        const schedulerThemeLabel = task.theme || task.category || null;
+        const schedulerDueTime = resolveThemeTimeOfDay(schedulerThemeLabel, candidate);
+        const newDueMs = candidate
+          .set({ hour: schedulerDueTime.hour, minute: schedulerDueTime.minute, second: 0, millisecond: 0 })
+          .toMillis();
         if (!dueDt || Math.abs(candidate.toMillis() - dueDt.toMillis()) > 60 * 1000) {
           await updateTaskDueDate(db, task.id, {
             newDueDateMs: newDueMs,

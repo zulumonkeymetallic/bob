@@ -327,6 +327,40 @@ function resolveExactDueStartMs(dateMs, dueTime, zone) {
   }).toMillis();
 }
 
+// "End of working day" fallback hour used only when a task has no theme that maps to a
+// THEME_RULES slot. Deliberately NOT midnight-ish (23:59) — see resolveThemeTimeOfDay below.
+const DEFAULT_DUE_TIME_HOUR = 18;
+
+/**
+ * Pick a believable clock time (hour/minute, local to `zone`) for a due date, based on the
+ * item's theme — reusing THEME_RULES rather than inventing a new heuristic. This is a
+ * lightweight, single-day lookup (no busy-interval/calendar conflict search, no multi-day
+ * search) intended for bulk due-date maintenance jobs that must keep the target *date*
+ * fixed and only need a real hour instead of endOf('day') (23:59:59.999).
+ *
+ * For conflict-aware placement that may also choose the day, use schedulePlannerItemMutation.
+ *
+ * @param {string|null} themeLabel - task/story theme or category
+ * @param {import('luxon').DateTime} day - the (already-decided) local day the item is due on
+ * @returns {{ hour: number, minute: number }}
+ */
+function resolveThemeTimeOfDay(themeLabel, day) {
+  const key = String(themeLabel || '').trim().toLowerCase();
+  const rule = key ? THEME_RULES.find((r) => r.match.some((match) => key.includes(match))) : null;
+  const slots = rule ? rule.slots : null;
+  if (slots && slots.length) {
+    const weekday = day && Number.isFinite(day.weekday) ? day.weekday : null;
+    const slot = (weekday
+      ? slots.find((s) => !Array.isArray(s.days) || s.days.length === 0 || s.days.includes(weekday))
+      : null) || slots[0];
+    const startHourFloat = Number(slot?.start ?? DEFAULT_DUE_TIME_HOUR);
+    const hour = Math.min(23, Math.max(0, Math.floor(startHourFloat)));
+    const minute = Math.min(59, Math.max(0, Math.round((startHourFloat % 1) * 60)));
+    return { hour, minute };
+  }
+  return { hour: DEFAULT_DUE_TIME_HOUR, minute: 0 };
+}
+
 function resolveManualScheduleOverride(itemType, entity, zone, durationMinutes) {
   if (!entity) return null;
   const isLocked = entity.dueDateLocked || entity.lockDueDate || entity.immovable === true || entity.status === 'immovable';
@@ -1055,5 +1089,6 @@ async function schedulePlannerItemMutation({
 
 module.exports = {
   resolveManualScheduleOverride,
+  resolveThemeTimeOfDay,
   schedulePlannerItemMutation,
 };

@@ -1031,8 +1031,12 @@ const MobileHome: React.FC = () => {
     if (!ms || !Number.isFinite(ms)) return 'morning';
     const d = new Date(ms);
     const minute = d.getHours() * 60 + d.getMinutes();
-    if (minute >= 300 && minute <= 779) return 'morning';
-    if (minute >= 780 && minute <= 1139) return 'afternoon';
+    // 00:00–04:59 has no real scheduled time behind it — it's a date-only value (e.g. a recurring
+    // task/story falling back to startOfDay(), or a dueDate stored without a time component).
+    // Treat it the same as "no time" rather than letting it fall through to the evening bucket.
+    if (minute < 300) return 'morning';
+    if (minute <= 779) return 'morning';
+    if (minute <= 1139) return 'afternoon';
     return 'evening';
   }, []);
 
@@ -1135,6 +1139,7 @@ const MobileHome: React.FC = () => {
       });
     });
 
+    const gcalMatchedTitles = new Set<string>();
     sortedStories
       .filter((story) => story.status !== 4)
       .forEach((story) => {
@@ -1146,6 +1151,7 @@ const MobileHome: React.FC = () => {
         if (!isToday(dueMs) && !isToday(matchedStartMs)) return;
         // Prefer GCal matched start time for sort/label so stories sort at when they begin, not when they end
         const sortTime = matchedStartMs ?? dueMs;
+        if (matchedStartMs !== null) gcalMatchedTitles.add(story.title.trim().toLowerCase());
         add({
           id: `story-${story.id}`,
           kind: 'story',
@@ -1157,7 +1163,21 @@ const MobileHome: React.FC = () => {
         });
       });
 
-    // Raw GCal events are intentionally excluded — only BOB entities (stories/tasks/chores) appear in the plan
+    // Raw GCal events: shown as non-interactive, visually distinct context rows (kind: 'event').
+    // They are not BOB entities — no checkbox/complete affordance, not draggable, no Firestore writes.
+    // Skip any event already represented by a GCal-matched story above, to avoid showing it twice.
+    overviewCalendarEvents.forEach((event) => {
+      if (!event.startMs || event.startMs < startMs || event.startMs > endMs) return;
+      if (gcalMatchedTitles.has(event.title.trim().toLowerCase())) return;
+      add({
+        id: `event-${event.id}`,
+        kind: 'event',
+        title: event.title,
+        timeLabel: timelineTimeLabel(event.startMs, event.endMs),
+        sortMs: event.startMs,
+        bucket: bucketFromTime(event.startMs),
+      });
+    });
 
     return rows
       .filter(matchesTimelineSharedFilters)
@@ -1167,7 +1187,7 @@ const MobileHome: React.FC = () => {
       if (aTime !== bTime) return aTime - bTime;
       return a.title.localeCompare(b.title);
     });
-  }, [tasksDueTodayForMobile, choresDueToday, sortedStories, getTaskDueMs, matchesTimelineSharedFilters, bucketFromTime]);
+  }, [tasksDueTodayForMobile, choresDueToday, sortedStories, getTaskDueMs, matchesTimelineSharedFilters, bucketFromTime, overviewCalendarEvents]);
 
   const dailyPlanBucketCounts = useMemo(() => ({
     morning: unifiedTimelineItems.filter((item) => item.bucket === 'morning').length,
@@ -1941,13 +1961,18 @@ const MobileHome: React.FC = () => {
                     <ListGroup variant="flush">
                       {items.map((item) => {
                         const isTask = item.kind === 'task' || item.kind === 'chore';
+                        const isEvent = item.kind === 'event';
                         const isDone = !!item.task && Number(item.task.status ?? 0) === 2;
                         const iconBtnStyle: React.CSSProperties = {
                           background: 'none', border: 'none', padding: '4px 6px',
                           color: 'var(--bs-secondary)', cursor: 'pointer', flexShrink: 0,
                         };
                         return (
-                          <ListGroup.Item key={item.id} className="d-flex align-items-center gap-2 py-2" style={{ fontSize: 14 }}>
+                          <ListGroup.Item
+                            key={item.id}
+                            className="d-flex align-items-center gap-2 py-2"
+                            style={isEvent ? { fontSize: 14, background: '#f8fafc', opacity: 0.85 } : { fontSize: 14 }}
+                          >
                             {isTask && item.task ? (
                               <Form.Check
                                 type="checkbox"
@@ -1960,11 +1985,13 @@ const MobileHome: React.FC = () => {
                                 aria-label={`Complete ${item.title}`}
                                 style={{ flexShrink: 0 }}
                               />
+                            ) : isEvent ? (
+                              <CalendarDays size={14} style={{ flexShrink: 0, color: 'var(--bs-secondary)' }} />
                             ) : (
                               <span style={{ width: 18, flexShrink: 0 }} />
                             )}
                             <div className="flex-grow-1" style={{ minWidth: 0 }}>
-                              <div className="fw-semibold text-truncate" style={{ lineHeight: 1.2 }}>{item.title}</div>
+                              <div className={isEvent ? 'text-truncate text-muted' : 'fw-semibold text-truncate'} style={{ lineHeight: 1.2 }}>{item.title}</div>
                               {item.timeLabel && <div className="text-muted" style={{ fontSize: 11 }}>{item.timeLabel}</div>}
                             </div>
                             {(item.task || item.story) && (
@@ -1992,11 +2019,11 @@ const MobileHome: React.FC = () => {
                       {items.map((item) => {
                         if (item.kind === 'event') {
                           return (
-                            <div key={item.id} className="d-flex align-items-center gap-2 py-2 px-1 border-bottom text-muted" style={{ fontSize: 13 }}>
-                              <span style={{ width: 18, flexShrink: 0 }} />
+                            <div key={item.id} className="d-flex align-items-center gap-2 py-2 px-1 border-bottom text-muted" style={{ fontSize: 13, background: '#f8fafc', opacity: 0.85 }}>
+                              <CalendarDays size={14} style={{ flexShrink: 0, color: 'var(--bs-secondary)' }} />
                               <span className="flex-grow-1 text-truncate">{item.title}</span>
                               {item.timeLabel && <span style={{ fontSize: 11, flexShrink: 0 }}>{item.timeLabel}</span>}
-                              <Badge bg="secondary" style={{ flexShrink: 0 }}>Event</Badge>
+                              <Badge bg="secondary" style={{ flexShrink: 0 }}>Calendar</Badge>
                             </div>
                           );
                         }
