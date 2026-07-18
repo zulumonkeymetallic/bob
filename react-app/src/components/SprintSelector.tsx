@@ -127,8 +127,13 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
         {effectiveSelectedId === '' ? (
           <span>All Sprints</span>
         ) : selectedSprint ? (
-          <span>
-            <strong>{selectedSprint.name}</strong>
+          <span className="d-flex align-items-center" style={{ minWidth: 0 }}>
+            <strong
+              title={selectedSprint.name}
+              style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block' }}
+            >
+              {selectedSprint.name}
+            </strong>
             {isSprintActive(selectedSprint) && (
               <span className="badge bg-success ms-2">ACTIVE</span>
             )}

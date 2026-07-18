@@ -694,7 +694,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           zIndex: 1000
         }}>
           <div className="container-fluid" style={{ padding: '8px 16px' }}>
-            <div className="d-flex justify-content-end align-items-center gap-3">
+            <div className="d-flex justify-content-end align-items-center gap-3 flex-wrap" style={{ rowGap: 6 }}>
               {/* Persona indicator dot */}
               <div style={{
                 display: 'flex',
