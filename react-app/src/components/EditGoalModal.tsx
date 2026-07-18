@@ -995,6 +995,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                 onStoryDelete={handleStoryDelete}
                 onStoryPriorityChange={handleStoryPriorityChange}
                 onStoryAdd={handleStoryAdd}
+                respectGlobalSprintFilter={false}
               />
             )}
           </div>
@@ -1665,6 +1666,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                     onStoryDelete={handleStoryDelete}
                     onStoryPriorityChange={handleStoryPriorityChange}
                     onStoryAdd={handleStoryAdd}
+                    respectGlobalSprintFilter={false}
                   />
                 </div>
               )}

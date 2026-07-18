@@ -79,6 +79,7 @@ interface ModernStoriesTableProps {
   goalId?: string; // Made optional for full stories table
   enableInlineTasks?: boolean; // Only show green caret + inline tasks when true
   onStoryReorder?: (activeId: string, overId: string) => Promise<void>;
+  respectGlobalSprintFilter?: boolean; // When false, ignore the app-wide sprint selection (e.g. goal-scoped views where all of a goal's stories should show)
 }
 
 const defaultColumns: Column[] = [
@@ -1158,6 +1159,7 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   goalId,
   enableInlineTasks = false,
   onStoryReorder,
+  respectGlobalSprintFilter = true,
 }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
@@ -1354,7 +1356,9 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
   // Apply filtering and search
   const filteredRows = tableRows.filter(story => {
     // Respect global sprint selection from context: when a sprint is chosen, enforce it
-    if (selectedSprintId && selectedSprintId !== '' && story.sprintId !== selectedSprintId) {
+    // (callers that need every linked story regardless of the app-wide sprint picker, e.g.
+    // the Edit Goal modal, opt out via respectGlobalSprintFilter={false})
+    if (respectGlobalSprintFilter && selectedSprintId && selectedSprintId !== '' && story.sprintId !== selectedSprintId) {
       return false;
     }
     // Search filter (searches title, description, ref, and goal title)
