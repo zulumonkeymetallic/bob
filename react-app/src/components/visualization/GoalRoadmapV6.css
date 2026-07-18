@@ -431,9 +431,8 @@ body.grv6-full-active {
 .grv6-task-title {
   font-weight: 700;
   line-height: 1.2;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  word-break: break-word;
   flex: 1;
   text-align: left;
 }

@@ -6,6 +6,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import GoalRoadmapV6 from '../visualization/GoalRoadmapV6';
 import { buildPlannerPath, normalizePlannerLevel, plannerLevelLabel, type UnifiedPlannerLevel } from '../../utils/plannerRoutes';
 import UnifiedGoalPlannerLevels from './UnifiedGoalPlannerLevels';
+import UnifiedRoadmapGanttView from './UnifiedRoadmapGanttView';
 import PlanActionBar from './PlanActionBar';
 import SprintPlanningMatrix from '../SprintPlanningMatrix';
 import SprintWeekPlanner from './SprintWeekPlanner';
@@ -39,7 +40,11 @@ const UnifiedPlannerLevels: React.FC = () => {
     return <GoalRoadmapV6 />;
   }
 
-  if (level === 'year' || level === 'quarter') {
+  if (level === 'year') {
+    return <UnifiedRoadmapGanttView />;
+  }
+
+  if (level === 'quarter') {
     return <UnifiedGoalPlannerLevels level={level} anchorDate={anchorDate} embedded={embedded} />;
   }
 

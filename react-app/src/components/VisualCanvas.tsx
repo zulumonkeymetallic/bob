@@ -344,7 +344,7 @@ const RoadmapChip: React.FC<{
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
         <span style={{ color: themeColor, fontSize: 9, flexShrink: 0 }}>{kindIcon}</span>
-        <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ fontWeight: 600, whiteSpace: 'normal', wordBreak: 'break-word' }}>
           {goal.title}
         </span>
         {isActive && (
@@ -361,7 +361,14 @@ const RoadmapChip: React.FC<{
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-const VisualCanvas: React.FC = () => {
+interface VisualCanvasProps {
+  /** Initial layout to open with when embedded elsewhere (e.g. the unified planner). URL ?layout= still wins when present. */
+  forcedLayout?: ViewLayout;
+  /** When true, fills its container's height instead of the full viewport — for embedding inside another page. */
+  embedded?: boolean;
+}
+
+const VisualCanvas: React.FC<VisualCanvasProps> = ({ forcedLayout, embedded = false }) => {
   const { currentUser } = useAuth();
   const canvasRef = useRef<HTMLDivElement>(null);
 
@@ -387,7 +394,8 @@ const VisualCanvas: React.FC = () => {
   const [searchParams] = useSearchParams();
   const [viewLayout, setViewLayout] = useState<ViewLayout>(() => {
     const requested = searchParams.get('layout');
-    return requested === 'roadmap' || requested === 'swimlane' || requested === 'tree' ? requested : 'tree';
+    if (requested === 'roadmap' || requested === 'swimlane' || requested === 'tree') return requested;
+    return forcedLayout ?? 'tree';
   });
 
   // ── Canvas state ─────────────────────────────────────────────────────────────
@@ -795,7 +803,7 @@ const VisualCanvas: React.FC = () => {
 
   // ─── Render ───────────────────────────────────────────────────────────────────
   return (
-    <div className="d-flex flex-column" style={{ height: '100vh', overflow: 'hidden' }}>
+    <div className="d-flex flex-column" style={{ height: embedded ? '100%' : '100vh', overflow: 'hidden' }}>
 
       {/* Action bar */}
       <div className="border-bottom px-3 py-2 d-flex align-items-center gap-2 flex-wrap bg-white">
