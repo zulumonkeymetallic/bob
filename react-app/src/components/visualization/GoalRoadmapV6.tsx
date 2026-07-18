@@ -463,7 +463,9 @@ const GoalRoadmapV6: React.FC = () => {
   const [showFocusGoalsOnly, setShowFocusGoalsOnly] = useState(false);
   const [focusToggleTouched, setFocusToggleTouched] = useState(false);
   const [roadmapLayoutMode, setRoadmapLayoutMode] = useState<'flat' | 'grouped'>(() => {
-    try { return (localStorage.getItem('roadmapLayoutMode') as 'flat' | 'grouped') || 'flat'; } catch { return 'flat'; }
+    // Defaults to 'grouped' so the Gantt matches the Roadmap view (themes on the left) out of
+    // the box; still overridable per-user via the Flat/Group by Theme toggle, persisted below.
+    try { return (localStorage.getItem('roadmapLayoutMode') as 'flat' | 'grouped') || 'grouped'; } catch { return 'grouped'; }
   });
   const [activeFocusGoalIds, setActiveFocusGoalIds] = useState<Set<string>>(new Set());
   const [respectSprintScope, setRespectSprintScope] = useState(true);
