@@ -124,10 +124,13 @@ export const GLOBAL_THEMES: GlobalTheme[] = [
     id: 7,
     name: 'Travel & Adventure',
     label: 'Travel & Adventure',
-    color: getCssVarValue('--theme-travel-primary', '#fd7e14'),
-    darkColor: getCssVarValue('--theme-travel-dark', '#d96b0e'),
-    lightColor: getCssVarValue('--theme-travel-light', '#ffe8d0'),
-    textColor: contrastText(getCssVarValue('--theme-travel-primary', '#fd7e14')),
+    // Was the exact same literal fallback (#fd7e14) as Career & Professional (id 2) - with no
+    // real CSS var defined for either, they rendered as identical orange. Travel is Jim's
+    // single largest live-goal theme, so this alone was enough to make "every bar orange".
+    color: getCssVarValue('--theme-travel-primary', '#0e9594'),
+    darkColor: getCssVarValue('--theme-travel-dark', '#0b7877'),
+    lightColor: getCssVarValue('--theme-travel-light', '#cdf1f0'),
+    textColor: contrastText(getCssVarValue('--theme-travel-primary', '#0e9594')),
     description: 'Travel plans, adventures, exploration, and cultural experiences'
   },
   {
