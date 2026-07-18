@@ -13,6 +13,15 @@ interface BirthdayMilestoneCardProps {
   targetDate: Date; // Sept 22, 2027
   age: number; // 45
   linkedGoalsCount?: number;
+  /**
+   * Render as a compact stat tile matching the Dashboard "Key Metrics" row
+   * instead of the full-width gradient banner. Defaults to false so the
+   * card keeps its original standalone appearance wherever else it's used.
+   * Compact mode skips the "dismiss for 3 days" snooze — the tile lives
+   * inside the collapsible Key Metrics card, so it's no longer the first,
+   * unmissable thing on the page and doesn't need to nag.
+   */
+  compact?: boolean;
 }
 
 const BIRTHDAY_BANNER_DISMISS_KEY = 'birthday-banner-dismissed-date';
@@ -21,7 +30,8 @@ const SHOW_EVERY_DAYS = 3;
 const BirthdayMilestoneCard: React.FC<BirthdayMilestoneCardProps> = ({
   targetDate,
   age,
-  linkedGoalsCount = 0
+  linkedGoalsCount = 0,
+  compact = false
 }) => {
   const navigate = useNavigate();
   const { currentUser } = useAuth();
@@ -151,7 +161,10 @@ const BirthdayMilestoneCard: React.FC<BirthdayMilestoneCardProps> = ({
     };
   }, [targetDate]);
 
-  if (isPast || !showBanner) return null; // Don't show if date has passed or dismissed within 3 days
+  // Don't show if date has passed. The "dismiss for 3 days" snooze only applies to the
+  // full-width banner — the compact tile lives inside the collapsible Key Metrics card,
+  // so it doesn't need to be dismissible.
+  if (isPast || (!compact && !showBanner)) return null;
 
   const formattedDate = targetDate.toLocaleDateString('en-US', {
     weekday: 'long',
@@ -161,6 +174,86 @@ const BirthdayMilestoneCard: React.FC<BirthdayMilestoneCardProps> = ({
   });
 
   const focusProgramLabel = String(programName || `Project ${age} v2`).trim() || `Project ${age} v2`;
+
+  const plannerModal = (
+    <Modal show={showPlannerModal} onHide={() => setShowPlannerModal(false)} centered>
+      <Modal.Header closeButton>
+        <Modal.Title>Birthday Focus Program</Modal.Title>
+      </Modal.Header>
+      <Modal.Body>
+        <p className="text-muted small mb-3">
+          Start a named focus-goal program for this milestone, then use parent and leaf goals in the wizard to break it down.
+        </p>
+        <Form.Group className="mb-3">
+          <Form.Label>Program name</Form.Label>
+          <Form.Control
+            type="text"
+            value={programName}
+            onChange={(event) => setProgramName(event.target.value)}
+            placeholder={`Project ${age} v2`}
+          />
+        </Form.Group>
+        <Form.Group>
+          <Form.Label>Target end date</Form.Label>
+          <Form.Control
+            type="date"
+            value={programEndDate}
+            min={new Date().toISOString().slice(0, 10)}
+            onChange={(event) => setProgramEndDate(event.target.value)}
+          />
+        </Form.Group>
+        <Form.Group className="mt-3">
+          <Form.Label>Leaf milestones</Form.Label>
+          <Form.Control
+            as="textarea"
+            rows={4}
+            value={milestoneTitlesText}
+            onChange={(event) => setMilestoneTitlesText(event.target.value)}
+            placeholder={'Build base fitness\nCut body fat\nPeak for birthday'}
+          />
+          <Form.Text muted>
+            One milestone per line. The banner will seed these into the focus-goal wizard under the parent program goal.
+          </Form.Text>
+        </Form.Group>
+      </Modal.Body>
+      <Modal.Footer>
+        <Button variant="secondary" onClick={() => setShowPlannerModal(false)}>
+          Cancel
+        </Button>
+        <Button variant="primary" onClick={() => void handleLaunchFocusGoals()} disabled={launchingFocusFlow}>
+          {launchingFocusFlow ? 'Preparing…' : 'Open Focus Goals Wizard'}
+        </Button>
+      </Modal.Footer>
+    </Modal>
+  );
+
+  if (compact) {
+    return (
+      <>
+        <div
+          className="d-flex align-items-center gap-2 px-2 py-1 rounded border h-100"
+          style={{ background: 'var(--bs-body-bg)', cursor: 'pointer', transition: 'all 0.2s ease' }}
+          onClick={handleOpenPlanner}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = 'var(--bs-primary-bg-subtle)';
+            e.currentTarget.style.borderColor = 'var(--bs-primary)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = 'var(--bs-body-bg)';
+            e.currentTarget.style.borderColor = 'var(--bs-border-color)';
+          }}
+        >
+          <Cake size={16} className="text-primary flex-shrink-0" />
+          <div className="flex-grow-1" title={`${focusProgramLabel} · Program end ${formattedDate} · ${linkedGoalsCount} linked goal${linkedGoalsCount !== 1 ? 's' : ''}`}>
+            <div className="text-muted small">{focusProgramLabel}</div>
+            <div className="fw-semibold">{daysUntil}d left · {progress}% elapsed</div>
+          </div>
+        </div>
+
+        {plannerModal}
+      </>
+    );
+  }
 
   return (
     <>
@@ -281,55 +374,7 @@ const BirthdayMilestoneCard: React.FC<BirthdayMilestoneCardProps> = ({
       </Card.Body>
     </Card>
 
-    <Modal show={showPlannerModal} onHide={() => setShowPlannerModal(false)} centered>
-      <Modal.Header closeButton>
-        <Modal.Title>Birthday Focus Program</Modal.Title>
-      </Modal.Header>
-      <Modal.Body>
-        <p className="text-muted small mb-3">
-          Start a named focus-goal program for this milestone, then use parent and leaf goals in the wizard to break it down.
-        </p>
-        <Form.Group className="mb-3">
-          <Form.Label>Program name</Form.Label>
-          <Form.Control
-            type="text"
-            value={programName}
-            onChange={(event) => setProgramName(event.target.value)}
-            placeholder={`Project ${age} v2`}
-          />
-        </Form.Group>
-        <Form.Group>
-          <Form.Label>Target end date</Form.Label>
-          <Form.Control
-            type="date"
-            value={programEndDate}
-            min={new Date().toISOString().slice(0, 10)}
-            onChange={(event) => setProgramEndDate(event.target.value)}
-          />
-        </Form.Group>
-        <Form.Group className="mt-3">
-          <Form.Label>Leaf milestones</Form.Label>
-          <Form.Control
-            as="textarea"
-            rows={4}
-            value={milestoneTitlesText}
-            onChange={(event) => setMilestoneTitlesText(event.target.value)}
-            placeholder={'Build base fitness\nCut body fat\nPeak for birthday'}
-          />
-          <Form.Text muted>
-            One milestone per line. The banner will seed these into the focus-goal wizard under the parent program goal.
-          </Form.Text>
-        </Form.Group>
-      </Modal.Body>
-      <Modal.Footer>
-        <Button variant="secondary" onClick={() => setShowPlannerModal(false)}>
-          Cancel
-        </Button>
-        <Button variant="primary" onClick={() => void handleLaunchFocusGoals()} disabled={launchingFocusFlow}>
-          {launchingFocusFlow ? 'Preparing…' : 'Open Focus Goals Wizard'}
-        </Button>
-      </Modal.Footer>
-    </Modal>
+    {plannerModal}
     </>
   );
 };

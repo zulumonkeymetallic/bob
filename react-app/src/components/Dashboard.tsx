@@ -25,7 +25,6 @@ import SprintMetricsPanel from './SprintMetricsPanel';
 import JournalInsightsCard from './JournalInsightsCard';
 import BirthdayMilestoneCard from './BirthdayMilestoneCard';
 import KpiDashboardWidget from './KpiDashboardWidget';
-import DailyPlanSummaryCard from './planner/DailyPlanSummaryCard';
 import WeeklyPlannerSummaryCard from './planner/WeeklyPlannerSummaryCard';
 import PlanActionBar from './planner/PlanActionBar';
 import { GLOBAL_THEMES, LEGACY_THEME_MAP } from '../constants/globalThemes';
@@ -286,7 +285,40 @@ interface DashboardWidgetSize {
   height: number;
 }
 type DashboardWidgetSizes = Partial<Record<DashboardWidgetKey, DashboardWidgetSize>>;
-const SUMMARY_WIDGET_KEYS: DashboardWidgetKey[] = ['unifiedTimeline', 'top3', 'dailyPlan', 'fitnessKpiBoxes', 'habitsGrid', 'financeOverview', 'dailySummary', 'kpiStudio', 'choresHabits', 'lowHangingFruit', 'themeProgress', 'tasksDueToday', 'calendar', 'recoveryMetrics', 'activityMetrics', 'fitnessMetrics', 'sprintVelocity'];
+// Three visual tiers for the widget grid: Now (primary daily-use widgets, always first),
+// Body (secondary daily-use widgets), Reference (everything else). Drives both the default
+// widget order below and the section-header rendering in the grid loop.
+type DashboardWidgetTier = 'now' | 'body' | 'reference';
+const DASHBOARD_WIDGET_TIER: Record<DashboardWidgetKey, DashboardWidgetTier> = {
+  top3: 'now',
+  dailyPlan: 'now',
+  fitnessKpiBoxes: 'body',
+  habitsGrid: 'body',
+  choresHabits: 'body',
+  dailySummary: 'reference',
+  kpiStudio: 'reference',
+  unifiedTimeline: 'reference',
+  financeOverview: 'reference',
+  themeProgress: 'reference',
+  tasksDueToday: 'reference',
+  calendar: 'reference',
+  recoveryMetrics: 'reference',
+  activityMetrics: 'reference',
+  fitnessMetrics: 'reference',
+  sprintVelocity: 'reference',
+  lowHangingFruit: 'reference',
+};
+const DASHBOARD_WIDGET_TIER_LABEL: Record<Exclude<DashboardWidgetTier, 'now'>, string> = {
+  body: 'Body',
+  reference: 'Reference',
+};
+// Default order for users with no stored custom layout (see readDashboardWidgetOrder below):
+// Now tier first, then Body, then Reference — matches DASHBOARD_WIDGET_TIER above.
+const SUMMARY_WIDGET_KEYS: DashboardWidgetKey[] = [
+  'top3', 'dailyPlan',
+  'fitnessKpiBoxes', 'habitsGrid', 'choresHabits',
+  'dailySummary', 'kpiStudio', 'unifiedTimeline', 'financeOverview', 'themeProgress', 'tasksDueToday', 'calendar', 'recoveryMetrics', 'activityMetrics', 'fitnessMetrics', 'sprintVelocity', 'lowHangingFruit',
+];
 const dashboardWidgetOrderStorageKey = (deviceType: DashboardDeviceType) => `${DASHBOARD_WIDGET_ORDER_STORAGE_PREFIX}_${deviceType}`;
 const readDashboardWidgetOrder = (deviceType: DashboardDeviceType): DashboardWidgetKey[] => {
   try {
@@ -519,23 +551,26 @@ const areTodayPlanWidthsEqual = (a: TodayPlanColumnWidths | null | undefined, b:
 };
 
 const DASHBOARD_WIDGET_CONFIG: Array<{ key: DashboardWidgetKey; label: string }> = [
-  { key: 'lowHangingFruit', label: 'Low hanging fruit' },
-  { key: 'dailySummary', label: 'Daily summary' },
+  // Now tier
   { key: 'top3', label: 'Top 3 priorities' },
   { key: 'dailyPlan', label: "Today's Plan" },
+  // Body tier
   { key: 'fitnessKpiBoxes', label: 'Fitness KPI boxes (weekly + daily)' },
   { key: 'habitsGrid', label: 'Habits & Routines adherence' },
+  { key: 'choresHabits', label: 'Chores & habits' },
+  // Reference tier
+  { key: 'dailySummary', label: 'Daily summary' },
+  { key: 'kpiStudio', label: 'Pinned focus KPIs' },
+  { key: 'unifiedTimeline', label: 'Weekly Review' },
   { key: 'financeOverview', label: 'Finance Summary' },
   { key: 'themeProgress', label: 'Theme progress' },
-  { key: 'kpiStudio', label: 'Pinned focus KPIs' },
-  { key: 'unifiedTimeline', label: 'Daily Plan' },
   { key: 'tasksDueToday', label: 'Tasks due today' },
-  { key: 'choresHabits', label: 'Chores & habits' },
   { key: 'calendar', label: 'Calendar (mini)' },
   { key: 'recoveryMetrics', label: 'Recovery (HRV, Sleep, Calories)' },
   { key: 'activityMetrics', label: 'Activity (Steps + HRV trend)' },
   { key: 'fitnessMetrics', label: 'Fitness (Run / Swim / Bike sport cards)' },
   { key: 'sprintVelocity', label: 'Sprint velocity + Theme rings' },
+  { key: 'lowHangingFruit', label: 'Low hanging fruit' },
 ];
 
 const DASHBOARD_WIDGET_DEFAULT_VISIBILITY: DashboardWidgetVisibility = {
@@ -4580,51 +4615,55 @@ const Dashboard: React.FC = () => {
       <Container fluid className="p-2 dashboard-compact">
         <Row>
           <Col>
-            <BirthdayMilestoneCard
-              targetDate={new Date('2027-09-22')}
-              age={45}
-              linkedGoalsCount={goalsList.length}
-            />
-
-            {showPersistentDashboardBanners && showMonzoReconnectBanner && (
-              <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-1 py-1 px-2 mb-1" style={{ fontSize: 11 }}>
-                <div>
-                  <span className="fw-semibold">{monzoIntegrationStatus?.connected ? 'Monzo sync stale' : 'Monzo integration disconnected'}</span>
-                  <span className="text-muted ms-1">
-                    — {monzoIntegrationStatus?.connected ? `${monzoSyncAgeDays ?? 'unknown'}d ago` : 'connect to resume sync'}
-                    {monzoReconnectMsg ? ` · ${monzoReconnectMsg}` : ''}
-                  </span>
-                </div>
-                <Button variant="outline-dark" size="sm" style={{ fontSize: 10, padding: '1px 8px' }} onClick={handleMonzoReconnect} disabled={monzoReconnectBusy}>
-                  {monzoReconnectBusy ? <Spinner size="sm" animation="border" className="me-1" /> : null}
-                  {monzoIntegrationStatus?.connected ? 'Reconnect' : 'Connect'}
-                </Button>
-              </Alert>
-            )}
-
-            {showPersistentDashboardBanners && showStravaReconnectBanner && (
-              <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-1 py-1 px-2 mb-1" style={{ fontSize: 11 }}>
-                <div>
-                  <span className="fw-semibold">Strava sync stale</span>
-                  <span className="text-muted ms-1">— {stravaSyncAgeDays}d ago</span>
-                </div>
-                <Button variant="outline-dark" size="sm" style={{ fontSize: 10, padding: '1px 8px' }} onClick={() => navigate('/settings/integrations/strava')}>
-                  Reconnect
-                </Button>
-              </Alert>
-            )}
-
-            {showPersistentDashboardBanners && showTraktReconnectBanner && (
-              <Alert variant="warning" className="d-flex align-items-center justify-content-between flex-wrap gap-1 py-1 px-2 mb-1" style={{ fontSize: 11 }}>
-                <div>
-                  <span className="fw-semibold">Trakt sync stale</span>
-                  <span className="text-muted ms-1">— {traktSyncAgeDays}d ago</span>
-                </div>
-                <Button variant="outline-dark" size="sm" style={{ fontSize: 10, padding: '1px 8px' }} onClick={() => navigate('/settings/integrations/trakt')}>
-                  Settings
-                </Button>
-              </Alert>
-            )}
+            {showPersistentDashboardBanners && (showMonzoReconnectBanner || showStravaReconnectBanner || showTraktReconnectBanner) && (() => {
+              const staleCount = [showMonzoReconnectBanner, showStravaReconnectBanner, showTraktReconnectBanner].filter(Boolean).length;
+              return (
+                <Alert variant="warning" className="py-1 px-2 mb-1" style={{ fontSize: 11 }}>
+                  <div className="fw-semibold mb-1">
+                    {staleCount} integration{staleCount === 1 ? '' : 's'} need{staleCount === 1 ? 's' : ''} attention
+                  </div>
+                  <div className="d-flex flex-column gap-1">
+                    {showMonzoReconnectBanner && (
+                      <div className="d-flex align-items-center justify-content-between flex-wrap gap-1">
+                        <span>
+                          <span className="fw-semibold">Monzo</span>
+                          <span className="text-muted ms-1">
+                            — {monzoIntegrationStatus?.connected ? `stale, ${monzoSyncAgeDays ?? 'unknown'}d ago` : 'disconnected'}
+                            {monzoReconnectMsg ? ` · ${monzoReconnectMsg}` : ''}
+                          </span>
+                        </span>
+                        <Button variant="outline-dark" size="sm" style={{ fontSize: 10, padding: '1px 8px' }} onClick={handleMonzoReconnect} disabled={monzoReconnectBusy}>
+                          {monzoReconnectBusy ? <Spinner size="sm" animation="border" className="me-1" /> : null}
+                          {monzoIntegrationStatus?.connected ? 'Reconnect' : 'Connect'}
+                        </Button>
+                      </div>
+                    )}
+                    {showStravaReconnectBanner && (
+                      <div className="d-flex align-items-center justify-content-between flex-wrap gap-1">
+                        <span>
+                          <span className="fw-semibold">Strava</span>
+                          <span className="text-muted ms-1">— stale, {stravaSyncAgeDays}d ago</span>
+                        </span>
+                        <Button variant="outline-dark" size="sm" style={{ fontSize: 10, padding: '1px 8px' }} onClick={() => navigate('/settings/integrations/strava')}>
+                          Reconnect
+                        </Button>
+                      </div>
+                    )}
+                    {showTraktReconnectBanner && (
+                      <div className="d-flex align-items-center justify-content-between flex-wrap gap-1">
+                        <span>
+                          <span className="fw-semibold">Trakt</span>
+                          <span className="text-muted ms-1">— stale, {traktSyncAgeDays}d ago</span>
+                        </span>
+                        <Button variant="outline-dark" size="sm" style={{ fontSize: 10, padding: '1px 8px' }} onClick={() => navigate('/settings/integrations/trakt')}>
+                          Settings
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </Alert>
+              );
+            })()}
 
             <Row className="g-2 mb-1">
               <Col xl={12}>
@@ -4889,6 +4928,16 @@ const Dashboard: React.FC = () => {
                       {/* Journal Signals Group */}
                       <Col xs={12} sm={6} lg={6} xl={3}>
                         <JournalInsightsCard compact inlineMetric />
+                      </Col>
+
+                      {/* Birthday Milestone Group */}
+                      <Col xs={12} sm={6} lg={6} xl={3}>
+                        <BirthdayMilestoneCard
+                          compact
+                          targetDate={new Date('2027-09-22')}
+                          age={45}
+                          linkedGoalsCount={goalsList.length}
+                        />
                       </Col>
 
                       {/* Health Metrics Group */}
@@ -5352,13 +5401,29 @@ const Dashboard: React.FC = () => {
                     )}
                     <div ref={todayPlanLayoutRef}>
                         <DndContext sensors={widgetDndSensors} collisionDetection={closestCenter} onDragEnd={handleWidgetDragEnd}>
-                          <SortableContext items={widgetOrder.filter((k) => widgetVisibility[k])} strategy={rectSortingStrategy}>
+                          {(() => {
+                            const visibleWidgetKeys = widgetOrder.filter((k) => widgetVisibility[k]);
+                            return (
+                          <SortableContext items={visibleWidgetKeys} strategy={rectSortingStrategy}>
                             <div className="dashboard-widget-grid" ref={widgetGridRef}>
-                              {widgetOrder.filter((k) => widgetVisibility[k]).map((widgetKey) => {
+                              {visibleWidgetKeys.map((widgetKey, widgetIndex) => {
                                 const wSize = widgetSizes[widgetKey];
+                                const widgetTier = DASHBOARD_WIDGET_TIER[widgetKey];
+                                // Show a tier section header only immediately before the first widget
+                                // of that tier in the CURRENT render order. This works for both the
+                                // default (tier-sorted) order and a fully custom drag-reordered layout —
+                                // in a custom order a tier's widgets may be interleaved elsewhere, but
+                                // each tier still gets at most one header, placed where it first appears.
+                                const isFirstOfTier = widgetTier !== 'now'
+                                  && visibleWidgetKeys.findIndex((k) => DASHBOARD_WIDGET_TIER[k] === widgetTier) === widgetIndex;
                                 return (
-                                  <SortableDashboardWidget
-                                    key={widgetKey}
+                                  <React.Fragment key={widgetKey}>
+                                    {isFirstOfTier && (
+                                      <div className="dashboard-widget-tier-header">
+                                        {DASHBOARD_WIDGET_TIER_LABEL[widgetTier as 'body' | 'reference']}
+                                      </div>
+                                    )}
+                                    <SortableDashboardWidget
                                     id={widgetKey}
                                     widgetWidth={wSize?.width}
                                     dragEnabled={widgetEditMode}
@@ -6069,11 +6134,10 @@ const Dashboard: React.FC = () => {
                             style={getWidgetSizeStyle('unifiedTimeline', 360)}
                           >
                             <div className="d-flex flex-column gap-3 h-100 dashboard-summary-stack">
-                              <DailyPlanSummaryCard />
                               <WeeklyPlannerSummaryCard />
                             </div>
                             {renderWidgetEdgeHandles('unifiedTimeline')}
-                            {renderWidgetResizeHandle('unifiedTimeline', 360, 'Resize Daily Plan widget')}
+                            {renderWidgetResizeHandle('unifiedTimeline', 360, 'Resize Weekly Review widget')}
                           </div>
                         )}
                         {widgetKey === 'tasksDueToday' && widgetVisibility.tasksDueToday && (
@@ -6383,10 +6447,13 @@ const Dashboard: React.FC = () => {
                           </div>
                         )}
                                   </SortableDashboardWidget>
+                                  </React.Fragment>
                                 );
                               })}
                             </div>
                           </SortableContext>
+                            );
+                          })()}
                         </DndContext>
                     </div>
                   </Card.Body>
