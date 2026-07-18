@@ -44,8 +44,7 @@ import ActivityWidget from './metrics/ActivityWidget';
 import FitnessWidget from './metrics/FitnessWidget';
 import SprintVelocityWidget from './metrics/SprintVelocityWidget';
 import FinanceSummaryWidget from './dashboard/FinanceSummaryWidget';
-import FitnessKpiDashboardWidget from './dashboard/FitnessKpiDashboardWidget';
-import HabitsKpiWidget from './dashboard/HabitsKpiWidget';
+import FitnessStripWidget from './dashboard/FitnessStripWidget';
 import DailyPlanWidget from './dashboard/DailyPlanWidget';
 import { isGoalInHierarchySet } from '../utils/goalHierarchy';
 import {
@@ -264,16 +263,12 @@ type DashboardDeviceType = 'mobile' | 'tablet' | 'desktop';
 type DashboardWidgetKey =
   | 'lowHangingFruit'
   | 'dailySummary'
-  | 'top3'
-  | 'dailyPlan'
   | 'financeOverview'
-  | 'fitnessKpiBoxes'
-  | 'habitsGrid'
+  | 'fitnessStrip'
   | 'themeProgress'
   | 'kpiStudio'
   | 'unifiedTimeline'
   | 'tasksDueToday'
-  | 'choresHabits'
   | 'calendar'
   | 'recoveryMetrics'
   | 'activityMetrics'
@@ -290,11 +285,7 @@ type DashboardWidgetSizes = Partial<Record<DashboardWidgetKey, DashboardWidgetSi
 // widget order below and the section-header rendering in the grid loop.
 type DashboardWidgetTier = 'now' | 'body' | 'reference';
 const DASHBOARD_WIDGET_TIER: Record<DashboardWidgetKey, DashboardWidgetTier> = {
-  top3: 'now',
-  dailyPlan: 'now',
-  fitnessKpiBoxes: 'body',
-  habitsGrid: 'body',
-  choresHabits: 'body',
+  fitnessStrip: 'body',
   dailySummary: 'reference',
   kpiStudio: 'reference',
   unifiedTimeline: 'reference',
@@ -313,10 +304,12 @@ const DASHBOARD_WIDGET_TIER_LABEL: Record<Exclude<DashboardWidgetTier, 'now'>, s
   reference: 'Reference',
 };
 // Default order for users with no stored custom layout (see readDashboardWidgetOrder below):
-// Now tier first, then Body, then Reference — matches DASHBOARD_WIDGET_TIER above.
+// Body tier first, then Reference — matches DASHBOARD_WIDGET_TIER above. (dailyPlan and top3
+// are no longer part of the widget grid at all — dailyPlan is now the permanent full-width
+// hero section rendered above this grid, with the old top3 widget folded into it; see the
+// standalone <DailyPlanWidget /> render above the DndContext block.)
 const SUMMARY_WIDGET_KEYS: DashboardWidgetKey[] = [
-  'top3', 'dailyPlan',
-  'fitnessKpiBoxes', 'habitsGrid', 'choresHabits',
+  'fitnessStrip',
   'dailySummary', 'kpiStudio', 'unifiedTimeline', 'financeOverview', 'themeProgress', 'tasksDueToday', 'calendar', 'recoveryMetrics', 'activityMetrics', 'fitnessMetrics', 'sprintVelocity', 'lowHangingFruit',
 ];
 const dashboardWidgetOrderStorageKey = (deviceType: DashboardDeviceType) => `${DASHBOARD_WIDGET_ORDER_STORAGE_PREFIX}_${deviceType}`;
@@ -551,13 +544,8 @@ const areTodayPlanWidthsEqual = (a: TodayPlanColumnWidths | null | undefined, b:
 };
 
 const DASHBOARD_WIDGET_CONFIG: Array<{ key: DashboardWidgetKey; label: string }> = [
-  // Now tier
-  { key: 'top3', label: 'Top 3 priorities' },
-  { key: 'dailyPlan', label: "Today's Plan" },
   // Body tier
-  { key: 'fitnessKpiBoxes', label: 'Fitness KPI boxes (weekly + daily)' },
-  { key: 'habitsGrid', label: 'Habits & Routines adherence' },
-  { key: 'choresHabits', label: 'Chores & habits' },
+  { key: 'fitnessStrip', label: 'Fitness & Health' },
   // Reference tier
   { key: 'dailySummary', label: 'Daily summary' },
   { key: 'kpiStudio', label: 'Pinned focus KPIs' },
@@ -576,16 +564,12 @@ const DASHBOARD_WIDGET_CONFIG: Array<{ key: DashboardWidgetKey; label: string }>
 const DASHBOARD_WIDGET_DEFAULT_VISIBILITY: DashboardWidgetVisibility = {
   lowHangingFruit: false,
   dailySummary: true,
-  top3: true,
-  dailyPlan: true,
-  fitnessKpiBoxes: true,
-  habitsGrid: true,
+  fitnessStrip: true,
   financeOverview: false,
   themeProgress: false,
   kpiStudio: true,
   unifiedTimeline: true,
   tasksDueToday: false,
-  choresHabits: true,
   calendar: false,
   recoveryMetrics: false,
   activityMetrics: false,
@@ -702,7 +686,6 @@ const Dashboard: React.FC = () => {
   const [personaStoriesPool, setPersonaStoriesPool] = useState<Story[]>([]);
   const [tasksDueTodayLoading, setTasksDueTodayLoading] = useState(false);
   const [tasksDueTodaySortMode, setTasksDueTodaySortMode] = useState<'due' | 'ai' | 'top3'>('ai');
-  const [top3Collapsed, setTop3Collapsed] = useState(false);
   const [unscheduledToday, setUnscheduledToday] = useState<ScheduledInstanceModel[]>([]);
   const [inlineEditTask, setInlineEditTask] = useState<Task | null>(null);
   const [inlineEditStory, setInlineEditStory] = useState<Story | null>(null);
@@ -1174,14 +1157,12 @@ const Dashboard: React.FC = () => {
     const gap = 4;
     // Keep the top summary widgets visually aligned by default while preserving relative widths.
     const threeQuarter = Math.max(400, Math.floor((gridWidth - gap) * 0.75));
-    const quarter = Math.max(220, Math.floor((gridWidth - gap) * 0.25));
     const third = Math.max(240, Math.floor((gridWidth - gap * 2) / 3));
     setWidgetSizes({
       unifiedTimeline: { width: threeQuarter, height: 420 },
-      top3: { width: quarter, height: 420 },
       dailySummary: { width: third, height: 420 },
       kpiStudio: { width: third, height: 420 },
-      choresHabits: { width: third, height: 420 },
+      fitnessStrip: { width: third, height: 160 },
       lowHangingFruit: { width: third, height: 400 },
       themeProgress: { width: third, height: 400 },
       tasksDueToday: { width: third, height: 400 },
@@ -2600,8 +2581,6 @@ const Dashboard: React.FC = () => {
       .sort(compareTop3Stories)
       .slice(0, 3);
   }, [personaStoriesPool, todayTop3Iso]);
-
-  const top3Loading = loading && top3Tasks.length === 0 && top3Stories.length === 0;
 
   const unscheduledSummary = unscheduledToday.slice(0, 3);
 
@@ -5368,10 +5347,9 @@ const Dashboard: React.FC = () => {
                                     const third = Math.max(240, Math.floor((gridWidth - gap * 2) / 3));
                                     setWidgetSizes({
                                       unifiedTimeline: { width: half, height: 420 },
-                                      top3: { width: third, height: 420 },
                                       dailySummary: { width: third, height: 420 },
                                       kpiStudio: { width: third, height: 420 },
-                                      choresHabits: { width: third, height: 420 },
+                                      fitnessStrip: { width: third, height: 160 },
                                       lowHangingFruit: { width: third, height: 400 },
                                       themeProgress: { width: third, height: 400 },
                                       tasksDueToday: { width: third, height: 400 },
@@ -5399,6 +5377,17 @@ const Dashboard: React.FC = () => {
                         </Card.Body>
                       </Card>
                     )}
+                    {/*
+                      Hero section — DailyPlanWidget is a permanent page section, not a grid
+                      widget: it's the single "what should I do today" surface (folds in the old
+                      standalone Top 3 widget as a pinned section, plus a Chores/Tasks/Stories
+                      filter that folds in the old standalone Chores & Habits widget), so it
+                      renders full-width above the tiered widget grid rather than inside the
+                      draggable/resizable SortableContext.
+                    */}
+                    <div className="mb-4 pb-4" style={{ borderBottom: '1px solid var(--bs-border-color)' }}>
+                      <DailyPlanWidget />
+                    </div>
                     <div ref={todayPlanLayoutRef}>
                         <DndContext sensors={widgetDndSensors} collisionDetection={closestCenter} onDragEnd={handleWidgetDragEnd}>
                           {(() => {
@@ -5617,303 +5606,15 @@ const Dashboard: React.FC = () => {
                               {renderWidgetResizeHandle('dailySummary', 220, 'Resize daily summary widget')}
                           </div>
                         )}
-                                    {widgetKey === 'top3' && widgetVisibility.top3 && (
+                                    {widgetKey === 'fitnessStrip' && widgetVisibility.fitnessStrip && (
                           <div
-                            ref={setWidgetResizeContainer('top3')}
+                            ref={setWidgetResizeContainer('fitnessStrip')}
                             className="dashboard-widget-shell"
-                            style={getWidgetSizeStyle('top3', 260)}
+                            style={getWidgetSizeStyle('fitnessStrip', 160)}
                           >
-                            <Card className="shadow-sm border-0 mb-3">
-                              <Card.Header className="d-flex align-items-center justify-content-between">
-                                <div className="fw-semibold d-flex align-items-center gap-2">
-                                  <ListChecks size={16} /> Top 3 priorities
-                                </div>
-                                <div className="d-flex align-items-center gap-2">
-                                  <Badge bg="secondary" pill>{currentPersona === 'work' ? 'Work' : 'Personal'}</Badge>
-                                  <Button
-                                    size="sm"
-                                    variant="outline-secondary"
-                                    onClick={() => setTop3Collapsed((prev) => !prev)}
-                                  >
-                                    {top3Collapsed ? 'Show' : 'Hide'}
-                                  </Button>
-                                </div>
-                              </Card.Header>
-                              {!top3Collapsed && (
-                                <Card.Body className="p-3 d-flex flex-column gap-3">
-                              {top3Loading ? (
-                                <div className="d-flex align-items-center gap-2 text-muted">
-                                  <Spinner size="sm" animation="border" /> Loading top 3…
-                                </div>
-                              ) : (top3Tasks.length === 0 && top3Stories.length === 0) ? (
-                                <div className="text-muted small">No Top 3 items flagged for this persona yet.</div>
-                              ) : (
-                                (() => {
-                                  const top3Wide = (widgetSizes.top3?.width ?? 0) >= 600;
-                                  return (
-                                  <div style={top3Wide ? { display: 'flex', gap: '16px', alignItems: 'flex-start' } : undefined}>
-                                  <div style={top3Wide ? { flex: '1 1 0', minWidth: 0 } : undefined}>
-                                    <div className="text-uppercase text-muted small fw-semibold mb-1">Stories</div>
-                                    {top3Stories.length === 0 ? (
-                                      <div className="text-muted small">No stories flagged.</div>
-                                    ) : (
-                                      <div className="widget-items-grid">
-                                      {top3Stories.map((story, idx) => {
-                                        const label = storyLabel(story);
-                                        const aiScore = (story as any).aiCriticalityScore ?? (story as any).aiPriorityScore;
-                                        const href = `/stories/${(story as any).ref || story.id}`;
-                                        const storyPriorityBadge = getPriorityBadge((story as any).priority);
-                                        const storyDueMs = (() => {
-                                          const raw = (story as any).targetDate ?? (story as any).dueDate ?? null;
-                                          if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
-                                          if (raw?.toDate) return raw.toDate().getTime();
-                                          const parsed = raw ? Date.parse(String(raw)) : NaN;
-                                          return Number.isNaN(parsed) ? null : parsed;
-                                        })();
-                                        const storyStatusVal = Number(story.status ?? 0);
-                                        const storyStatusMap: Record<number, { bg: string; label: string }> = {
-                                          0: { bg: 'light', label: 'Backlog' },
-                                          1: { bg: 'info', label: 'Planned' },
-                                          2: { bg: 'primary', label: 'In Progress' },
-                                          3: { bg: 'warning', label: 'Review' },
-                                          4: { bg: 'success', label: 'Done' },
-                                        };
-                                        const storyS = storyStatusMap[storyStatusVal] || storyStatusMap[0];
-                                        return (
-                                          <div key={story.id} className="border rounded p-2 mb-2 dashboard-due-item">
-                                            <div className="d-flex align-items-start justify-content-between gap-2">
-                                              <div className="fw-semibold small flex-grow-1">
-                                                <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditStory(story); }}>{label}</a>
-                                              </div>
-                                              <button
-                                                type="button"
-                                                className="d-none d-md-inline-flex align-items-center justify-content-center"
-                                                onClick={() => showSidebar(story as any, 'story')}
-                                                title="Activity stream"
-                                                style={{
-                                                  color: 'var(--bs-secondary-color)',
-                                                  padding: 4,
-                                                  borderRadius: 4,
-                                                  border: 'none',
-                                                  background: 'transparent',
-                                                  cursor: 'pointer',
-                                                  lineHeight: 0,
-                                                  flexShrink: 0,
-                                                }}
-                                              >
-                                                <Activity size={14} />
-                                              </button>
-                                            </div>
-                                            <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
-                                              <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
-                                                <Clock size={11} />
-                                                <input
-                                                  type="date"
-                                                  className="dashboard-due-date-input"
-                                                  value={storyDueMs ? format(new Date(storyDueMs), 'yyyy-MM-dd') : ''}
-                                                  onChange={(e) => {
-                                                    const val = e.target.value;
-                                                    if (!val) return;
-                                                    const newDue = new Date(val + 'T12:00:00').getTime();
-                                                    handleStoryDueDateChange(story, newDue);
-                                                  }}
-                                                />
-                                              </span>
-                                              <span className="dashboard-chip-select-wrap">
-                                                <select
-                                                  className="dashboard-chip-select"
-                                                  value={Number((story as any).priority ?? 0)}
-                                                  onChange={(e) => handleStoryPriorityChange(story, Number(e.target.value))}
-                                                  style={{
-                                                    backgroundColor: `var(--bs-${storyPriorityBadge.bg})`,
-                                                    color: storyPriorityBadge.bg === 'warning' || storyPriorityBadge.bg === 'light' ? '#000' : '#fff',
-                                                  }}
-                                                >
-                                                  <option value={0}>None</option>
-                                                  <option value={1}>Low</option>
-                                                  <option value={2}>Medium</option>
-                                                  <option value={3}>High</option>
-                                                  <option value={4}>Critical</option>
-                                                </select>
-                                              </span>
-                                              <span className="dashboard-chip-select-wrap">
-                                                <select
-                                                  className="dashboard-chip-select"
-                                                  value={storyStatusVal}
-                                                  onChange={(e) => handleStoryStatusChange(story, Number(e.target.value))}
-                                                  style={{
-                                                    backgroundColor: `var(--bs-${storyS.bg})`,
-                                                    color: storyS.bg === 'light' || storyS.bg === 'warning' ? '#000' : '#fff',
-                                                  }}
-                                                >
-                                                  <option value={0}>Backlog</option>
-                                                  <option value={1}>Planned</option>
-                                                  <option value={2}>In Progress</option>
-                                                  <option value={3}>Review</option>
-                                                  <option value={4}>Done</option>
-                                                </select>
-                                              </span>
-                                              <span className="text-muted" style={{ fontSize: 11 }}>
-                                                AI {aiScore != null ? Math.round(aiScore) : '—'}
-                                              </span>
-                                            </div>
-                                          </div>
-                                        );
-                                      })}
-                                      </div>
-                                    )}
-                                  </div>
-                                  <div style={top3Wide ? { flex: '1 1 0', minWidth: 0 } : undefined}>
-                                    <div className="text-uppercase text-muted small fw-semibold mb-1">Tasks</div>
-                                    {top3Tasks.length === 0 ? (
-                                      <div className="text-muted small">No tasks flagged.</div>
-                                    ) : (
-                                      <div className="widget-items-grid">
-                                      {top3Tasks.map((task, idx) => {
-                                        const refLabel = taskRefLabel(task);
-                                        const aiScore = (task as any).aiCriticalityScore ?? (task as any).aiPriorityScore;
-                                        const priorityBadge = getPriorityBadge((task as any).priority);
-                                        const dueMs = getTaskDueMs(task);
-                                        return (
-                                          <div key={task.id} className="border rounded p-2 mb-2 dashboard-due-item">
-                                            <div className="d-flex align-items-start justify-content-between gap-2">
-                                              <div className="fw-semibold small flex-grow-1">
-                                                <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>{task.title}</a>
-                                              </div>
-                                              <button
-                                                type="button"
-                                                className="d-none d-md-inline-flex align-items-center justify-content-center"
-                                                onClick={() => showSidebar(task as any, 'task')}
-                                                title="Activity stream"
-                                                style={{
-                                                  color: 'var(--bs-secondary-color)',
-                                                  padding: 4,
-                                                  borderRadius: 4,
-                                                  border: 'none',
-                                                  background: 'transparent',
-                                                  cursor: 'pointer',
-                                                  lineHeight: 0,
-                                                  flexShrink: 0,
-                                                }}
-                                              >
-                                                <Activity size={14} />
-                                              </button>
-                                            </div>
-                                            {refLabel && (
-                                              <a href="#" className="text-decoration-none" onClick={(e) => { e.preventDefault(); setInlineEditTask(task); }}>
-                                                <code className="text-primary" style={{ fontSize: 11 }}>{refLabel}</code>
-                                              </a>
-                                            )}
-                                            <div className="d-flex align-items-center gap-2 mt-1 flex-wrap">
-                                              <span className="text-muted d-inline-flex align-items-center gap-1" style={{ fontSize: 11 }}>
-                                                <Clock size={11} />
-                                                <input
-                                                  type="date"
-                                                  className="dashboard-due-date-input"
-                                                  value={dueMs ? format(new Date(dueMs), 'yyyy-MM-dd') : ''}
-                                                  onChange={(e) => {
-                                                    const val = e.target.value;
-                                                    if (!val) return;
-                                                    const newDue = new Date(val + 'T12:00:00').getTime();
-                                                    handleTaskDueDateChange(task, newDue);
-                                                  }}
-                                                />
-                                              </span>
-                                              <span className="dashboard-chip-select-wrap">
-                                                <select
-                                                  className="dashboard-chip-select"
-                                                  value={Number((task as any).priority ?? 0)}
-                                                  onChange={(e) => handleTaskPriorityChange(task, Number(e.target.value))}
-                                                  style={{
-                                                    backgroundColor: `var(--bs-${priorityBadge.bg})`,
-                                                    color: priorityBadge.bg === 'warning' || priorityBadge.bg === 'orange' || priorityBadge.bg === 'light' ? '#000' : '#fff',
-                                                  }}
-                                                >
-                                                  <option value={0}>None</option>
-                                                  <option value={1}>Low</option>
-                                                  <option value={2}>Medium</option>
-                                                  <option value={3}>High</option>
-                                                  <option value={4}>Critical</option>
-                                                </select>
-                                              </span>
-                                              {(() => {
-                                                const statusVal = Number(task.status ?? 0);
-                                                const statusMap: Record<number, { bg: string; label: string }> = {
-                                                  0: { bg: 'secondary', label: 'To do' },
-                                                  1: { bg: 'primary', label: 'Doing' },
-                                                  2: { bg: 'success', label: 'Done' },
-                                                };
-                                                const s = statusMap[statusVal] || statusMap[0];
-                                                return (
-                                                  <span className="dashboard-chip-select-wrap">
-                                                    <select
-                                                      className="dashboard-chip-select"
-                                                      value={statusVal}
-                                                      onChange={(e) => handleTaskStatusChange(task, Number(e.target.value))}
-                                                      style={{
-                                                        backgroundColor: `var(--bs-${s.bg})`,
-                                                        color: '#fff',
-                                                      }}
-                                                    >
-                                                      <option value={0}>To do</option>
-                                                      <option value={1}>Doing</option>
-                                                      <option value={2}>Done</option>
-                                                    </select>
-                                                  </span>
-                                                );
-                                              })()}
-                                              <span className="text-muted" style={{ fontSize: 11 }}>
-                                                AI {aiScore != null ? Math.round(aiScore) : '—'}
-                                              </span>
-                                            </div>
-                                          </div>
-                                        );
-                                      })}
-                                      </div>
-                                    )}
-                                  </div>
-                                  </div>
-                                  );
-                                })()
-                              )}
-                                </Card.Body>
-                              )}
-                            </Card>
-                            {renderWidgetEdgeHandles('top3')}
-                              {renderWidgetResizeHandle('top3', 260, 'Resize top 3 priorities widget')}
-                          </div>
-                        )}
-                                    {widgetKey === 'dailyPlan' && widgetVisibility.dailyPlan && (
-                          <div
-                            ref={setWidgetResizeContainer('dailyPlan')}
-                            className="dashboard-widget-shell"
-                            style={getWidgetSizeStyle('dailyPlan', 480)}
-                          >
-                            <DailyPlanWidget />
-                            {renderWidgetEdgeHandles('dailyPlan')}
-                            {renderWidgetResizeHandle('dailyPlan', 480, 'Resize daily plan widget')}
-                          </div>
-                        )}
-                                    {widgetKey === 'fitnessKpiBoxes' && widgetVisibility.fitnessKpiBoxes && (
-                          <div
-                            ref={setWidgetResizeContainer('fitnessKpiBoxes')}
-                            className="dashboard-widget-shell"
-                            style={getWidgetSizeStyle('fitnessKpiBoxes', 260)}
-                          >
-                            <FitnessKpiDashboardWidget />
-                            {renderWidgetEdgeHandles('fitnessKpiBoxes')}
-                            {renderWidgetResizeHandle('fitnessKpiBoxes', 260, 'Resize fitness KPI widget')}
-                          </div>
-                        )}
-                                    {widgetKey === 'habitsGrid' && widgetVisibility.habitsGrid && (
-                          <div
-                            ref={setWidgetResizeContainer('habitsGrid')}
-                            className="dashboard-widget-shell"
-                            style={getWidgetSizeStyle('habitsGrid', 220)}
-                          >
-                            <HabitsKpiWidget />
-                            {renderWidgetEdgeHandles('habitsGrid')}
-                            {renderWidgetResizeHandle('habitsGrid', 220, 'Resize habits grid widget')}
+                            <FitnessStripWidget />
+                            {renderWidgetEdgeHandles('fitnessStrip')}
+                            {renderWidgetResizeHandle('fitnessStrip', 160, 'Resize fitness strip widget')}
                           </div>
                         )}
                                     {widgetKey === 'financeOverview' && widgetVisibility.financeOverview && (
@@ -6269,89 +5970,6 @@ const Dashboard: React.FC = () => {
                             </Card>
                             {renderWidgetEdgeHandles('tasksDueToday')}
                             {renderWidgetResizeHandle('tasksDueToday', 320, 'Resize tasks due today widget')}
-                          </div>
-                        )}
-                        {widgetKey === 'choresHabits' && widgetVisibility.choresHabits && (
-                          <div
-                            ref={setWidgetResizeContainer('choresHabits')}
-                            className="dashboard-widget-shell"
-                            style={getWidgetSizeStyle('choresHabits', 320)}
-                          >
-                            <Card className="shadow-sm border-0 h-100 dashboard-chores-card">
-                              <Card.Header className="d-flex align-items-center justify-content-between">
-                                <div className="fw-semibold d-flex align-items-center gap-2">
-                                  <ListChecks size={16} /> Chores & Habits
-                                </div>
-                                <div className="d-flex align-items-center gap-2">
-                                  <Link to="/dashboard/habit-tracking" className="btn btn-sm btn-outline-secondary">Tracking</Link>
-                                  <Link to="/chores/checklist" className="btn btn-sm btn-outline-secondary">Checklist</Link>
-                                  <Badge bg={choresDueTodayTasks.length > 0 ? 'info' : 'secondary'} pill>{choresDueTodayTasks.length}</Badge>
-                                </div>
-                              </Card.Header>
-                              <Card.Body className="p-3">
-                                {tasksDueTodayLoading ? (
-                                  <div className="d-flex align-items-center gap-2 text-muted"><Spinner size="sm" animation="border" /> Loading chores…</div>
-                                ) : choresDueTodayTasks.length === 0 ? (
-                                  <div className="text-muted small">No chores, habits, or routines due today.</div>
-                                ) : (
-                                  (() => {
-                                    const cappedChores = choresDueTodayTasks.slice(0, 10);
-                                    const morning: typeof cappedChores = [];
-                                    const afternoon: typeof cappedChores = [];
-                                    const evening: typeof cappedChores = [];
-                                    const other: typeof cappedChores = [];
-                                    cappedChores.forEach((task) => {
-                                      const tod = (task as any).timeOfDay;
-                                      if (tod === 'morning') morning.push(task);
-                                      else if (tod === 'afternoon') afternoon.push(task);
-                                      else if (tod === 'evening') evening.push(task);
-                                      else other.push(task);
-                                    });
-                                    const renderChore = (task: any) => {
-                                      const kind = getChoreKind(task) || 'chore';
-                                      const dueMs = resolveRecurringDueMs(task, todayDate, todayStartMs);
-                                      const dueLabel = dueMs ? formatDueDetail(dueMs) : 'today';
-                                      const isOverdue = !!dueMs && dueMs < todayStartMs;
-                                      const badgeVariant = kind === 'routine' ? 'success' : kind === 'habit' ? 'secondary' : 'primary';
-                                      const badgeLabel = kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore';
-                                      const busy = !!choreCompletionBusy[task.id];
-                                      return (
-                                        <div key={task.id} className="border rounded p-2 mb-2 d-flex align-items-start gap-2">
-                                          <Form.Check type="checkbox" checked={busy} disabled={busy} onChange={() => handleCompleteChoreTask(task)} aria-label={`Complete ${task.title}`} />
-                                          <div className="flex-grow-1">
-                                            <Link to={`/chores/checklist?taskId=${encodeURIComponent(task.id)}`} className="text-decoration-none fw-semibold small">{task.title}</Link>
-                                            <div className="text-muted small">Due {dueLabel}</div>
-                                          </div>
-                                          <div className="d-flex flex-column align-items-end gap-1">
-                                            <div className="d-flex align-items-center gap-1">
-                                              <button type="button" className="d-inline-flex align-items-center justify-content-center" onClick={() => showSidebar(task as any, 'task' as any)} title="Activity stream" style={{ color: 'var(--bs-secondary-color)', padding: 4, borderRadius: 4, border: 'none', background: 'transparent', cursor: 'pointer', lineHeight: 0 }}>
-                                                <Activity size={14} />
-                                              </button>
-                                              <Link to="/planner?level=calendar" title="Open calendar to defer" style={{ color: 'var(--bs-secondary-color)', padding: 4, lineHeight: 0, display: 'inline-flex' }}>
-                                                <Clock3 size={14} />
-                                              </Link>
-                                            </div>
-                                            {isOverdue && <Badge bg="danger">Overdue</Badge>}
-                                            <Badge bg={badgeVariant}>{badgeLabel}</Badge>
-                                          </div>
-                                        </div>
-                                      );
-                                    };
-                                    return (
-                                      <div className="widget-time-buckets" style={{ overflowY: 'auto', maxHeight: 360 }}>
-                                        {morning.length > 0 && (<div className="mb-3"><h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Morning</small></h6>{morning.map((t) => renderChore(t))}</div>)}
-                                        {afternoon.length > 0 && (<div className="mb-3"><h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Afternoon</small></h6>{afternoon.map((t) => renderChore(t))}</div>)}
-                                        {evening.length > 0 && (<div className="mb-3"><h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Evening</small></h6>{evening.map((t) => renderChore(t))}</div>)}
-                                        {other.length > 0 && (<div className="mb-0">{(morning.length > 0 || afternoon.length > 0 || evening.length > 0) && <h6 className="text-muted mb-2 border-bottom pb-1 fw-bold"><small>Other / Anytime</small></h6>}{other.map((t) => renderChore(t))}</div>)}
-                                        {choresDueTodayTasks.length > 10 && <div className="text-muted small pt-2">Showing top 10 of {choresDueTodayTasks.length}</div>}
-                                      </div>
-                                    );
-                                  })()
-                                )}
-                              </Card.Body>
-                            </Card>
-                            {renderWidgetEdgeHandles('choresHabits')}
-                            {renderWidgetResizeHandle('choresHabits', 320, 'Resize chores and habits widget')}
                           </div>
                         )}
                                     {widgetKey === 'calendar' && widgetVisibility.calendar && (

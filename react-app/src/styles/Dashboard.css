@@ -563,6 +563,20 @@ body.dashboard-widget-resizing * {
   padding: 2px;
 }
 
+/* Quiet section header ("Body" / "Reference") inserted before the first
+   widget of a tier — forces a line break via flex-basis so subsequent
+   widgets start a fresh visual row. */
+.dashboard-widget-tier-header {
+  flex-basis: 100%;
+  width: 100%;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--bs-secondary-color, #6c757d);
+  margin: 6px 2px 0;
+}
+
 .dashboard-sortable-item {
   position: relative;
   flex: 1 1 300px;

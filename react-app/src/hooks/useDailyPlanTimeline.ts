@@ -18,6 +18,7 @@ import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import type { Story, Task } from '../types';
 import { isRecurringDueOnDate, resolveRecurringDueMs, resolveTaskDueMs } from '../utils/recurringTaskDue';
+import { isTop3Story, isTop3Task, top3DateForToday } from '../utils/top3';
 
 export type DailyPlanBucket = 'morning' | 'afternoon' | 'evening';
 
@@ -30,6 +31,13 @@ export interface DailyPlanTimelineItem {
   bucket: DailyPlanBucket;
   task?: Task;
   story?: Story;
+  /**
+   * Optional/additive — true when this task or story is currently flagged as a Top 3 priority
+   * (human-pinned manual rank, or BOB's aiTop3ForDay flag for today; see utils/top3.ts, the same
+   * source Dashboard.tsx's standalone Top 3 widget and MobileHome's Top 3 section both use).
+   * Not set for chore/event rows. Consumers that don't care (e.g. MobileHome) can ignore it.
+   */
+  isTop3?: boolean;
 }
 
 export interface DailyPlanCalendarEvent {
@@ -307,6 +315,7 @@ export function useDailyPlanTimeline(params: UseDailyPlanTimelineParams = {}): U
     const end = new Date(today); end.setHours(23, 59, 59, 999);
     const startMs = start.getTime();
     const endMs = end.getTime();
+    const todayIso = top3DateForToday();
 
     const rows: DailyPlanTimelineItem[] = [];
     const seen = new Set<string>();
@@ -327,6 +336,7 @@ export function useDailyPlanTimeline(params: UseDailyPlanTimelineParams = {}): U
         sortMs: dueMs,
         bucket: bucketFromTime(dueMs, (task as any).timeOfDay),
         task,
+        isTop3: isTop3Task(task, undefined, todayIso),
       });
     });
 
@@ -366,6 +376,7 @@ export function useDailyPlanTimeline(params: UseDailyPlanTimelineParams = {}): U
           sortMs: sortTime,
           bucket: bucketFromTime(sortTime, (story as any).timeOfDay),
           story,
+          isTop3: isTop3Story(story, todayIso),
         });
       });
 
