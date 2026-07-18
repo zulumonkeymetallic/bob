@@ -42,10 +42,13 @@ export const GLOBAL_THEMES: GlobalTheme[] = [
     id: 0,
     name: 'General',
     label: 'General',
-    color: getCssVarValue('--theme-growth-primary', '#6c757d'),
-    darkColor: getCssVarValue('--theme-growth-dark', '#495057'),
-    lightColor: getCssVarValue('--theme-growth-light', '#adb5bd'),
-    textColor: contrastText(getCssVarValue('--theme-growth-primary', '#6c757d')),
+    // Was pinned to --theme-growth-primary, which Spiritual & Personal Growth (id 9) also uses -
+    // General, Hobbies (id 6) and Spiritual all rendered as the same blue. --theme-general-* isn't
+    // defined in ThemeColors.css, so this now correctly falls back to its own colour below.
+    color: getCssVarValue('--theme-general-primary', '#6c757d'),
+    darkColor: getCssVarValue('--theme-general-dark', '#495057'),
+    lightColor: getCssVarValue('--theme-general-light', '#adb5bd'),
+    textColor: contrastText(getCssVarValue('--theme-general-primary', '#6c757d')),
     description: 'General goals and miscellaneous items'
   },
   {
@@ -62,10 +65,13 @@ export const GLOBAL_THEMES: GlobalTheme[] = [
     id: 2,
     name: 'Career & Professional',
     label: 'Career & Professional',
-    color: getCssVarValue('--theme-home-primary', '#fd7e14'),
-    darkColor: getCssVarValue('--theme-home-dark', '#e8620f'),
-    lightColor: getCssVarValue('--theme-home-light', '#fed7aa'),
-    textColor: contrastText(getCssVarValue('--theme-home-primary', '#fd7e14')),
+    // Was pinned to --theme-home-primary, which Home & Living (id 8) also uses - Career and Home
+    // rendered as the same amber/orange. --theme-career-* isn't defined in ThemeColors.css, so
+    // this now correctly falls back to its own colour below.
+    color: getCssVarValue('--theme-career-primary', '#fd7e14'),
+    darkColor: getCssVarValue('--theme-career-dark', '#e8620f'),
+    lightColor: getCssVarValue('--theme-career-light', '#fed7aa'),
+    textColor: contrastText(getCssVarValue('--theme-career-primary', '#fd7e14')),
     description: 'Career development, professional skills, and work-related goals'
   },
   {
@@ -82,10 +88,13 @@ export const GLOBAL_THEMES: GlobalTheme[] = [
     id: 4,
     name: 'Learning & Education',
     label: 'Learning & Education',
-    color: getCssVarValue('--theme-tribe-primary', '#198754'),
-    darkColor: getCssVarValue('--theme-tribe-dark', '#157347'),
-    lightColor: getCssVarValue('--theme-tribe-light', '#d1e7dd'),
-    textColor: contrastText(getCssVarValue('--theme-tribe-primary', '#198754')),
+    // Was pinned to --theme-tribe-primary, which Family & Relationships (id 5) also uses -
+    // Learning and Family rendered as the same purple. --theme-learning-* isn't defined in
+    // ThemeColors.css, so this now correctly falls back to its own colour below.
+    color: getCssVarValue('--theme-learning-primary', '#198754'),
+    darkColor: getCssVarValue('--theme-learning-dark', '#157347'),
+    lightColor: getCssVarValue('--theme-learning-light', '#d1e7dd'),
+    textColor: contrastText(getCssVarValue('--theme-learning-primary', '#198754')),
     description: 'Education, skill development, courses, and learning objectives'
   },
   {
@@ -102,10 +111,13 @@ export const GLOBAL_THEMES: GlobalTheme[] = [
     id: 6,
     name: 'Hobbies & Interests',
     label: 'Hobbies & Interests',
-    color: getCssVarValue('--theme-growth-primary', '#0dcaf0'),
-    darkColor: getCssVarValue('--theme-growth-dark', '#0aa2c0'),
-    lightColor: getCssVarValue('--theme-growth-light', '#cff4fc'),
-    textColor: contrastText(getCssVarValue('--theme-growth-primary', '#0dcaf0')),
+    // Was pinned to --theme-growth-primary, which General (id 0) and Spiritual & Personal Growth
+    // (id 9) also use - all three rendered as the same blue. --theme-hobbies-* isn't defined in
+    // ThemeColors.css, so this now correctly falls back to its own colour below.
+    color: getCssVarValue('--theme-hobbies-primary', '#0dcaf0'),
+    darkColor: getCssVarValue('--theme-hobbies-dark', '#0aa2c0'),
+    lightColor: getCssVarValue('--theme-hobbies-light', '#cff4fc'),
+    textColor: contrastText(getCssVarValue('--theme-hobbies-primary', '#0dcaf0')),
     description: 'Personal interests, hobbies, creative pursuits, and entertainment'
   },
   {
