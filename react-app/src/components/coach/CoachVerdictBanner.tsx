@@ -29,7 +29,17 @@ function todayStr(): string {
   return new Date().toISOString().split('T')[0];
 }
 
-export const CoachVerdictBanner: React.FC = () => {
+interface CoachVerdictBannerProps {
+  /**
+   * Render as a compact row matching the other NotificationStream sections
+   * (DeferralCandidatesBanner, GlobalGoalFocusBanner) instead of the big
+   * gradient banner card. Defaults to false so existing usages (MetricsPage,
+   * AiCoachPage) are unaffected.
+   */
+  compact?: boolean;
+}
+
+export const CoachVerdictBanner: React.FC<CoachVerdictBannerProps> = ({ compact = false }) => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
   const uid = currentUser?.uid;
@@ -116,6 +126,7 @@ export const CoachVerdictBanner: React.FC = () => {
         pillBg: 'rgba(255,255,255,0.22)',
         icon: <HeartPulse size={18} />,
         label: 'Green',
+        accent: '#1f9d63',
       }
       : readinessLabel === 'amber'
         ? {
@@ -123,18 +134,62 @@ export const CoachVerdictBanner: React.FC = () => {
           pillBg: 'rgba(255,255,255,0.22)',
           icon: <Activity size={18} />,
           label: 'Amber',
+          accent: '#d39e00',
         }
         : {
           gradient: 'linear-gradient(135deg, #b02a37 0%, #d63344 100%)',
           pillBg: 'rgba(255,255,255,0.22)',
           icon: <Dumbbell size={18} />,
           label: 'Red',
+          accent: '#d63344',
         };
 
   const handleDismiss = () => {
     if (dismissKey) localStorage.setItem(dismissKey, 'true');
     setDismissed(true);
   };
+
+  if (compact) {
+    const syncLabel = lastSyncMs !== null ? `HealthKit ${fmtSyncAge(lastSyncMs)}` : 'HealthKit: no sync';
+    return (
+      <div style={{ minWidth: 260 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+          <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--muted)' }}>
+            AI Coach
+          </span>
+          <button
+            onClick={handleDismiss}
+            style={{ background: 'none', border: 'none', padding: 0, fontSize: 10, color: 'var(--brand, #5f77dc)', cursor: 'pointer', textDecoration: 'underline' }}
+          >
+            Dismiss
+          </button>
+        </div>
+
+        <button
+          onClick={() => navigate('/ai-coach')}
+          style={{
+            display: 'block', width: '100%',
+            background: 'var(--notion-hover, rgba(0,0,0,0.04))',
+            border: '1px solid var(--border, #e5e7eb)', borderRadius: 6,
+            padding: '5px 8px', textAlign: 'left', cursor: 'pointer',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+            <span style={{ fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={todayTraining || 'No training scheduled'}>
+              {todayTraining || 'No training scheduled'}
+            </span>
+            <span style={{ fontSize: 11, fontWeight: 700, flexShrink: 0, color: appearance.accent }}>
+              {appearance.label} · {readinessPct}%
+            </span>
+          </div>
+          <div style={{ height: 4, background: 'var(--border, #e5e7eb)', borderRadius: 2, marginTop: 4, overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${readinessPct}%`, background: appearance.accent, borderRadius: 2 }} />
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--muted)', marginTop: 3 }}>{syncLabel}</div>
+        </button>
+      </div>
+    );
+  }
 
   return (
     <Card

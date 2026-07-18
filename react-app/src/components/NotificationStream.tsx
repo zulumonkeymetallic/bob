@@ -152,7 +152,7 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
           <CheckInBanner />
         </StreamSection>
         <StreamSection id="coach" onVisibilityChange={handleVisibilityChange}>
-          <CoachVerdictBanner />
+          <CoachVerdictBanner compact />
         </StreamSection>
         <StreamSection id="sprintClosure" onVisibilityChange={handleVisibilityChange}>
           <SprintClosureBanner />
