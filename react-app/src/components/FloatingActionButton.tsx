@@ -13,12 +13,12 @@ import { normalizeTaskTags } from '../utils/taskTagging';
 import '../styles/MaterialDesign.css';
 import BulkCreateModal from './BulkCreateModal';
 import GoalChatModal from './GoalChatModal';
-import AddStoryModal from './AddStoryModal';
 import IntentBrokerModal from './IntentBrokerModal';
 import { useProcessTextActivity } from '../contexts/ProcessTextActivityContext';
 import { saveFocusWizardPrefill } from '../services/focusGoalsService';
 import { pickDefaultPlanningSprintId } from '../utils/sprintFilter';
 import { withTimeout } from '../utils/withTimeout';
+import { evaluateStorySprintAlignment } from '../utils/sprintAlignment';
 
 const CREATE_TIMEOUT_MS = 15000;
 
@@ -30,6 +30,15 @@ interface Goal {
   id: string;
   title: string;
   theme: string;
+  // Needed by evaluateStorySprintAlignment/isGoalInHierarchySet to walk ancestor/descendant
+  // chains when checking whether the linked goal maps to one of the sprint's focus goals.
+  parentGoalId?: string | null;
+}
+
+interface StoryOption {
+  id: string;
+  title: string;
+  goalId: string;
 }
 
 const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportClick }) => {
@@ -58,16 +67,19 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
     priority: 'med',
     persona: (currentPersona || 'personal') as 'personal' | 'work',
     goalId: '',
+    storyId: '',
     sprintId: '',
-    type: 'task',
-    repeatFrequency: '',
-    repeatInterval: 1,
-    daysOfWeek: [] as string[],
     dueDate: getTomorrowStr(),
   });
+  // Free-text search boxes for the "searchable by title" Goal/Story pickers
+  // (Story's Linked Goal, Task's Parent Story). Mirrors the pattern in
+  // EditTaskModal: typed text resolves to a real id on blur via exact title match.
+  const [goalInput, setGoalInput] = useState('');
+  const [storyInput, setStoryInput] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
   const [goals, setGoals] = useState<Goal[]>([]);
+  const [stories, setStories] = useState<StoryOption[]>([]);
   const [showIntake, setShowIntake] = useState(false);
   const [showIntentBroker, setShowIntentBroker] = useState(false);
   const [showFocusIntake, setShowFocusIntake] = useState(false);
@@ -85,8 +97,15 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
     { value: 'M', label: '60 mins (1)', minutes: 60, points: 1 },
     { value: 'L', label: '120 mins (2)', minutes: 120, points: 2 }
   ];
-  const isRecurringQuickAdd = quickAddType === 'task' && ['chore', 'routine', 'habit'].includes(String(quickAddData.type || '').toLowerCase());
   const defaultFabSprintId = pickDefaultPlanningSprintId(_availableSprints as any);
+
+  // Warn (or block, if the sprint is in strict mode) when a Story's linked goal isn't one of
+  // the selected sprint's focus goals — same check EditStoryModal/AddStoryModal/EditTaskModal
+  // already run before save.
+  const selectedFabSprint = quickAddData.sprintId
+    ? (_availableSprints as any[])?.find((s: any) => s.id === quickAddData.sprintId)
+    : null;
+  const sprintAlignment = evaluateStorySprintAlignment(selectedFabSprint as any, quickAddData.goalId || '', goals as any);
 
   // Auto-select the sprint whose window contains the chosen due date.
   // Falls back to the closest future sprint, then the planning default.
@@ -153,48 +172,82 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
     loadActiveFocusGoals();
   }, [currentUser, currentPersona]);
 
-  // Load goals and sprints when component mounts or when quickAddType changes to 'story'
+  // Load goals and stories whenever the quick-add modal is open — the simplified
+  // flow needs goals for Story's "Linked Goal" picker and stories for Task's
+  // "Parent Story" picker, regardless of which type is currently selected.
   useEffect(() => {
-    const loadGoals = async () => {
-      if (!currentUser || quickAddType !== 'story') return;
+    const loadGoalsAndStories = async () => {
+      if (!currentUser || !showQuickAdd) return;
 
       try {
-        console.log('📊 FloatingActionButton: Loading goals for story creation', {
-          action: 'load_goals_start',
+        console.log('📊 FloatingActionButton: Loading goals and stories for quick add', {
+          action: 'load_goals_stories_start',
           user: currentUser.uid,
           persona: currentPersona
         });
 
-        // Load goals. Do NOT orderBy('priority') — Firestore omits documents missing that
-        // field, which hid priority-less goals from the picker. Sort client-side if needed.
+        // Do NOT orderBy('priority')/('createdAt') — Firestore omits documents missing
+        // that field, which hid priority-less goals from the picker. Sort client-side if needed.
         const goalsQuery = query(
           collection(db, 'goals'),
           where('ownerUid', '==', currentUser.uid)
         );
-        const goalsSnapshot = await getDocs(goalsQuery);
+        const storiesQuery = query(
+          collection(db, 'stories'),
+          where('ownerUid', '==', currentUser.uid)
+        );
+        const [goalsSnapshot, storiesSnapshot] = await Promise.all([
+          getDocs(goalsQuery),
+          getDocs(storiesQuery),
+        ]);
         const goalsData = goalsSnapshot.docs.map(doc => ({
           id: doc.id,
           title: doc.data().title,
-          theme: doc.data().theme
+          theme: doc.data().theme,
+          parentGoalId: doc.data().parentGoalId || null,
+        }));
+        const storiesData = storiesSnapshot.docs.map(doc => ({
+          id: doc.id,
+          title: doc.data().title,
+          goalId: doc.data().goalId || ''
         }));
 
         setGoals(goalsData);
+        setStories(storiesData);
 
-        console.log('✅ FloatingActionButton: Goals loaded successfully', {
-          action: 'load_goals_success',
+        console.log('✅ FloatingActionButton: Goals and stories loaded successfully', {
+          action: 'load_goals_stories_success',
           goalsCount: goalsData.length,
+          storiesCount: storiesData.length,
         });
 
       } catch (error) {
-        console.error('❌ FloatingActionButton: Failed to load goals', {
-          action: 'load_goals_error',
+        console.error('❌ FloatingActionButton: Failed to load goals/stories', {
+          action: 'load_goals_stories_error',
           error: error.message
         });
       }
     };
 
-    loadGoals();
-  }, [currentUser, currentPersona, quickAddType]);
+    loadGoalsAndStories();
+  }, [currentUser, currentPersona, showQuickAdd]);
+
+  // Resolve free-text "search by title" inputs to real ids — matches the pattern in
+  // EditTaskModal's resolveGoalSelection/resolveStorySelection: exact title match on
+  // blur, clearing the underlying id if the typed text doesn't match anything.
+  const resolveGoalSelection = (value: string) => {
+    const val = value.trim();
+    const match = goals.find((g) => g.title === val);
+    setQuickAddData((prev) => ({ ...prev, goalId: match ? match.id : '' }));
+    setGoalInput(match ? match.title : val);
+  };
+
+  const resolveStorySelection = (value: string) => {
+    const val = value.trim();
+    const match = stories.find((s) => s.title === val);
+    setQuickAddData((prev) => ({ ...prev, storyId: match ? match.id : '' }));
+    setStoryInput(match ? match.title : val);
+  };
 
   const handleQuickAdd = async () => {
     if (!currentUser || !quickAddData.title.trim()) return;
@@ -277,6 +330,18 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         });
         setSubmitResult(`✅ Goal created successfully! (${goalRef})`);
       } else if (quickAddType === 'story') {
+        if (quickAddData.sprintId && sprintAlignment.hasRule && !sprintAlignment.aligned) {
+          if (sprintAlignment.blocking) {
+            setSubmitResult(`❌ ${sprintAlignment.message}`);
+            setIsSubmitting(false);
+            return;
+          }
+          const proceed = window.confirm(`${sprintAlignment.message} Continue anyway?`);
+          if (!proceed) {
+            setIsSubmitting(false);
+            return;
+          }
+        }
         const storyRef = generateRef('story');
         const linkedGoal = goals.find(g => g.id === quickAddData.goalId);
         const themeId = (linkedGoal && (linkedGoal as any).theme !== undefined) ? (linkedGoal as any).theme : 1;
@@ -314,14 +379,11 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         const estimateMinutes = effortData?.minutes || 45;
         const effortPoints = effortData?.points ?? 1;
         const estimatedHours = Math.round((estimateMinutes / 60) * 100) / 100;
-        const taskType = (quickAddData.type || 'task') as string;
-        const isRecurring = ['chore', 'routine', 'habit'].includes(taskType);
-        const normalizedFrequency = isRecurring ? (quickAddData.repeatFrequency || null) : null;
-        const normalizedInterval = isRecurring ? Math.max(1, Number(quickAddData.repeatInterval || 1)) : null;
-        const normalizedDays = isRecurring && quickAddData.repeatFrequency === 'weekly'
-          ? (Array.isArray(quickAddData.daysOfWeek) ? quickAddData.daysOfWeek : [])
-          : [];
-        const themeValue = taskType === 'chore' ? 'Chores' : quickAddData.theme;
+        // Simplified quick-add always creates a plain task — chore/routine/habit
+        // creation (with recurrence) is out of scope for this flow.
+        const taskType = 'task';
+        const themeValue = quickAddData.theme;
+        const linkedStory = quickAddData.storyId ? stories.find(s => s.id === quickAddData.storyId) : null;
         const normalizedTags = normalizeTaskTags({
           tags: [],
           type: taskType,
@@ -341,7 +403,10 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           ...baseData,
           ref: taskRef,
           parentType: 'story',
-          parentId: '', // Will need to be linked later
+          // Parent Story is optional (matches today's permissiveness) — when the
+          // user typed and resolved a story, actually link it via storyId + parentId.
+          storyId: quickAddData.storyId || '',
+          parentId: quickAddData.storyId || '',
           sprintId: quickAddData.sprintId || defaultFabSprintId || null,
           effort: quickAddData.effort,
           priority: quickAddData.priority,
@@ -353,12 +418,12 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           status: 0,
           theme: themeValue,
           type: taskType,
-          repeatFrequency: normalizedFrequency,
-          repeatInterval: normalizedInterval,
-          daysOfWeek: normalizedDays,
+          repeatFrequency: null,
+          repeatInterval: null,
+          daysOfWeek: [],
           tags: normalizedTags,
-          hasGoal: false,
-          alignedToGoal: false,
+          hasGoal: !!linkedStory?.goalId,
+          alignedToGoal: !!linkedStory?.goalId,
           source: 'web',
           syncState: 'clean',
           labels: [],
@@ -408,14 +473,13 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         priority: 'med',
         persona: (currentPersona || 'personal') as 'personal' | 'work',
         goalId: '',
+        storyId: '',
         sprintId: '',
-        type: 'task',
-        repeatFrequency: '',
-        repeatInterval: 1,
-        daysOfWeek: [],
         dueDate: getTomorrowStr(),
       });
-      
+      setGoalInput('');
+      setStoryInput('');
+
       // Auto-close after success
       setTimeout(() => {
         setShowQuickAdd(false);
@@ -434,6 +498,23 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  // Shared opener for the simplified Goal/Story/Task quick-add modal. All three
+  // mini-buttons (G/S/T) funnel through here, defaulting to the type clicked but
+  // letting the user switch type inside the modal via the segmented control.
+  const openQuickAdd = (type: 'goal' | 'story' | 'task') => {
+    setQuickAddType(type);
+    setQuickAddData((prev) => ({
+      ...prev,
+      persona: (currentPersona || 'personal') as 'personal' | 'work',
+      dueDate: getTomorrowStr(),
+    }));
+    setGoalInput('');
+    setStoryInput('');
+    setSubmitResult(null);
+    setShowQuickAdd(true);
+    setShowMenu(false);
   };
 
   return (
@@ -480,30 +561,14 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           </button>
           <button
             className="md-fab-mini"
-            onClick={() => {
-              setQuickAddType('goal');
-              setQuickAddData((prev) => ({
-                ...prev,
-                persona: (currentPersona || 'personal') as 'personal' | 'work',
-              }));
-              setShowQuickAdd(true);
-              setShowMenu(false);
-            }}
+            onClick={() => openQuickAdd('goal')}
             title="Add Goal"
           >
             G
           </button>
           <button
             className="md-fab-mini"
-            onClick={() => {
-              setQuickAddType('story');
-              setQuickAddData((prev) => ({
-                ...prev,
-                persona: (currentPersona || 'personal') as 'personal' | 'work',
-              }));
-              setShowQuickAdd(true);
-              setShowMenu(false);
-            }}
+            onClick={() => openQuickAdd('story')}
             title="Add Story"
           >
             S
@@ -520,16 +585,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           </button>
           <button
             className="md-fab-mini"
-            onClick={() => {
-              setQuickAddType('task');
-              setQuickAddData((prev) => ({
-                ...prev,
-                persona: (currentPersona || 'personal') as 'personal' | 'work',
-                dueDate: getTomorrowStr(),
-              }));
-              setShowQuickAdd(true);
-              setShowMenu(false);
-            }}
+            onClick={() => openQuickAdd('task')}
             title="Quick Task"
           >
             T
@@ -657,17 +713,28 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         </Modal.Footer>
       </Modal>
 
-      {/* Quick Add Modal: if adding a Story, reuse the shared AddStoryModal for consistency */}
-      {quickAddType === 'story' ? (
-        <AddStoryModal show={showQuickAdd} onClose={() => setShowQuickAdd(false)} goalId={quickAddData.goalId || undefined} />
-      ) : (
+      {/* Quick Add Modal: simplified Goal/Story/Task creation. One modal, one segmented
+          type switch, minimal fields per Jim's spec — everything else the underlying
+          write logic needs is defaulted automatically (see handleQuickAdd). */}
       <Modal show={showQuickAdd} onHide={() => setShowQuickAdd(false)} centered scrollable dialogClassName="fab-quick-add-modal">
         <Modal.Header closeButton>
-          <Modal.Title>
-            Add New {quickAddType.charAt(0).toUpperCase() + quickAddType.slice(1)}
-          </Modal.Title>
+          <Modal.Title>Quick Add</Modal.Title>
         </Modal.Header>
         <Modal.Body>
+          <div className="btn-group mb-3" role="group" aria-label="Item type">
+            {(['goal', 'story', 'task'] as const).map((t) => (
+              <Button
+                key={t}
+                type="button"
+                size="sm"
+                variant={quickAddType === t ? 'primary' : 'outline-secondary'}
+                onClick={() => setQuickAddType(t)}
+              >
+                {t.charAt(0).toUpperCase() + t.slice(1)}
+              </Button>
+            ))}
+          </div>
+
           <Form>
             <Form.Group className="mb-3">
               <Form.Label>Title *</Form.Label>
@@ -680,43 +747,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
               />
             </Form.Group>
 
-            <Form.Group className="mb-3">
-              <Form.Label>Description</Form.Label>
-              <Form.Control
-                as="textarea"
-                rows={3}
-                value={quickAddData.description}
-                onChange={(e) => setQuickAddData({ ...quickAddData, description: e.target.value })}
-                placeholder={`Describe this ${quickAddType}...`}
-              />
-            </Form.Group>
-
-            {quickAddType === 'task' && (
-              <Form.Group className="mb-3">
-                <Form.Label>Source URL</Form.Label>
-                <Form.Control
-                  type="url"
-                  value={quickAddData.url}
-                  onChange={(e) => setQuickAddData({ ...quickAddData, url: e.target.value })}
-                  placeholder="https://..."
-                />
-              </Form.Group>
-            )}
-
-            {quickAddType === 'task' && (
-              <Form.Group className="mb-3">
-                <Form.Label>Persona</Form.Label>
-                <Form.Select
-                  value={quickAddData.persona}
-                  onChange={(e) => setQuickAddData({ ...quickAddData, persona: e.target.value as 'personal' | 'work' })}
-                >
-                  <option value="personal">Personal</option>
-                  <option value="work">Work</option>
-                </Form.Select>
-              </Form.Group>
-            )}
-
-            {(quickAddType === 'goal' || quickAddType === 'task') && (
+            {quickAddType === 'goal' && (
               <Form.Group className="mb-3">
                 <Form.Label>Theme</Form.Label>
                 <Form.Select
@@ -730,147 +761,41 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
               </Form.Group>
             )}
 
-            {/* Story-specific fields are handled by AddStoryModal; this quick-add modal is for goal/task only */}
-
-            {quickAddType === 'task' && (
-              <Form.Group className="mb-3">
-                <Form.Label>Task type</Form.Label>
-                <Form.Select
-                  value={quickAddData.type}
-                  onChange={(e) => {
-                    const nextType = e.target.value;
-                    setQuickAddData({
-                      ...quickAddData,
-                      type: nextType,
-                      theme: nextType === 'chore' ? 'Chores' : quickAddData.theme,
-                    });
-                  }}
-                >
-                  <option value="task">Task</option>
-                  <option value="chore">Chore</option>
-                  <option value="routine">Routine</option>
-                  <option value="habit">Habit</option>
-                </Form.Select>
-              </Form.Group>
-            )}
-
-            {quickAddType === 'task' && isRecurringQuickAdd && (
-              <div className="mb-3">
-                <div className="row">
-                  <div className="col-md-4 mb-2">
-                    <Form.Label>Frequency</Form.Label>
-                    <Form.Select
-                      value={quickAddData.repeatFrequency || ''}
-                      onChange={(e) => setQuickAddData({ ...quickAddData, repeatFrequency: e.target.value })}
-                    >
-                      <option value="">None</option>
-                      <option value="daily">Daily</option>
-                      <option value="weekly">Weekly</option>
-                      <option value="monthly">Monthly</option>
-                      <option value="yearly">Yearly</option>
-                    </Form.Select>
-                  </div>
-                  <div className="col-md-4 mb-2">
-                    <Form.Label>Interval</Form.Label>
-                    <Form.Control
-                      type="number"
-                      min={1}
-                      max={365}
-                      value={quickAddData.repeatInterval || 1}
-                      onChange={(e) => setQuickAddData({ ...quickAddData, repeatInterval: Number(e.target.value) || 1 })}
-                    />
-                  </div>
-                </div>
-                {quickAddData.repeatFrequency === 'weekly' && (
-                  <div className="mt-2">
-                    <Form.Label>Days of week</Form.Label>
-                    <div className="d-flex flex-wrap gap-3">
-                      {[
-                        { label: 'Mon', value: 'mon' },
-                        { label: 'Tue', value: 'tue' },
-                        { label: 'Wed', value: 'wed' },
-                        { label: 'Thu', value: 'thu' },
-                        { label: 'Fri', value: 'fri' },
-                        { label: 'Sat', value: 'sat' },
-                        { label: 'Sun', value: 'sun' },
-                      ].map((day) => {
-                        const days = Array.isArray(quickAddData.daysOfWeek) ? quickAddData.daysOfWeek : [];
-                        const checked = days.includes(day.value);
-                        return (
-                          <label key={day.value} className="form-check form-check-inline">
-                            <input
-                              type="checkbox"
-                              className="form-check-input"
-                              checked={checked}
-                              onChange={() => {
-                                const next = checked
-                                  ? days.filter((d: string) => d !== day.value)
-                                  : [...days, day.value];
-                                setQuickAddData({ ...quickAddData, daysOfWeek: next });
-                              }}
-                            />
-                            <span className="form-check-label">{day.label}</span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {quickAddType === 'task' && (
-              <Form.Group className="mb-3">
-                <Form.Label>Effort</Form.Label>
-                <Form.Select
-                  value={quickAddData.effort}
-                  onChange={(e) => setQuickAddData({ ...quickAddData, effort: e.target.value })}
-                >
-                  {efforts.map(effort => (
-                    <option key={effort.value} value={effort.value}>
-                      {effort.label}
-                    </option>
-                  ))}
-                </Form.Select>
-              </Form.Group>
-            )}
-
-            {quickAddType === 'task' && (
+            {quickAddType === 'story' && (
               <>
-                <div className="row mb-3">
-                  <div className="col-6">
-                    <Form.Label>Priority</Form.Label>
-                    <Form.Select
-                      value={quickAddData.priority}
-                      onChange={(e) => setQuickAddData({ ...quickAddData, priority: e.target.value })}
-                    >
-                      <option value="low">Low</option>
-                      <option value="med">Medium</option>
-                      <option value="high">High</option>
-                      <option value="critical">🔴 Critical</option>
-                    </Form.Select>
-                  </div>
-                  <div className="col-6">
-                    <Form.Label>Due Date</Form.Label>
-                    <Form.Control
-                      type="date"
-                      value={quickAddData.dueDate}
-                      onChange={(e) => setQuickAddData({ ...quickAddData, dueDate: e.target.value })}
-                    />
-                  </div>
-                </div>
+                <Form.Group className="mb-3">
+                  <Form.Label>Linked Goal *</Form.Label>
+                  <Form.Control
+                    list="fab-goal-options"
+                    value={goalInput}
+                    onChange={(e) => setGoalInput(e.target.value)}
+                    onBlur={(e) => resolveGoalSelection(e.target.value)}
+                    placeholder="Search goals by title..."
+                  />
+                  <datalist id="fab-goal-options">
+                    {goals.map(g => (
+                      <option key={g.id} value={g.title} />
+                    ))}
+                  </datalist>
+                  {goalInput.trim() && !quickAddData.goalId ? (
+                    <Form.Text className="text-warning">
+                      No goal matches "{goalInput.trim()}" — pick one from the list.
+                    </Form.Text>
+                  ) : (
+                    <Form.Text className="text-muted">
+                      Stories must link to a goal.
+                    </Form.Text>
+                  )}
+                </Form.Group>
+
                 {(_availableSprints as any[])?.length > 0 && (
                   <Form.Group className="mb-3">
-                    <Form.Label>
-                      Sprint
-                      <span className="text-muted ms-1" style={{ fontSize: '0.75rem' }}>
-                        (auto-matched to due date)
-                      </span>
-                    </Form.Label>
+                    <Form.Label>Sprint</Form.Label>
                     <Form.Select
-                      value={quickAddData.sprintId || defaultFabSprintId}
+                      value={quickAddData.sprintId}
                       onChange={(e) => setQuickAddData({ ...quickAddData, sprintId: e.target.value })}
                     >
+                      <option value="">No sprint (backlog)</option>
                       {(_availableSprints as any[]).map((s: any) => {
                         const start = s.startDate ? new Date(s.startDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
                         const end = s.endDate ? new Date(s.endDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
@@ -884,6 +809,46 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
                     </Form.Select>
                   </Form.Group>
                 )}
+
+                {quickAddData.sprintId && sprintAlignment.hasRule && !sprintAlignment.aligned && (
+                  <Alert variant={sprintAlignment.blocking ? 'danger' : 'warning'} className="mb-3">
+                    {sprintAlignment.message}
+                  </Alert>
+                )}
+              </>
+            )}
+
+            {quickAddType === 'task' && (
+              <>
+                <Form.Group className="mb-3">
+                  <Form.Label>Due Date</Form.Label>
+                  <Form.Control
+                    type="date"
+                    value={quickAddData.dueDate}
+                    onChange={(e) => setQuickAddData({ ...quickAddData, dueDate: e.target.value })}
+                  />
+                </Form.Group>
+
+                <Form.Group className="mb-3">
+                  <Form.Label>Parent Story</Form.Label>
+                  <Form.Control
+                    list="fab-story-options"
+                    value={storyInput}
+                    onChange={(e) => setStoryInput(e.target.value)}
+                    onBlur={(e) => resolveStorySelection(e.target.value)}
+                    placeholder="Search stories by title (optional)..."
+                  />
+                  <datalist id="fab-story-options">
+                    {stories.map(s => (
+                      <option key={s.id} value={s.title} />
+                    ))}
+                  </datalist>
+                  {storyInput.trim() && !quickAddData.storyId && (
+                    <Form.Text className="text-warning">
+                      No story matches "{storyInput.trim()}" — pick one from the list or leave blank.
+                    </Form.Text>
+                  )}
+                </Form.Group>
               </>
             )}
           </Form>
@@ -901,13 +866,16 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           <Button
             variant="primary"
             onClick={handleQuickAdd}
-            disabled={isSubmitting || !quickAddData.title.trim()}
+            disabled={
+              isSubmitting
+              || !quickAddData.title.trim()
+              || (quickAddType === 'story' && !quickAddData.goalId)
+            }
           >
             {isSubmitting ? 'Creating...' : `Create ${quickAddType.charAt(0).toUpperCase() + quickAddType.slice(1)}`}
           </Button>
         </Modal.Footer>
       </Modal>
-      )}
 
       <BulkCreateModal
         show={showBulkCreate}
