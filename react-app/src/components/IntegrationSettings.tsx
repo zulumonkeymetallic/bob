@@ -518,9 +518,11 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
   const connectStrava = () => {
     if (!currentUser) return;
     const nonce = Math.random().toString(36).slice(2);
-    const region = 'europe-west2';
-    const projectId = firebaseConfig.projectId;
-    const url = `https://${region}-${projectId}.cloudfunctions.net/stravaOAuthStart?uid=${currentUser.uid}&nonce=${nonce}`;
+    // Must go through the hosting domain (bob.jc1.tech), not the raw cloudfunctions.net URL —
+    // the server derives the OAuth redirect_uri from the request Host header, and Strava
+    // rejects the auth request with "redirect_uri invalid" unless it matches the domain
+    // registered in the Strava app's settings (bob.jc1.tech), which cloudfunctions.net never did.
+    const url = `${window.location.origin}/stravaOAuthStart?uid=${currentUser.uid}&nonce=${nonce}`;
     const popup = window.open(url, 'strava-oauth', 'width=480,height=720');
     if (popup) {
       const timer = window.setInterval(() => {

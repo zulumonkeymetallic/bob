@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { db, auth, functions, firebaseConfig } from '../firebase';
+import { db, auth, functions } from '../firebase';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import * as XLSX from 'xlsx';
@@ -141,10 +141,10 @@ const Admin = () => {
     try {
       setStravaStatus('Starting Strava OAuth...');
       const nonce = Math.random().toString(36).slice(2);
-      // Build Functions URL from configured region + project
-      const region = 'europe-west2';
-      const projectId = (window as any).FIREBASE_PROJECT_ID || firebaseConfig.projectId;
-      const url = `https://${region}-${projectId}.cloudfunctions.net/stravaOAuthStart?uid=${user.uid}&nonce=${nonce}`;
+      // Must go through the hosting domain (bob.jc1.tech), not the raw cloudfunctions.net URL —
+      // Strava rejects the auth request unless the derived redirect_uri matches the domain
+      // registered in the Strava app's settings. See IntegrationSettings.tsx's connectStrava.
+      const url = `${window.location.origin}/stravaOAuthStart?uid=${user.uid}&nonce=${nonce}`;
       const popup = window.open(url, 'strava-oauth', 'width=500,height=700');
       const check = setInterval(() => {
         if (popup?.closed) {
