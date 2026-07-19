@@ -280,9 +280,19 @@ export function useDailyPlanTimeline(params: UseDailyPlanTimelineParams = {}): U
     if (!selfContained) return [];
     const todayDate = new Date(); todayDate.setHours(0, 0, 0, 0);
     const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+    const hasRecurrenceConfig = (t: any) =>
+      !!t.repeatFrequency
+      || (Array.isArray(t.daysOfWeek) && t.daysOfWeek.length > 0)
+      || (Array.isArray(t.repeatDaysOfWeek) && t.repeatDaysOfWeek.length > 0);
     const rows = fetchedTasks
       .filter((t) => !(t as any).deleted)
       .filter((t) => {
+        // A recurring chore's due-ness is decided by its recurrence pattern landing on today,
+        // never by a stale one-off due-date stamp from a past cycle — that stamp typically
+        // isn't cleared/rolled-forward once set, so "due <= todayEnd" stays true on every day
+        // from then on regardless of the chore's actual schedule (e.g. daysOfWeek: ['sat']
+        // showing up daily instead of Saturdays only).
+        if (hasRecurrenceConfig(t)) return !!getChoreKind(t) && isRecurringDueOnDate(t, todayDate);
         const due = resolveTaskDueMs(t);
         if (due) return due <= todayEnd.getTime();
         return !!getChoreKind(t) && isRecurringDueOnDate(t, todayDate, due);
@@ -349,15 +359,27 @@ export function useDailyPlanTimeline(params: UseDailyPlanTimelineParams = {}): U
     // to appear, pinned, even though they have no "due today" timestamp to bucket by.
     const extraTop3Tasks = selfTop3Tasks.filter((t) => !dueTodayTaskIds.has(t.id));
 
+    // Declared up front (not just before the story loop) so both the task and story loops can
+    // register a matched title before the raw-GCal-events pass runs below. Stories already fed
+    // this; tasks never did, so a task matched to a GCal event could render twice — once as the
+    // normal task row, once again as a separate shaded "calendar event" row for the same block.
+    const gcalMatchedTitles = new Set<string>();
+
     tasksDueToday.forEach((task) => {
+      const matchedStartMs = resolveDateValue((task as any).calendarMatchedStart);
+      const matchedEndMs = resolveDateValue((task as any).calendarMatchedEnd);
       const dueMs = resolveRecurringDueMs(task, today, startMs) ?? resolveTaskDueMs(task);
+      // A GCal-matched time is more precise than a date-only due date — same preference story
+      // rows already give matchedStartMs over dueMs.
+      const sortTime = matchedStartMs ?? dueMs;
+      if (matchedStartMs !== null) gcalMatchedTitles.add(task.title.trim().toLowerCase());
       add({
         id: `task-${task.id}`,
         kind: 'task',
         title: task.title,
-        timeLabel: timelineTimeLabel(dueMs),
-        sortMs: dueMs,
-        bucket: bucketFromTime(dueMs, (task as any).timeOfDay),
+        timeLabel: timelineTimeLabel(sortTime, matchedStartMs !== null ? (matchedEndMs ?? undefined) : undefined),
+        sortMs: sortTime,
+        bucket: bucketFromTime(sortTime, (task as any).timeOfDay),
         task,
         isTop3: isTop3Task(task, undefined, todayIso),
       });
@@ -393,7 +415,6 @@ export function useDailyPlanTimeline(params: UseDailyPlanTimelineParams = {}): U
       });
     });
 
-    const gcalMatchedTitles = new Set<string>();
     storiesSrc
       .filter((story) => story.status !== 4)
       .forEach((story) => {
