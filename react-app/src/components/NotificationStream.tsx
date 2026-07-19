@@ -99,6 +99,19 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
 
   return (
     <div ref={wrapperRef} style={{ position: 'relative', display: hasContent ? 'block' : 'none' }}>
+      {open && (
+        // The dropdown itself is a small, bounded panel with nothing behind it - the rest of
+        // the page (including other header/card buttons that happen to sit near it, like the
+        // Today's Plan card's Plan/Delta replan/Full replan row) stays fully visible AND
+        // clickable, which reads as "showing through" even though there's no z-index conflict.
+        // A transparent backdrop below the panel (but above the page) fixes both the visual
+        // confusion and the accidental-click-through.
+        <div
+          onClick={() => setOpen(false)}
+          style={{ position: 'fixed', inset: 0, zIndex: 1040, background: 'transparent' }}
+          aria-hidden="true"
+        />
+      )}
       <button
         onClick={() => setOpen((v) => !v)}
         aria-label="Notifications"
