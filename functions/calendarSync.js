@@ -194,6 +194,28 @@ function normalizeDayToken(value) {
   return null;
 }
 
+// A story/task is Top 3 if it's manually pinned (userPriorityFlag/userPriorityRank — same
+// fields react-app/src/utils/manualPriority.ts reads) or the AI flagged it for today
+// (aiTop3ForDay). Mirrors react-app/src/utils/top3.ts's isTop3Story/isTop3Task, kept as a
+// small inline check here rather than sharing code across the separate frontend/functions
+// build.
+function isEntityTop3(entity) {
+  if (!entity) return false;
+  if (entity.userPriorityFlag === true) return true;
+  const manualRank = Number(entity.userPriorityRank);
+  if (Number.isFinite(manualRank) && manualRank > 0) return true;
+  return entity.aiTop3ForDay === true;
+}
+
+// GCal event titles are the one surface Jim actually looks at while his day is happening —
+// a Top 3 item (or one with an AI score) should be identifiable without opening BOB.
+function decorateEventTitle(baseTitle, entity, aiScoreVal) {
+  const top3Prefix = isEntityTop3(entity) ? '⭐ TOP3 · ' : '';
+  const score = Number(aiScoreVal);
+  const aiSuffix = Number.isFinite(score) ? ` · AI ${Math.round(score)}` : '';
+  return `${top3Prefix}${baseTitle}${aiSuffix}`;
+}
+
 function isDoneStatus(value) {
   if (value === null || value === undefined || value === '') return false;
   if (typeof value === 'number') return value === 2;
@@ -1189,7 +1211,7 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
             const acArr = Array.isArray(sd.acceptanceCriteria)
               ? sd.acceptanceCriteria.filter(Boolean).map((x) => String(x)).slice(0, 3)
               : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x) => String(x)).slice(0, 3) : []);
-            summaryText = `${sd.title || activityName} [${storyRef}] [${themeLabel}]`;
+            summaryText = decorateEventTitle(`${sd.title || activityName} [${storyRef}] [${themeLabel}]`, sd, aiScoreVal);
             const lines = [];
             if (enrichedDesc) lines.push(enrichedDesc);
             lines.push(`Story: ${sd.title || 'Story'} – ${storyRef}`);
@@ -1248,7 +1270,7 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
                 aiReasonVal = tdTopReason || td.aiCriticalityReason || '';
               }
             }
-            summaryText = `${td.title || activityName} [${taskRef}] [${themeLabel}]`;
+            summaryText = decorateEventTitle(`${td.title || activityName} [${taskRef}] [${themeLabel}]`, td, aiScoreVal);
             const lines = [];
             if (enrichedDesc) lines.push(enrichedDesc);
             lines.push(`Task: ${td.title || 'Task'} – ${taskRef}`);
@@ -1636,7 +1658,7 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
             const acArr = Array.isArray(sd.acceptanceCriteria)
               ? sd.acceptanceCriteria.filter(Boolean).map((x) => String(x)).slice(0, 3)
               : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x) => String(x)).slice(0, 3) : []);
-            summaryText = `${sd.title || activityName} [${storyRef}] [${themeLabel}]`;
+            summaryText = decorateEventTitle(`${sd.title || activityName} [${storyRef}] [${themeLabel}]`, sd, aiScoreVal);
             const lines = [];
             if (enrichedDesc2) lines.push(enrichedDesc2);
             lines.push(`Story: ${sd.title || 'Story'} – ${storyRef}`);
@@ -1695,7 +1717,7 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
                 aiReasonVal2 = tdTopReason || td.aiCriticalityReason || '';
               }
             }
-            summaryText = `${td.title || activityName} [${taskRef}] [${themeLabel}]`;
+            summaryText = decorateEventTitle(`${td.title || activityName} [${taskRef}] [${themeLabel}]`, td, aiScoreVal);
             const lines = [];
             if (enrichedDesc2) lines.push(enrichedDesc2);
             lines.push(`Task: ${td.title || 'Task'} – ${taskRef}`);
