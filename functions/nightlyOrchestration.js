@@ -5456,9 +5456,11 @@ exports.deltaPriorityRescore = onCall({
   const goal = goalId ? await db.collection('goals').doc(goalId).get().then(g => g.exists ? g.data() : null).catch(() => null) : null;
   const goalDueMs = goal ? (toDateTime(goal.dueDate || goal.targetDate, { defaultValue: null })?.toMillis() || null) : null;
 
-  // Resolve theme
+  // Resolve theme — themeValue above already carries the full entity/goal fallback chain;
+  // normalizeTheme() was never defined anywhere in this codebase (a ReferenceError crashing
+  // every deltaPriorityRescore call), so use the already-resolved value directly.
   const themeValue = entity.theme ?? entity.themeId ?? entity.theme_id ?? goal?.theme ?? null;
-  const effectiveTheme = normalizeTheme(themeValue);
+  const effectiveTheme = themeValue;
 
   // Get active sprint IDs
   const sprintSnap = await db.collection('sprints').where('ownerUid', '==', uid).where('status', 'in', ['active', 1, '1']).limit(10).get();
