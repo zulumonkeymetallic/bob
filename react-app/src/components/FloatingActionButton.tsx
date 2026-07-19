@@ -22,6 +22,44 @@ import { evaluateStorySprintAlignment } from '../utils/sprintAlignment';
 
 const CREATE_TIMEOUT_MS = 15000;
 
+// Quarter picker for Goal start date — coarser than a raw date input, which fits how goals
+// actually get planned (by quarter, not by day). Resolves to the quarter's true midpoint
+// timestamp (first-day-of-quarter to last-day-of-quarter, halfway between) on submit.
+function currentQuarterKey(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-Q${Math.ceil((d.getMonth() + 1) / 3)}`;
+}
+
+function buildQuarterOptions(count: number): string[] {
+  const d = new Date();
+  const startQuarterIndex = Math.floor(d.getMonth() / 3);
+  const startYear = d.getFullYear();
+  const options: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const qIdx = startQuarterIndex + i;
+    const year = startYear + Math.floor(qIdx / 4);
+    const q = (qIdx % 4) + 1;
+    options.push(`${year}-Q${q}`);
+  }
+  return options;
+}
+
+function quarterKeyLabel(key: string): string {
+  const [year, q] = key.split('-');
+  return `${q} ${year}`;
+}
+
+function quarterKeyToMidpointMs(key: string): number | null {
+  const m = /^(\d{4})-Q([1-4])$/.exec(key);
+  if (!m) return null;
+  const year = Number(m[1]);
+  const q = Number(m[2]);
+  const startMonth = (q - 1) * 3;
+  const start = new Date(year, startMonth, 1, 0, 0, 0);
+  const end = new Date(year, startMonth + 3, 0, 23, 59, 59);
+  return Math.round((start.getTime() + end.getTime()) / 2);
+}
+
 interface FloatingActionButtonProps {
   onImportClick: () => void;
 }
@@ -70,6 +108,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
     storyId: '',
     sprintId: '',
     dueDate: getTomorrowStr(),
+    startQuarter: currentQuarterKey(),
   });
   // Free-text search boxes for the "searchable by title" Goal/Story pickers
   // (Story's Linked Goal, Task's Parent Story). Mirrors the pattern in
@@ -310,6 +349,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           timeToMasterHours: 40,
           confidence: 0.5,
           status: 'active',
+          startDate: quickAddData.startQuarter ? quarterKeyToMidpointMs(quickAddData.startQuarter) : null,
           kpis: []
         };
         
@@ -476,6 +516,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         storyId: '',
         sprintId: '',
         dueDate: getTomorrowStr(),
+        startQuarter: currentQuarterKey(),
       });
       setGoalInput('');
       setStoryInput('');
@@ -758,17 +799,34 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
             </Form.Group>
 
             {quickAddType === 'goal' && (
-              <Form.Group className="mb-3">
-                <Form.Label>Theme</Form.Label>
-                <Form.Select
-                  value={quickAddData.theme}
-                  onChange={(e) => setQuickAddData({ ...quickAddData, theme: e.target.value })}
-                >
-                  {themes.map(theme => (
-                    <option key={theme} value={theme}>{theme}</option>
-                  ))}
-                </Form.Select>
-              </Form.Group>
+              <>
+                <Form.Group className="mb-3">
+                  <Form.Label>Theme</Form.Label>
+                  <Form.Select
+                    value={quickAddData.theme}
+                    onChange={(e) => setQuickAddData({ ...quickAddData, theme: e.target.value })}
+                  >
+                    {themes.map(theme => (
+                      <option key={theme} value={theme}>{theme}</option>
+                    ))}
+                  </Form.Select>
+                </Form.Group>
+
+                <Form.Group className="mb-3">
+                  <Form.Label>Start quarter</Form.Label>
+                  <Form.Select
+                    value={quickAddData.startQuarter}
+                    onChange={(e) => setQuickAddData({ ...quickAddData, startQuarter: e.target.value })}
+                  >
+                    {buildQuarterOptions(9).map((key) => (
+                      <option key={key} value={key}>{quarterKeyLabel(key)}</option>
+                    ))}
+                  </Form.Select>
+                  <Form.Text className="text-muted">
+                    Start date is set to the middle of the selected quarter.
+                  </Form.Text>
+                </Form.Group>
+              </>
             )}
 
             {quickAddType === 'story' && (
