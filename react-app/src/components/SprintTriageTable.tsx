@@ -36,8 +36,11 @@ interface SprintTriageTableProps {
     onEditGoal?: (goal: Goal) => void;
 }
 
-// Canonical status labels — 0=Backlog, 1=In Progress, 2=Review(stories)/Done(tasks), 4=Bin
-const STORY_STATUS: Record<number, string> = { 0: 'Backlog', 1: 'In Progress', 2: 'Review', 4: 'Bin' };
+// Canonical status labels — 0=Backlog, 1=In Progress, 2=Review(stories)/Done(tasks), 4=Done
+// (raw value 4 is what KanbanBoardV2 actually writes when a story card is dragged to its
+// Done column — labelling it "Bin" here was wrong: this dropdown changes workflow status,
+// not archival. Real deletion already has its own dedicated Delete/Trash2 button below.)
+const STORY_STATUS: Record<number, string> = { 0: 'Backlog', 1: 'In Progress', 2: 'Review', 4: 'Done' };
 const TASK_STATUS: Record<number, string> = { 0: 'Backlog', 1: 'In Progress', 2: 'Done' };
 // "done" threshold per entity type (used for hide-done filter)
 const isDone = (status: number, type: RowType) => type === 'story' ? status >= 4 : status >= 2;
@@ -45,7 +48,7 @@ const isDone = (status: number, type: RowType) => type === 'story' ? status >= 4
 function statusColor(status: number, type: RowType) {
     if (status === 1) return '#0d6efd';
     if (status === 2) return '#198754';
-    if (status === 4) return '#dc3545';
+    if (status === 4) return '#198754'; // Done (stories) — same green as Done (tasks/status 2)
     return themeVars.muted as string;
 }
 
