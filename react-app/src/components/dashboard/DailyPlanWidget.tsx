@@ -9,14 +9,17 @@
  * See useDailyPlanTimeline for the shared derivation logic and DailyPlanList for the shared
  * row markup.
  */
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { Badge, Card, Spinner } from 'react-bootstrap';
 import { Link } from 'react-router-dom';
 import { CalendarDays, Star } from 'lucide-react';
+import { doc, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
 import { useDailyPlanTimeline, type DailyPlanBucket, type DailyPlanTimelineItem } from '../../hooks/useDailyPlanTimeline';
-import DailyPlanList from './DailyPlanList';
+import DailyPlanList, { type DailyPlanDeferTarget } from './DailyPlanList';
+import DeferItemModal from '../DeferItemModal';
 
 const BUCKETS: Array<{ key: DailyPlanBucket; label: string }> = [
   { key: 'morning', label: 'Morning' },
@@ -54,6 +57,24 @@ const DailyPlanWidget: React.FC = () => {
     () => filteredItems.filter((item) => item.isTop3),
     [filteredItems],
   );
+
+  // Defer: mirrors MobileHome's applyDeferredDate 'listView' path exactly (the only path it
+  // ever takes when deferTarget.listView is true, which DailyPlanList always sets) — a direct
+  // Firestore update, no sprint/schedule-mutation machinery needed here.
+  const [deferTarget, setDeferTarget] = useState<DailyPlanDeferTarget | null>(null);
+  const applyDeferredDate = useCallback(async ({ dateMs, rationale, source }: { dateMs: number; rationale: string; source: string }) => {
+    if (!deferTarget) return;
+    const coll = deferTarget.type === 'task' ? 'tasks' : 'stories';
+    await updateDoc(doc(db, coll, deferTarget.id), {
+      dueDate: dateMs,
+      dueDateMs: dateMs,
+      deferredUntil: dateMs,
+      deferredReason: rationale || null,
+      deferredBy: source || 'list_view_defer',
+      updatedAt: serverTimestamp(),
+    });
+    setDeferTarget(null);
+  }, [deferTarget]);
 
   return (
     <Card className="shadow-sm border-0 h-100">
@@ -117,6 +138,7 @@ const DailyPlanWidget: React.FC = () => {
                   onCompleteStory={(story) => { void completeStory(story); }}
                   onDelete={(item) => { void deleteItem(item); }}
                   deleteBusy={itemActionBusy}
+                  onDefer={setDeferTarget}
                 />
               </div>
             )}
@@ -136,6 +158,10 @@ const DailyPlanWidget: React.FC = () => {
                     choreCompletionBusy={choreCompletionBusy}
                     onCompleteTask={(task) => { void completeTask(task); }}
                     onCompleteChore={(task) => { void completeChore(task); }}
+                    onCompleteStory={(story) => { void completeStory(story); }}
+                    onDelete={(item) => { void deleteItem(item); }}
+                    deleteBusy={itemActionBusy}
+                    onDefer={setDeferTarget}
                   />
                 </div>
               );
@@ -143,6 +169,14 @@ const DailyPlanWidget: React.FC = () => {
           </div>
         )}
       </Card.Body>
+      <DeferItemModal
+        show={!!deferTarget}
+        onHide={() => setDeferTarget(null)}
+        itemType={deferTarget?.type || 'task'}
+        itemId={deferTarget?.id || ''}
+        itemTitle={deferTarget?.title || ''}
+        onApply={applyDeferredDate}
+      />
     </Card>
   );
 };
