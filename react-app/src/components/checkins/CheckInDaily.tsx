@@ -12,6 +12,9 @@ import type { Goal, Story, Task } from '../../types';
 import EditTaskModal from '../EditTaskModal';
 import EditStoryModal from '../EditStoryModal';
 import { callDeltaReplan } from '../../utils/plannerOrchestration';
+import { isRecurringDueOnDate, resolveTaskDueMs } from '../../utils/recurringTaskDue';
+import WorkSurfaceNav from '../common/WorkSurfaceNav';
+import FitnessStripWidget from '../dashboard/FitnessStripWidget';
 import './CheckInDaily.css';
 
 type CheckInItemType = 'block' | 'instance' | 'habit' | 'task' | 'chore' | 'routine';
@@ -55,6 +58,8 @@ interface DailyCheckInDoc {
   items: DailyCheckInItem[];
   completedCount: number;
   plannedCount: number;
+  moodScore?: number | null;
+  energyScore?: number | null;
   createdAt?: any;
   updatedAt?: any;
 }
@@ -134,6 +139,9 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const initialItemsRef = useRef<Map<string, DailyCheckInItem>>(new Map());
+  const [moodScore, setMoodScore] = useState<number | null>(null);
+  const [energyScore, setEnergyScore] = useState<number | null>(null);
+  const [moodSaving, setMoodSaving] = useState(false);
 
   // Health data state
   const [health, setHealth] = useState<HealthSnapshot>({});
@@ -758,70 +766,12 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
         };
       });
 
-      const normalizeDayToken = (value: any) => {
-        if (!value && value !== 0) return null;
-        if (typeof value === 'number') {
-          const idx = Math.max(0, Math.min(6, value % 7));
-          return ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][idx];
-        }
-        const raw = String(value).toLowerCase().trim();
-        if (!raw) return null;
-        if (['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'].includes(raw)) return raw;
-        if (raw.startsWith('su')) return 'sun';
-        if (raw.startsWith('mo')) return 'mon';
-        if (raw.startsWith('tu')) return 'tue';
-        if (raw.startsWith('we')) return 'wed';
-        if (raw.startsWith('th')) return 'thu';
-        if (raw.startsWith('fr')) return 'fri';
-        if (raw.startsWith('sa')) return 'sat';
-        return null;
-      };
-
-      const dayToken = normalizeDayToken(dayStart.getDay());
-      const dayOfMonth = dayStart.getDate();
-      const monthOfYear = dayStart.getMonth() + 1;
-
-      const getTaskDueMs = (task: any) => {
-        const raw = task.dueDate ?? task.dueDateMs ?? task.targetDate ?? null;
-        if (!raw) return null;
-        if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
-        if (typeof raw === 'object' && typeof raw.toDate === 'function') return raw.toDate().getTime();
-        const parsed = Date.parse(String(raw));
-        return Number.isNaN(parsed) ? null : parsed;
-      };
-
-      const isRecurringDueToday = (task: any) => {
-        const dueMs = getTaskDueMs(task);
-        if (dueMs && dueMs <= dayEnd.getTime()) return true;
-        const recurrence = (task.recurrence || {}) as any;
-        const freqRaw = task.repeatFrequency || recurrence.frequency || recurrence.freq || '';
-        const freq = String(freqRaw).toLowerCase();
-        if (!freq) return false;
-        if (freq === 'daily') return true;
-        const daysRaw = ([] as any[])
-          .concat(task.daysOfWeek || [])
-          .concat(task.repeatDaysOfWeek || [])
-          .concat(recurrence.daysOfWeek || []);
-        const daySet = new Set(daysRaw.map(normalizeDayToken).filter(Boolean) as string[]);
-        if (freq === 'weekly') {
-          if (dayToken && daySet.size > 0) return daySet.has(dayToken);
-          return false;
-        }
-        if (freq === 'monthly') {
-          const daysOfMonth = ([] as any[]).concat(recurrence.daysOfMonth || []);
-          if (daysOfMonth.length) return daysOfMonth.map(Number).includes(dayOfMonth);
-          if (dueMs) return new Date(dueMs).getDate() === dayOfMonth;
-          return false;
-        }
-        if (freq === 'yearly') {
-          if (dueMs) {
-            const d = new Date(dueMs);
-            return d.getDate() === dayOfMonth && (d.getMonth() + 1) === monthOfYear;
-          }
-          return false;
-        }
-        return false;
-      };
+      // Recurrence-due-today resolution delegates to utils/recurringTaskDue.ts — the same
+      // source useDailyPlanTimeline.ts uses for Overview's Today's Plan. This page previously
+      // had its own copy whose first branch ("dueMs <= dayEnd → due") treated any past one-off
+      // due-date stamp as due forever, the exact bug already found and fixed in the Overview
+      // hook (a Saturday-only chore showing up daily). Using the shared resolver keeps both
+      // surfaces in sync going forward instead of drifting again.
 
       const taskDocs = [...taskTypeSnap.docs, ...taskTagSnap.docs];
       const taskMap = new Map<string, any>();
@@ -838,7 +788,7 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
           const tags = Array.isArray(task.tags) ? task.tags.map((t: any) => String(t).toLowerCase()) : [];
           return ['chore', 'routine', 'habit'].includes(type) || tags.some((t) => ['chore', 'routine', 'habit'].includes(t));
         })
-        .filter((task) => isRecurringDueToday(task));
+        .filter((task) => isRecurringDueOnDate(task, dayStart));
       recurringTasks.forEach((task) => {
         if (task.goalId) goalIds.add(String(task.goalId));
       });
@@ -861,7 +811,7 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
       }
 
       const recurringTaskItems: DailyCheckInItem[] = recurringTasks.map((task) => {
-        const dueMs = getTaskDueMs(task);
+        const dueMs = resolveTaskDueMs(task);
         const ref = task.ref || task.reference || task.referenceNumber || task.code || task.id.slice(-6).toUpperCase();
         const start = dueMs && dueMs >= dayStart.getTime() && dueMs <= dayEnd.getTime() ? dueMs : null;
         const end = start ? start + 15 * 60 * 1000 : null;
@@ -906,6 +856,8 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
       const existingSnap = await getDoc(doc(db, 'daily_checkins', `${ownerUid}_${dateKey}`));
       if (existingSnap.exists()) {
         const existing = existingSnap.data() as DailyCheckInDoc;
+        setMoodScore(existing.moodScore ?? null);
+        setEnergyScore(existing.energyScore ?? null);
         const existingMap = new Map(existing.items.map((item) => [item.key, item]));
         const merged = plannedItems.map((item) => {
           const prev = existingMap.get(item.key);
@@ -925,6 +877,8 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
         setItems(mergedWithComments);
         initialItemsRef.current = new Map(mergedWithComments.map((item) => [item.key, item]));
       } else {
+        setMoodScore(null);
+        setEnergyScore(null);
         const plannedWithComments = await hydrateLastComments(plannedItems);
         setItems(plannedWithComments);
         initialItemsRef.current = new Map(plannedWithComments.map((item) => [item.key, item]));
@@ -1165,7 +1119,43 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
     }
   }, [currentUser, currentPersona, dateKey, dayStart, items]);
 
+  // Fast, optional 1-5 tap — writes immediately (merge) rather than waiting on the main Save
+  // button, since the whole point is a two-second touchpoint you don't have to remember to
+  // commit. Deliberately no free-text note here — that's what journalling is for; this just
+  // gives the coach a subjective signal to sit alongside HRV/sleep.
+  const handleMoodTap = useCallback(async (field: 'moodScore' | 'energyScore', value: number) => {
+    if (!currentUser) return;
+    const next = (field === 'moodScore' ? moodScore : energyScore) === value ? null : value;
+    if (field === 'moodScore') setMoodScore(next); else setEnergyScore(next);
+    setMoodSaving(true);
+    try {
+      await setDoc(doc(db, 'daily_checkins', `${currentUser.uid}_${dateKey}`), {
+        id: `${currentUser.uid}_${dateKey}`,
+        ownerUid: currentUser.uid,
+        dateKey,
+        dateMs: dayStart.getTime(),
+        [field]: next,
+        updatedAt: new Date(),
+      }, { merge: true });
+    } catch (err) {
+      console.warn('Failed to save mood/energy tap', err);
+    } finally {
+      setMoodSaving(false);
+    }
+  }, [currentUser, dateKey, dayStart, moodScore, energyScore]);
+
   const [hideCompleted, setHideCompleted] = useState(true);
+  // Progress/notes editor is collapsed by default — a full progress% + textarea per row
+  // is fine for 3 items, brutal for 15. Auto-expand items that already carry a note or
+  // progress value so nothing already filled in gets hidden.
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
+  const toggleExpanded = useCallback((key: string) => {
+    setExpandedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }, []);
   const [refreshingComments, setRefreshingComments] = useState(false);
 
   // Keys of items that have unsaved progress or note changes
@@ -1301,13 +1291,10 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
     },
   ];
 
+  // Steps + readiness + habit streak now come from FitnessStripWidget (reused from Overview)
+  // rendered above this card — sleep/macros/body stay here since the widget doesn't cover them
+  // and they're what Jim actively tracks day to day (Wegovy/body-recomp goals).
   const healthCards = [
-    {
-      key: 'steps',
-      label: 'Steps',
-      value: effectiveSteps != null ? Number(effectiveSteps).toLocaleString() : 'Add data',
-      detail: health.healthkitStepGoal ? `Goal ${Number(health.healthkitStepGoal).toLocaleString()}` : 'Daily movement',
-    },
     {
       key: 'sleep',
       label: 'Sleep',
@@ -1354,6 +1341,9 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
     const commentValue = item.note || '';
     const latestComment = commentValue || item.lastComment || '';
     const itemMeta = getItemSecondaryMeta(item);
+    const editorAvailable = supportsProgressForItem(item) || supportsCommentsForItem(item);
+    const hasCapturedContent = !!commentValue || item.progressPct != null;
+    const editorExpanded = expandedKeys.has(item.key) || hasCapturedContent;
     return (
       <div key={item.key} className={`daily-checkin-work-card${item.completed ? ' is-complete' : ''}${overdue ? ' is-overdue' : ''}`}>
         <div className="daily-checkin-work-card__header">
@@ -1403,8 +1393,27 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
           </div>
         )}
 
-        {(supportsProgressForItem(item) || supportsCommentsForItem(item)) && (
+        {editorAvailable && !editorExpanded && (
+          <button
+            type="button"
+            className="btn btn-link p-0 text-decoration-none daily-checkin-work-card__expand-toggle"
+            onClick={() => toggleExpanded(item.key)}
+          >
+            Log progress / add a note
+          </button>
+        )}
+
+        {editorAvailable && editorExpanded && (
           <div className="daily-checkin-work-card__editor">
+            {expandedKeys.has(item.key) && !hasCapturedContent && (
+              <button
+                type="button"
+                className="btn btn-link p-0 text-decoration-none daily-checkin-work-card__expand-toggle daily-checkin-work-card__expand-toggle--hide"
+                onClick={() => toggleExpanded(item.key)}
+              >
+                Hide
+              </button>
+            )}
             {supportsProgressForItem(item) && (
               <Form.Group className="daily-checkin-work-card__field">
                 <Form.Label className="daily-checkin-work-card__label">Progress</Form.Label>
@@ -1450,6 +1459,7 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
 
   return (
     <div className={`daily-checkin-shell ${embedded ? 'daily-checkin-shell--embedded' : ''}`}>
+      {!embedded && <WorkSurfaceNav />}
       <div className="daily-checkin-hero">
         <div>
           <div className="daily-checkin-hero__eyebrow">Daily Check-in</div>
@@ -1489,6 +1499,47 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
         </div>
       </div>
 
+      <div className="daily-checkin-mood">
+        <div className="daily-checkin-mood__group">
+          <span className="daily-checkin-mood__label">Mood</span>
+          <div className="daily-checkin-mood__buttons">
+            {['😞', '🙁', '😐', '🙂', '😄'].map((emoji, idx) => {
+              const value = idx + 1;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  className={`daily-checkin-mood__btn${moodScore === value ? ' is-selected' : ''}`}
+                  onClick={() => handleMoodTap('moodScore', value)}
+                  aria-label={`Mood ${value} of 5`}
+                  title={`Mood ${value}/5`}
+                >
+                  {emoji}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div className="daily-checkin-mood__group">
+          <span className="daily-checkin-mood__label">Energy</span>
+          <div className="daily-checkin-mood__buttons">
+            {[1, 2, 3, 4, 5].map((value) => (
+              <button
+                key={value}
+                type="button"
+                className={`daily-checkin-mood__btn${energyScore === value ? ' is-selected' : ''}`}
+                onClick={() => handleMoodTap('energyScore', value)}
+                aria-label={`Energy ${value} of 5`}
+                title={`Energy ${value}/5`}
+              >
+                {value}
+              </button>
+            ))}
+          </div>
+        </div>
+        {moodSaving && <Spinner size="sm" animation="border" className="text-muted" />}
+      </div>
+
       {yesterdayWarning && (
         <Alert variant="danger" dismissible onClose={() => setYesterdayWarning(null)} className="mb-2">
           <strong>Incomplete check-in:</strong> {yesterdayWarning}
@@ -1518,11 +1569,15 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
         ))}
       </div>
 
+      <div className="mb-3">
+        <FitnessStripWidget />
+      </div>
+
       <Card className="daily-checkin-panel border-0 shadow-sm">
         <Card.Header className="daily-checkin-panel__header">
           <div>
-            <div className="daily-checkin-panel__title">Health snapshot</div>
-            <div className="daily-checkin-panel__subtitle">Steps, sleep, workouts, and macros are shown first so routine completion can auto-resolve where possible.</div>
+            <div className="daily-checkin-panel__title">Sleep, macros &amp; body</div>
+            <div className="daily-checkin-panel__subtitle">Filled in here so routine completion can auto-resolve where possible.</div>
           </div>
           <div className="daily-checkin-health__header-actions">
             <Badge bg={health.healthkitStatus === 'synced' ? 'success' : 'secondary'}>{healthStatusLabel}</Badge>

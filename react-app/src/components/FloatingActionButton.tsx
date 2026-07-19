@@ -747,6 +747,16 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
               />
             </Form.Group>
 
+            <Form.Group className="mb-3">
+              <Form.Label>Source URL</Form.Label>
+              <Form.Control
+                type="url"
+                value={quickAddData.url}
+                onChange={(e) => setQuickAddData({ ...quickAddData, url: e.target.value })}
+                placeholder="https://... (optional)"
+              />
+            </Form.Group>
+
             {quickAddType === 'goal' && (
               <Form.Group className="mb-3">
                 <Form.Label>Theme</Form.Label>
