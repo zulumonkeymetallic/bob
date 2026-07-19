@@ -262,8 +262,8 @@ type DashboardWidgetVisibility = Record<DashboardWidgetKey, boolean>;
 type DashboardWidgetTier = 'now' | 'body' | 'reference';
 const DASHBOARD_WIDGET_TIER: Record<DashboardWidgetKey, DashboardWidgetTier> = {
   fitnessStrip: 'body',
+  kpiStudio: 'body',
   dailySummary: 'reference',
-  kpiStudio: 'reference',
   unifiedTimeline: 'reference',
   financeOverview: 'reference',
   themeProgress: 'reference',
@@ -283,8 +283,8 @@ const DASHBOARD_WIDGET_TIER_LABEL: Record<Exclude<DashboardWidgetTier, 'now'>, s
 // at all — dailyPlan is now the permanent full-width hero section rendered above this grid, with
 // the old top3 widget folded into it; see the standalone <DailyPlanWidget /> render above.)
 const SUMMARY_WIDGET_KEYS: DashboardWidgetKey[] = [
-  'fitnessStrip',
-  'dailySummary', 'kpiStudio', 'unifiedTimeline', 'financeOverview', 'themeProgress', 'tasksDueToday', 'recoveryMetrics', 'activityMetrics', 'fitnessMetrics', 'sprintVelocity', 'lowHangingFruit',
+  'fitnessStrip', 'kpiStudio',
+  'dailySummary', 'unifiedTimeline', 'financeOverview', 'themeProgress', 'tasksDueToday', 'recoveryMetrics', 'activityMetrics', 'fitnessMetrics', 'sprintVelocity', 'lowHangingFruit',
 ];
 interface ThemeProgressGoalRow {
   id: string;
@@ -4731,10 +4731,10 @@ const Dashboard: React.FC = () => {
                           }}
                         >
                           <Target size={16} className="text-primary" />
-                          <div className="flex-grow-1" title={hasSelectedSprint && capacitySummary ? `Utilization: ${capacitySummary.utilization}% · Free: ${capacitySummary.free.toFixed(1)}h` : 'No sprint selected'}>
-                            <div className="text-muted small">Capacity</div>
+                          <div className="flex-grow-1" title={hasSelectedSprint && capacitySummary ? `Sprint hour budget — Utilization: ${capacitySummary.utilization}% · Unallocated: ${capacitySummary.free.toFixed(1)}h. Story-point-derived, separate from actual open calendar slots.` : 'No sprint selected'}>
+                            <div className="text-muted small">Sprint budget</div>
                             <div className="fw-semibold">
-                              {hasSelectedSprint && capacitySummary ? `${capacitySummary.utilization}% · ${capacitySummary.free.toFixed(1)}h free` : 'Select sprint'}
+                              {hasSelectedSprint && capacitySummary ? `${capacitySummary.utilization}% · ${capacitySummary.free.toFixed(1)}h unallocated` : 'Select sprint'}
                             </div>
                           </div>
                         </div>
@@ -4979,11 +4979,11 @@ const Dashboard: React.FC = () => {
                                 placement="bottom"
                                 overlay={(
                                   <Tooltip id="capacity-free-tooltip">
-                                    Remaining capacity after subtracting allocated story hours.
+                                    Remaining sprint hour budget after subtracting allocated story hours — not the same as open calendar slots (see the Calendar pill in the toolbar).
                                   </Tooltip>
                                 )}
                               >
-                                <div className="text-muted small" style={{ cursor: 'help' }}>Free</div>
+                                <div className="text-muted small" style={{ cursor: 'help' }}>Unallocated</div>
                               </OverlayTrigger>
                               <div className={`fw-semibold ${capacitySummary.free < 0 ? 'text-danger' : 'text-success'}`}>
                                 {capacitySummary.free.toFixed(1)}h
@@ -5453,7 +5453,7 @@ const Dashboard: React.FC = () => {
                         {widgetKey === 'kpiStudio' && widgetVisibility.kpiStudio && (
                           <div
                             className="dashboard-widget-shell"
-                            style={getWidgetSizeStyle('kpiStudio', 340)}
+                            style={getWidgetSizeStyle('kpiStudio', 380)}
                           >
                             <KpiDashboardWidget
                               ownerUid={currentUser?.uid || ''}

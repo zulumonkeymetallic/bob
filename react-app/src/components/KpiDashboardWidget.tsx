@@ -288,7 +288,7 @@ const KpiDashboardWidget: React.FC<KpiDashboardWidgetProps> = ({
 
   return (
     <Card className="shadow-sm border-0 mb-3 h-100">
-      <Card.Header className="d-flex align-items-center justify-content-between gap-2">
+      <Card.Header className="d-flex align-items-center justify-content-between gap-2 flex-wrap">
         <div className="fw-semibold d-flex align-items-center gap-2">
           <Pin size={16} /> Pinned Focus KPIs
         </div>
@@ -304,7 +304,7 @@ const KpiDashboardWidget: React.FC<KpiDashboardWidgetProps> = ({
       <Card.Body className="p-3">
         <div className="mb-3">
           <div className="text-muted small mb-2">
-            Dashboard pins from your focus-goal KPI definitions, plus defer guidance when sprint load exceeds capacity.
+            Pins from your focus-goal KPI definitions, plus sprint-budget defer guidance below.
           </div>
           {pinnedKpis.length === 0 ? (
             <div className="text-muted small">
@@ -356,15 +356,18 @@ const KpiDashboardWidget: React.FC<KpiDashboardWidgetProps> = ({
         <div className="pt-2 border-top">
           <div className="d-flex align-items-center justify-content-between gap-2 mb-2">
             <div className="fw-semibold d-flex align-items-center gap-2">
-              <Target size={16} /> Capacity deferral hints
+              <Target size={16} /> Sprint budget deferral hints
             </div>
             {deferRecommendations.overCapacityHours > 0 ? (
               <Badge bg="warning" text="dark">
-                Over by {deferRecommendations.overCapacityHours.toFixed(1)}h
+                Over budget by {deferRecommendations.overCapacityHours.toFixed(1)}h
               </Badge>
             ) : (
-              <Badge bg="success">Within capacity</Badge>
+              <Badge bg="success">Within sprint budget</Badge>
             )}
+          </div>
+          <div className="text-muted mb-2" style={{ fontSize: 11 }}>
+            Story-point hour budget, not open calendar time — see the Calendar pill in the toolbar for that.
           </div>
           {deferRecommendations.recommended.length === 0 ? (
             <div className="text-muted small">No current defer candidates.</div>

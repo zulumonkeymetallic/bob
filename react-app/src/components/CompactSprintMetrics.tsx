@@ -439,16 +439,16 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
           placement="bottom"
           overlay={
             <Tooltip>
-              Capacity: {metricCapacity.remaining}h free / {metricCapacity.total}h total
+              Calendar: {metricCapacity.remaining}h open / {metricCapacity.total}h total
               <div className="mt-1 text-muted">
-                Based on 8h/day minus scheduled calendar blocks
+                Actual open Google Calendar slots from today to sprint end, minus what BOB has already scheduled. Separate from the sprint hour budget shown elsewhere.
               </div>
             </Tooltip>
           }
         >
           <Badge bg={metricCapacity.remaining < 10 ? 'danger' : 'success'} className="d-flex align-items-center">
             <TrendingUp size={14} className="me-1" />
-            {metricCapacity.remaining}h Free
+            {metricCapacity.remaining}h Cal Open
           </Badge>
         </OverlayTrigger>
       )}
