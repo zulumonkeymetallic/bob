@@ -1,10 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Container, Card, Row, Col, Badge, Button, Alert, Collapse, OverlayTrigger, Tooltip, Form, Spinner, Table } from 'react-bootstrap';
 import { useNavigate, Link } from 'react-router-dom';
-import { Target, BookOpen, TrendingUp, Wallet, Clock, Clock3, ListChecks, Calendar as CalendarIcon, LayoutGrid, RefreshCw, Sparkles, Activity, GripVertical, Heart, CheckCircle, X } from 'lucide-react';
-import { DndContext, DragEndEvent, PointerSensor, useSensor, useSensors, closestCenter } from '@dnd-kit/core';
-import { SortableContext, useSortable, arrayMove, rectSortingStrategy } from '@dnd-kit/sortable';
-import { CSS as DndCSS } from '@dnd-kit/utilities';
+import { Target, BookOpen, TrendingUp, Wallet, Clock, Clock3, ListChecks, Calendar as CalendarIcon, LayoutGrid, RefreshCw, Sparkles, Activity, GripVertical, Heart, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, limit, getDocs, doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
@@ -252,9 +249,6 @@ const PROFILE_TODAY_PLAN_COLUMNS_KEY = 'todayPlanColumns';
 const HEALTH_BANNER_DISMISS_KEY = 'dashboard-health-banner-dismissed-date';
 const HEALTH_BANNER_SHOW_EVERY_DAYS = 3;
 const DASHBOARD_WIDGET_VISIBILITY_STORAGE_PREFIX = 'bob_dashboard_widget_visibility_v1';
-const DASHBOARD_WIDGET_SIZE_STORAGE_PREFIX = 'bob_dashboard_widget_sizes_v2';
-const DASHBOARD_WIDGET_ORDER_STORAGE_PREFIX = 'bob_dashboard_widget_order_v1';
-// Col-span storage removed — widgetSizes now stores both width and height as pixels
 const TODAY_PLAN_DESKTOP_BREAKPOINT = 992;
 const TODAY_PLAN_COLUMN_KEYS = ['summary', 'calendar', 'due', 'chores'] as const;
 type TodayPlanColumnKey = (typeof TODAY_PLAN_COLUMN_KEYS)[number];
@@ -275,11 +269,6 @@ type DashboardWidgetKey =
   | 'fitnessMetrics'
   | 'sprintVelocity';
 type DashboardWidgetVisibility = Record<DashboardWidgetKey, boolean>;
-interface DashboardWidgetSize {
-  width: number;
-  height: number;
-}
-type DashboardWidgetSizes = Partial<Record<DashboardWidgetKey, DashboardWidgetSize>>;
 // Three visual tiers for the widget grid: Now (primary daily-use widgets, always first),
 // Body (secondary daily-use widgets), Reference (everything else). Drives both the default
 // widget order below and the section-header rendering in the grid loop.
@@ -303,59 +292,14 @@ const DASHBOARD_WIDGET_TIER_LABEL: Record<Exclude<DashboardWidgetTier, 'now'>, s
   body: 'Body',
   reference: 'Reference',
 };
-// Default order for users with no stored custom layout (see readDashboardWidgetOrder below):
-// Body tier first, then Reference — matches DASHBOARD_WIDGET_TIER above. (dailyPlan and top3
-// are no longer part of the widget grid at all — dailyPlan is now the permanent full-width
-// hero section rendered above this grid, with the old top3 widget folded into it; see the
-// standalone <DailyPlanWidget /> render above the DndContext block.)
+// Fixed rendering order (curated layout, not user-editable): Body tier first, then Reference —
+// matches DASHBOARD_WIDGET_TIER above. (dailyPlan and top3 are no longer part of the widget grid
+// at all — dailyPlan is now the permanent full-width hero section rendered above this grid, with
+// the old top3 widget folded into it; see the standalone <DailyPlanWidget /> render above.)
 const SUMMARY_WIDGET_KEYS: DashboardWidgetKey[] = [
   'fitnessStrip',
   'dailySummary', 'kpiStudio', 'unifiedTimeline', 'financeOverview', 'themeProgress', 'tasksDueToday', 'calendar', 'recoveryMetrics', 'activityMetrics', 'fitnessMetrics', 'sprintVelocity', 'lowHangingFruit',
 ];
-const dashboardWidgetOrderStorageKey = (deviceType: DashboardDeviceType) => `${DASHBOARD_WIDGET_ORDER_STORAGE_PREFIX}_${deviceType}`;
-const readDashboardWidgetOrder = (deviceType: DashboardDeviceType): DashboardWidgetKey[] => {
-  try {
-    const stored = window.localStorage.getItem(dashboardWidgetOrderStorageKey(deviceType));
-    if (stored) {
-      const parsed = JSON.parse(stored) as DashboardWidgetKey[];
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    }
-  } catch { /* ignore */ }
-  return [...SUMMARY_WIDGET_KEYS];
-};
-
-function SortableDashboardWidget({ id, widgetWidth, dragEnabled, children }: {
-  id: string;
-  widgetWidth?: number;
-  dragEnabled: boolean;
-  children: React.ReactNode;
-}) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
-  const style: React.CSSProperties = {
-    transform: DndCSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.45 : 1,
-    position: 'relative',
-    ...(widgetWidth != null
-      ? { width: `${widgetWidth}px`, flexBasis: `${widgetWidth}px`, flexShrink: 0, flexGrow: 0, maxWidth: '100%' }
-      : {}),
-  };
-  return (
-    <div ref={setNodeRef} style={style} className="dashboard-sortable-item">
-      {dragEnabled && (
-        <div
-          className="dashboard-drag-handle"
-          {...attributes}
-          {...listeners}
-          role="button"
-          tabIndex={0}
-          aria-label="Drag to reorder widget"
-        />
-      )}
-      {children}
-    </div>
-  );
-}
 interface ThemeProgressGoalRow {
   id: string;
   title: string;
@@ -587,8 +531,6 @@ const getDashboardDeviceType = (): DashboardDeviceType => {
 
 const dashboardWidgetVisibilityStorageKey = (deviceType: DashboardDeviceType) =>
   `${DASHBOARD_WIDGET_VISIBILITY_STORAGE_PREFIX}_${deviceType}`;
-const dashboardWidgetSizeStorageKey = (deviceType: DashboardDeviceType) =>
-  `${DASHBOARD_WIDGET_SIZE_STORAGE_PREFIX}_${deviceType}`;
 
 const readDashboardWidgetVisibility = (deviceType: DashboardDeviceType): DashboardWidgetVisibility => {
   if (typeof window === 'undefined') return DASHBOARD_WIDGET_DEFAULT_VISIBILITY;
@@ -605,30 +547,6 @@ const readDashboardWidgetVisibility = (deviceType: DashboardDeviceType): Dashboa
     return next;
   } catch {
     return DASHBOARD_WIDGET_DEFAULT_VISIBILITY;
-  }
-};
-
-const readDashboardWidgetSizes = (deviceType: DashboardDeviceType): DashboardWidgetSizes => {
-  if (typeof window === 'undefined') return {};
-  try {
-    const stored = window.localStorage.getItem(dashboardWidgetSizeStorageKey(deviceType));
-    if (!stored) return {};
-    const parsed = JSON.parse(stored) as Record<string, unknown>;
-    const next: DashboardWidgetSizes = {};
-    DASHBOARD_WIDGET_CONFIG.forEach(({ key }) => {
-      const value = parsed[key] as Record<string, unknown> | undefined;
-      const width = Number(value?.width);
-      const height = Number(value?.height);
-      if (Number.isFinite(width) && width > 140 && Number.isFinite(height) && height > 140) {
-        next[key] = {
-          width: Math.round(width),
-          height: Math.round(height),
-        };
-      }
-    });
-    return next;
-  } catch {
-    return {};
   }
 };
 
@@ -750,12 +668,6 @@ const Dashboard: React.FC = () => {
   const [widgetVisibility, setWidgetVisibility] = useState<DashboardWidgetVisibility>(() =>
     readDashboardWidgetVisibility(getDashboardDeviceType())
   );
-  const [widgetSizes, setWidgetSizes] = useState<DashboardWidgetSizes>(() =>
-    readDashboardWidgetSizes(getDashboardDeviceType())
-  );
-  const [widgetOrder, setWidgetOrder] = useState<DashboardWidgetKey[]>(() =>
-    readDashboardWidgetOrder(getDashboardDeviceType())
-  );
   const [themeProgressExpanded, setThemeProgressExpanded] = useState<Record<string, boolean>>({});
   const [todayPlanColumnWidths, setTodayPlanColumnWidths] = useState<TodayPlanColumnWidths>(() => readTodayPlanWidthsFromStorage());
   const [todayPlanDesktopMode, setTodayPlanDesktopMode] = useState<boolean>(() => {
@@ -770,26 +682,8 @@ const Dashboard: React.FC = () => {
     containerWidth: number;
     startWidths: TodayPlanColumnWidths;
   } | null>(null);
-  const widgetGridRef = useRef<HTMLDivElement | null>(null);
   const timelineScrollBodyRef = useRef<HTMLDivElement | null>(null);
   const timelineNowMarkerRef = useRef<HTMLDivElement | null>(null);
-  const widgetResizeDragRef = useRef<{
-    key: DashboardWidgetKey;
-    startX: number;
-    startY: number;
-    startWidth: number;
-    startHeight: number;
-    maxWidth: number;
-    minWidth: number;
-    minHeight: number;
-    maxHeight: number;
-    fromLeft?: boolean;
-    fromRight?: boolean;
-    fromTop?: boolean;
-    fromBottom?: boolean;
-  } | null>(null);
-  const [widgetEditMode, setWidgetEditMode] = useState(false);
-  const dashboardDeviceTypeRef = useRef(dashboardDeviceType);
   const showPersistentDashboardBanners = dashboardDeviceType !== 'mobile';
 
   const decodeToDate = useCallback((value: any): Date | null => {
@@ -939,105 +833,12 @@ const Dashboard: React.FC = () => {
     [todayPlanColumnWidths, todayPlanDesktopMode],
   );
 
-  // No-op ref callback — kept for call-site compatibility; size is tracked via widgetSizes state
-  const setWidgetResizeContainer = useCallback(
-    (_key: DashboardWidgetKey) => (_node: HTMLDivElement | null) => { /* no-op */ },
+  // Fixed minimum height per widget — the curated layout has no user-driven resize, cards
+  // simply grow to fit content (or scroll internally) above this floor.
+  const getWidgetSizeStyle = useCallback(
+    (_key: DashboardWidgetKey, minHeight: number): React.CSSProperties => ({ minHeight: `${minHeight}px` }),
     [],
   );
-
-  // Returns height style only; width is applied on the SortableDashboardWidget outer div
-  const getWidgetSizeStyle = useCallback(
-    (key: DashboardWidgetKey, minHeight: number): React.CSSProperties => {
-      const size = widgetSizes[key];
-      if (!size) return { minHeight: `${minHeight}px` };
-      return { height: `${size.height}px`, minHeight: `${minHeight}px`, overflowY: 'auto' };
-    },
-    [widgetSizes],
-  );
-
-  // Unified resize start — direction flags determine which axis/side moves
-  const beginResize = useCallback(
-    (
-      event: React.PointerEvent<HTMLButtonElement>,
-      key: DashboardWidgetKey,
-      dirs: { fromLeft?: boolean; fromRight?: boolean; fromTop?: boolean; fromBottom?: boolean },
-    ) => {
-      if (!widgetEditMode) return;
-      const gridEl = widgetGridRef.current ?? document.querySelector('.dashboard-widget-grid');
-      const gridRect = gridEl?.getBoundingClientRect();
-      const maxWidth = Math.max(280, Math.floor(gridRect?.width ?? (window.innerWidth - 60)));
-      const currentSize = widgetSizes[key];
-      const startWidth = currentSize?.width ?? Math.max(300, Math.floor(maxWidth / 2));
-      const startHeight = currentSize?.height ?? 400;
-      event.preventDefault();
-      event.stopPropagation();
-      try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* ignore */ }
-      widgetResizeDragRef.current = {
-        key,
-        startX: event.clientX,
-        startY: event.clientY,
-        startWidth,
-        startHeight,
-        maxWidth,
-        minWidth: 220,
-        minHeight: 100,
-        maxHeight: Math.floor(window.innerHeight * 0.95),
-        ...dirs,
-      };
-      document.body.classList.add('dashboard-widget-resizing');
-    },
-    [widgetEditMode, widgetSizes],
-  );
-
-  // Kept for call-site compatibility — now a no-op (corners covered by renderWidgetEdgeHandles)
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const renderWidgetResizeHandle = useCallback((_key: DashboardWidgetKey, _minH: number, _label: string) => null, []);
-
-  const renderWidgetEdgeHandles = useCallback(
-    (key: DashboardWidgetKey) => {
-      if (!widgetEditMode) return null;
-      return (
-        <>
-          {/* Edge handles */}
-          <button type="button" className="dashboard-widget-resize-left"
-            onPointerDown={(e) => beginResize(e, key, { fromLeft: true })} aria-label="Resize left" />
-          <button type="button" className="dashboard-widget-resize-right"
-            onPointerDown={(e) => beginResize(e, key, { fromRight: true })} aria-label="Resize right" />
-          <button type="button" className="dashboard-widget-resize-top"
-            onPointerDown={(e) => beginResize(e, key, { fromTop: true })} aria-label="Resize top" />
-          <button type="button" className="dashboard-widget-resize-bottom"
-            onPointerDown={(e) => beginResize(e, key, { fromBottom: true })} aria-label="Resize bottom" />
-          {/* Corner handles */}
-          <button type="button" className="dashboard-widget-resize-nw"
-            onPointerDown={(e) => beginResize(e, key, { fromTop: true, fromLeft: true })} aria-label="Resize top-left" />
-          <button type="button" className="dashboard-widget-resize-ne"
-            onPointerDown={(e) => beginResize(e, key, { fromTop: true, fromRight: true })} aria-label="Resize top-right" />
-          <button type="button" className="dashboard-widget-resize-sw"
-            onPointerDown={(e) => beginResize(e, key, { fromBottom: true, fromLeft: true })} aria-label="Resize bottom-left" />
-          <button type="button" className="dashboard-widget-resize-se"
-            onPointerDown={(e) => beginResize(e, key, { fromBottom: true, fromRight: true })} aria-label="Resize bottom-right" />
-        </>
-      );
-    },
-    [beginResize, widgetEditMode],
-  );
-
-  const widgetDndSensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
-  );
-
-  const handleWidgetDragEnd = useCallback((event: DragEndEvent) => {
-    const { active, over } = event;
-    if (!over || active.id === over.id) return;
-    setWidgetOrder((prev) => {
-      const oldIndex = prev.indexOf(active.id as DashboardWidgetKey);
-      const newIndex = prev.indexOf(over.id as DashboardWidgetKey);
-      if (oldIndex === -1 || newIndex === -1) return prev;
-      const next = arrayMove(prev, oldIndex, newIndex);
-      try { window.localStorage.setItem(dashboardWidgetOrderStorageKey(dashboardDeviceType), JSON.stringify(next)); } catch { /* ignore */ }
-      return next;
-    });
-  }, [dashboardDeviceType]);
 
   const toggleWidgetVisibility = useCallback((key: DashboardWidgetKey) => {
     setWidgetVisibility((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -1063,15 +864,6 @@ const Dashboard: React.FC = () => {
   }, [dashboardDeviceType]);
 
   useEffect(() => {
-    setWidgetSizes(readDashboardWidgetSizes(dashboardDeviceType));
-  }, [dashboardDeviceType]);
-
-  useEffect(() => {
-    dashboardDeviceTypeRef.current = dashboardDeviceType;
-    setWidgetOrder(readDashboardWidgetOrder(dashboardDeviceType));
-  }, [dashboardDeviceType]);
-
-  useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
       window.localStorage.setItem(TODAY_PLAN_COLUMN_STORAGE_KEY, JSON.stringify(todayPlanColumnWidths));
@@ -1091,18 +883,6 @@ const Dashboard: React.FC = () => {
       // Ignore storage write failures.
     }
   }, [dashboardDeviceType, widgetVisibility]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      window.localStorage.setItem(
-        dashboardWidgetSizeStorageKey(dashboardDeviceType),
-        JSON.stringify(widgetSizes),
-      );
-    } catch {
-      // Ignore storage write failures.
-    }
-  }, [dashboardDeviceType, widgetSizes]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -1145,70 +925,6 @@ const Dashboard: React.FC = () => {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', stopDrag);
       document.body.classList.remove('today-plan-resizing');
-    };
-  }, []);
-
-  // Compute default pixel sizes on first mount if nothing is stored yet
-  useEffect(() => {
-    if (Object.keys(widgetSizes).length > 0) return;
-    const grid = widgetGridRef.current;
-    const gridWidth = grid ? grid.getBoundingClientRect().width : window.innerWidth - 80;
-    if (gridWidth < 300) return;
-    const gap = 4;
-    // Keep the top summary widgets visually aligned by default while preserving relative widths.
-    const threeQuarter = Math.max(400, Math.floor((gridWidth - gap) * 0.75));
-    const third = Math.max(240, Math.floor((gridWidth - gap * 2) / 3));
-    setWidgetSizes({
-      unifiedTimeline: { width: threeQuarter, height: 420 },
-      dailySummary: { width: third, height: 420 },
-      kpiStudio: { width: third, height: 420 },
-      fitnessStrip: { width: third, height: 160 },
-      lowHangingFruit: { width: third, height: 400 },
-      themeProgress: { width: third, height: 400 },
-      tasksDueToday: { width: third, height: 400 },
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return undefined;
-
-    const handlePointerMove = (event: PointerEvent) => {
-      const d = widgetResizeDragRef.current;
-      if (!d) return;
-      event.preventDefault();
-      const dx = event.clientX - d.startX;
-      const dy = event.clientY - d.startY;
-      const newWidth = d.fromLeft ? d.startWidth - dx : d.fromRight ? d.startWidth + dx : d.startWidth;
-      const newHeight = d.fromTop ? d.startHeight - dy : d.fromBottom ? d.startHeight + dy : d.startHeight;
-      const resizingH = d.fromLeft || d.fromRight;
-      const resizingV = d.fromTop || d.fromBottom;
-      const clampedWidth = resizingH
-        ? Math.max(d.minWidth, Math.min(d.maxWidth, newWidth))
-        : d.startWidth;
-      const clampedHeight = resizingV
-        ? Math.max(d.minHeight, Math.min(d.maxHeight, newHeight))
-        : d.startHeight;
-      setWidgetSizes((prev) => ({
-        ...prev,
-        [d.key]: { width: Math.round(clampedWidth), height: Math.round(clampedHeight) },
-      }));
-    };
-
-    const stopPointerResize = () => {
-      if (!widgetResizeDragRef.current) return;
-      widgetResizeDragRef.current = null;
-      document.body.classList.remove('dashboard-widget-resizing');
-    };
-
-    window.addEventListener('pointermove', handlePointerMove, { passive: false });
-    window.addEventListener('pointerup', stopPointerResize);
-    window.addEventListener('pointercancel', stopPointerResize);
-    return () => {
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', stopPointerResize);
-      window.removeEventListener('pointercancel', stopPointerResize);
-      document.body.classList.remove('dashboard-widget-resizing');
     };
   }, []);
 
@@ -5297,14 +5013,6 @@ const Dashboard: React.FC = () => {
                         <span className="d-none d-xl-inline ms-1">Full replan</span>
                       </Button>
                       <Button
-                        variant={widgetEditMode ? 'success' : 'outline-secondary'}
-                        size="sm"
-                        onClick={() => setWidgetEditMode((prev) => !prev)}
-                        title={widgetEditMode ? 'Save layout and exit edit mode' : 'Edit widget layout: drag, resize, show/hide'}
-                      >
-                        {widgetEditMode ? <><CheckCircle size={14} className="me-1" /> Done</> : <><LayoutGrid size={14} className="me-1" /> Edit layout</>}
-                      </Button>
-                      <Button
                         variant={showWidgetSettings ? 'secondary' : 'outline-secondary'}
                         size="sm"
                         onClick={() => setShowWidgetSettings((prev) => !prev)}
@@ -5329,36 +5037,14 @@ const Dashboard: React.FC = () => {
                                 type="button"
                                 className="btn btn-sm btn-outline-secondary"
                                 onClick={() => {
-                                  setWidgetOrder([...SUMMARY_WIDGET_KEYS]);
-                                  setWidgetSizes({});
                                   setWidgetVisibility({ ...DASHBOARD_WIDGET_DEFAULT_VISIBILITY });
                                   try {
-                                    window.localStorage.removeItem(dashboardWidgetOrderStorageKey(dashboardDeviceType));
-                                    window.localStorage.removeItem(dashboardWidgetSizeStorageKey(dashboardDeviceType));
                                     window.localStorage.removeItem(dashboardWidgetVisibilityStorageKey(dashboardDeviceType));
                                   } catch { /* ignore */ }
-                                  // Recompute default sizes from current grid width
-                                  requestAnimationFrame(() => {
-                                    const grid = widgetGridRef.current;
-                                    const gridWidth = grid ? grid.getBoundingClientRect().width : window.innerWidth - 80;
-                                    if (gridWidth < 300) return;
-                                    const gap = 4;
-                                    const half = Math.max(300, Math.floor((gridWidth - gap) / 2));
-                                    const third = Math.max(240, Math.floor((gridWidth - gap * 2) / 3));
-                                    setWidgetSizes({
-                                      unifiedTimeline: { width: half, height: 420 },
-                                      dailySummary: { width: third, height: 420 },
-                                      kpiStudio: { width: third, height: 420 },
-                                      fitnessStrip: { width: third, height: 160 },
-                                      lowHangingFruit: { width: third, height: 400 },
-                                      themeProgress: { width: third, height: 400 },
-                                      tasksDueToday: { width: third, height: 400 },
-                                    });
-                                  });
                                 }}
-                                title="Reset widget order, sizes and visibility to defaults"
+                                title="Reset visible widgets to defaults"
                               >
-                                Reset layout
+                                Reset to defaults
                               </button>
                             </div>
                           </div>
@@ -5382,44 +5068,34 @@ const Dashboard: React.FC = () => {
                       widget: it's the single "what should I do today" surface (folds in the old
                       standalone Top 3 widget as a pinned section, plus a Chores/Tasks/Stories
                       filter that folds in the old standalone Chores & Habits widget), so it
-                      renders full-width above the tiered widget grid rather than inside the
-                      draggable/resizable SortableContext.
+                      renders full-width above the tiered widget grid.
                     */}
                     <div className="mb-4 pb-4" style={{ borderBottom: '1px solid var(--bs-border-color)' }}>
                       <DailyPlanWidget />
                     </div>
                     <div ref={todayPlanLayoutRef}>
-                        <DndContext sensors={widgetDndSensors} collisionDetection={closestCenter} onDragEnd={handleWidgetDragEnd}>
-                          {(() => {
-                            const visibleWidgetKeys = widgetOrder.filter((k) => widgetVisibility[k]);
-                            return (
-                          <SortableContext items={visibleWidgetKeys} strategy={rectSortingStrategy}>
-                            <div className="dashboard-widget-grid" ref={widgetGridRef}>
-                              {visibleWidgetKeys.map((widgetKey, widgetIndex) => {
-                                const wSize = widgetSizes[widgetKey];
-                                const widgetTier = DASHBOARD_WIDGET_TIER[widgetKey];
-                                // Show a tier section header only immediately before the first widget
-                                // of that tier in the CURRENT render order. This works for both the
-                                // default (tier-sorted) order and a fully custom drag-reordered layout —
-                                // in a custom order a tier's widgets may be interleaved elsewhere, but
-                                // each tier still gets at most one header, placed where it first appears.
-                                const isFirstOfTier = widgetTier !== 'now'
-                                  && visibleWidgetKeys.findIndex((k) => DASHBOARD_WIDGET_TIER[k] === widgetTier) === widgetIndex;
-                                return (
-                                  <React.Fragment key={widgetKey}>
-                                    {isFirstOfTier && (
-                                      <div className="dashboard-widget-tier-header">
-                                        {DASHBOARD_WIDGET_TIER_LABEL[widgetTier as 'body' | 'reference']}
-                                      </div>
-                                    )}
-                                    <SortableDashboardWidget
-                                    id={widgetKey}
-                                    widgetWidth={wSize?.width}
-                                    dragEnabled={widgetEditMode}
-                                  >
+                      {(() => {
+                        // Fixed curated layout — SUMMARY_WIDGET_KEYS is the one and only order,
+                        // no drag/resize; visibility (show/hide) is the only user customisation left.
+                        const visibleWidgetKeys = SUMMARY_WIDGET_KEYS.filter((k) => widgetVisibility[k]);
+                        return (
+                          <div className="dashboard-widget-grid">
+                            {visibleWidgetKeys.map((widgetKey, widgetIndex) => {
+                              const widgetTier = DASHBOARD_WIDGET_TIER[widgetKey];
+                              // Show a tier section header only immediately before the first widget
+                              // of that tier — each tier gets at most one header, placed where it
+                              // first appears in the fixed order.
+                              const isFirstOfTier = widgetTier !== 'now'
+                                && visibleWidgetKeys.findIndex((k) => DASHBOARD_WIDGET_TIER[k] === widgetTier) === widgetIndex;
+                              return (
+                                <React.Fragment key={widgetKey}>
+                                  {isFirstOfTier && (
+                                    <div className="dashboard-widget-tier-header">
+                                      {DASHBOARD_WIDGET_TIER_LABEL[widgetTier as 'body' | 'reference']}
+                                    </div>
+                                  )}
                                     {widgetKey === 'lowHangingFruit' && widgetVisibility.lowHangingFruit && (
                           <div
-                            ref={setWidgetResizeContainer('lowHangingFruit')}
                             className="dashboard-widget-shell"
                             style={getWidgetSizeStyle('lowHangingFruit', 220)}
                           >
@@ -5510,13 +5186,10 @@ const Dashboard: React.FC = () => {
                                 )}
                               </Card.Body>
                             </Card>
-                            {renderWidgetEdgeHandles('lowHangingFruit')}
-                              {renderWidgetResizeHandle('lowHangingFruit', 220, 'Resize low hanging fruit widget')}
                           </div>
                         )}
                                     {widgetKey === 'dailySummary' && widgetVisibility.dailySummary && (dailySummaryLines.length > 0 || dailyActiveSignals.length > 0 || aiFocusItems.length > 0) && (
                           <div
-                            ref={setWidgetResizeContainer('dailySummary')}
                             className="dashboard-widget-shell"
                             style={getWidgetSizeStyle('dailySummary', 220)}
                           >
@@ -5602,35 +5275,26 @@ const Dashboard: React.FC = () => {
                                 )}
                               </Card.Body>
                             </Card>
-                            {renderWidgetEdgeHandles('dailySummary')}
-                              {renderWidgetResizeHandle('dailySummary', 220, 'Resize daily summary widget')}
                           </div>
                         )}
                                     {widgetKey === 'fitnessStrip' && widgetVisibility.fitnessStrip && (
                           <div
-                            ref={setWidgetResizeContainer('fitnessStrip')}
                             className="dashboard-widget-shell"
                             style={getWidgetSizeStyle('fitnessStrip', 160)}
                           >
                             <FitnessStripWidget />
-                            {renderWidgetEdgeHandles('fitnessStrip')}
-                            {renderWidgetResizeHandle('fitnessStrip', 160, 'Resize fitness strip widget')}
                           </div>
                         )}
                                     {widgetKey === 'financeOverview' && widgetVisibility.financeOverview && (
                           <div
-                            ref={setWidgetResizeContainer('financeOverview')}
                             className="dashboard-widget-shell"
                             style={getWidgetSizeStyle('financeOverview', 280)}
                           >
                             <FinanceSummaryWidget />
-                            {renderWidgetEdgeHandles('financeOverview')}
-                            {renderWidgetResizeHandle('financeOverview', 280, 'Resize finance overview widget')}
                           </div>
                         )}
                                     {widgetKey === 'themeProgress' && widgetVisibility.themeProgress && (
                           <div
-                            ref={setWidgetResizeContainer('themeProgress')}
                             className="dashboard-widget-shell"
                             style={getWidgetSizeStyle('themeProgress', 280)}
                           >
@@ -5799,13 +5463,10 @@ const Dashboard: React.FC = () => {
                               )}
                               </Card.Body>
                             </Card>
-                            {renderWidgetEdgeHandles('themeProgress')}
-                              {renderWidgetResizeHandle('themeProgress', 280, 'Resize theme and goal progress widget')}
                           </div>
                         )}
                         {widgetKey === 'kpiStudio' && widgetVisibility.kpiStudio && (
                           <div
-                            ref={setWidgetResizeContainer('kpiStudio')}
                             className="dashboard-widget-shell"
                             style={getWidgetSizeStyle('kpiStudio', 340)}
                           >
@@ -5824,26 +5485,20 @@ const Dashboard: React.FC = () => {
                               } : null}
                               onOpenFocusGoals={() => navigate('/focus-goals')}
                             />
-                            {renderWidgetEdgeHandles('kpiStudio')}
-                            {renderWidgetResizeHandle('kpiStudio', 280, 'Resize KPI studio widget')}
                           </div>
                         )}
                         {widgetKey === 'unifiedTimeline' && widgetVisibility.unifiedTimeline && (
                           <div
-                            ref={setWidgetResizeContainer('unifiedTimeline')}
                             className="dashboard-widget-shell"
                             style={getWidgetSizeStyle('unifiedTimeline', 360)}
                           >
                             <div className="d-flex flex-column gap-3 h-100 dashboard-summary-stack">
                               <WeeklyPlannerSummaryCard />
                             </div>
-                            {renderWidgetEdgeHandles('unifiedTimeline')}
-                            {renderWidgetResizeHandle('unifiedTimeline', 360, 'Resize Weekly Review widget')}
                           </div>
                         )}
                         {widgetKey === 'tasksDueToday' && widgetVisibility.tasksDueToday && (
                           <div
-                            ref={setWidgetResizeContainer('tasksDueToday')}
                             className="dashboard-widget-shell"
                             style={getWidgetSizeStyle('tasksDueToday', 320)}
                           >
@@ -5968,13 +5623,10 @@ const Dashboard: React.FC = () => {
                                 )}
                               </Card.Body>
                             </Card>
-                            {renderWidgetEdgeHandles('tasksDueToday')}
-                            {renderWidgetResizeHandle('tasksDueToday', 320, 'Resize tasks due today widget')}
                           </div>
                         )}
                                     {widgetKey === 'calendar' && widgetVisibility.calendar && (
                           <div
-                            ref={setWidgetResizeContainer('calendar')}
                             className="dashboard-widget-shell"
                             style={getWidgetSizeStyle('calendar', 420)}
                           >
@@ -6005,12 +5657,10 @@ const Dashboard: React.FC = () => {
                                 />
                               </Card.Body>
                             </Card>
-                            {renderWidgetEdgeHandles('calendar')}
                           </div>
                         )}
                                     {widgetKey === 'recoveryMetrics' && widgetVisibility.recoveryMetrics && (
                           <div
-                            ref={setWidgetResizeContainer('recoveryMetrics')}
                             className="dashboard-widget-shell"
                             style={getWidgetSizeStyle('recoveryMetrics', 300)}
                           >
@@ -6019,12 +5669,10 @@ const Dashboard: React.FC = () => {
                                 <RecoveryWidget />
                               </Card.Body>
                             </Card>
-                            {renderWidgetEdgeHandles('recoveryMetrics')}
                           </div>
                         )}
                         {widgetKey === 'activityMetrics' && widgetVisibility.activityMetrics && (
                           <div
-                            ref={setWidgetResizeContainer('activityMetrics')}
                             className="dashboard-widget-shell"
                             style={getWidgetSizeStyle('activityMetrics', 240)}
                           >
@@ -6033,12 +5681,10 @@ const Dashboard: React.FC = () => {
                                 <ActivityWidget />
                               </Card.Body>
                             </Card>
-                            {renderWidgetEdgeHandles('activityMetrics')}
                           </div>
                         )}
                         {widgetKey === 'fitnessMetrics' && widgetVisibility.fitnessMetrics && (
                           <div
-                            ref={setWidgetResizeContainer('fitnessMetrics')}
                             className="dashboard-widget-shell"
                             style={getWidgetSizeStyle('fitnessMetrics', 280)}
                           >
@@ -6047,12 +5693,10 @@ const Dashboard: React.FC = () => {
                                 <FitnessWidget />
                               </Card.Body>
                             </Card>
-                            {renderWidgetEdgeHandles('fitnessMetrics')}
                           </div>
                         )}
                         {widgetKey === 'sprintVelocity' && widgetVisibility.sprintVelocity && (
                           <div
-                            ref={setWidgetResizeContainer('sprintVelocity')}
                             className="dashboard-widget-shell"
                             style={getWidgetSizeStyle('sprintVelocity', 220)}
                           >
@@ -6061,18 +5705,14 @@ const Dashboard: React.FC = () => {
                                 <SprintVelocityWidget />
                               </Card.Body>
                             </Card>
-                            {renderWidgetEdgeHandles('sprintVelocity')}
                           </div>
                         )}
-                                  </SortableDashboardWidget>
-                                  </React.Fragment>
-                                );
-                              })}
-                            </div>
-                          </SortableContext>
-                            );
-                          })()}
-                        </DndContext>
+                                </React.Fragment>
+                              );
+                            })}
+                          </div>
+                        );
+                      })()}
                     </div>
                   </Card.Body>
                 </Card>
