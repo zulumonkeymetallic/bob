@@ -1,6 +1,13 @@
 // Global Theme System for BOB Productivity Platform
 import { getCssVarValue } from '../utils/themeVars';
 
+// Bump whenever GLOBAL_THEMES' colours change (see the fix commits from 2026-07-18 undoing
+// several theme colour collisions). A per-user palette saved to `global_themes/{uid}` before
+// a bump is stale by definition — it's a full-array snapshot of the old, colliding defaults,
+// not an intentional customisation — so useGlobalThemes/ThemeColorManager ignore any saved
+// palette whose stamped version is behind this one and fall back to the current defaults.
+export const GLOBAL_THEME_PALETTE_VERSION = 2;
+
 export interface GlobalTheme {
   id: number;
   name: string;

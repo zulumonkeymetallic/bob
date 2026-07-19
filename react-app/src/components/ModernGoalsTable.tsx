@@ -29,7 +29,7 @@ import { ActivityStreamService } from '../services/ActivityStreamService';
 import { collection, query, where, onSnapshot, doc, getDoc, addDoc, getDocs, serverTimestamp } from 'firebase/firestore';
 import { db, functions } from '../firebase';
 import { httpsCallable } from 'firebase/functions';
-import { GLOBAL_THEMES, GlobalTheme } from '../constants/globalThemes';
+import { GLOBAL_THEMES, GLOBAL_THEME_PALETTE_VERSION, GlobalTheme } from '../constants/globalThemes';
 import {
   Settings,
   GripVertical,
@@ -1283,8 +1283,13 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
         const snap = await getDoc(ref);
         if (snap.exists()) {
           const data = snap.data() as any;
-          if (Array.isArray(data.themes) && data.themes.length) {
+          // A palette saved before GLOBAL_THEME_PALETTE_VERSION was bumped is a snapshot of the
+          // old, colour-colliding defaults, not an intentional customisation — ignore it.
+          const isCurrent = typeof data.paletteVersion === 'number' && data.paletteVersion >= GLOBAL_THEME_PALETTE_VERSION;
+          if (isCurrent && Array.isArray(data.themes) && data.themes.length) {
             setGlobalThemes(data.themes as GlobalTheme[]);
+          } else {
+            setGlobalThemes(GLOBAL_THEMES);
           }
         }
       } catch (e) {

@@ -6,7 +6,7 @@ import { doc, getDoc, setDoc, serverTimestamp, collection, query, where, getDocs
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
-import { GLOBAL_THEMES, GlobalTheme } from '../constants/globalThemes';
+import { GLOBAL_THEMES, GLOBAL_THEME_PALETTE_VERSION, GlobalTheme } from '../constants/globalThemes';
 import { Settings, Palette, Database, Wand2, KeyRound, Clipboard, FileCode, Plug, User, Bell, Shield, FlaskConical } from 'lucide-react';
 import LLMSettings from './settings/LLMSettings';
 import { useThemeDebugger } from '../utils/themeDebugger';
@@ -71,6 +71,7 @@ interface GlobalThemeSettings {
   themes: GlobalTheme[];
   customizations: Record<string, any>;
   lastUpdated: any;
+  paletteVersion?: number;
 }
 
 const SettingsPage: React.FC = () => {
@@ -313,7 +314,10 @@ const SettingsPage: React.FC = () => {
         
         if (docSnap.exists()) {
           const data = docSnap.data() as GlobalThemeSettings;
-          setGlobalThemes(data.themes || GLOBAL_THEMES);
+          // A palette saved before GLOBAL_THEME_PALETTE_VERSION was bumped is a snapshot of the
+          // old, colour-colliding defaults, not an intentional customisation — ignore it.
+          const isCurrent = typeof data.paletteVersion === 'number' && data.paletteVersion >= GLOBAL_THEME_PALETTE_VERSION;
+          setGlobalThemes(isCurrent && data.themes ? data.themes : GLOBAL_THEMES);
         }
         // Load fitness profile fields
         const profileRef = doc(db, 'profiles', currentUser.uid);
@@ -497,7 +501,8 @@ const SettingsPage: React.FC = () => {
       const globalThemeSettings: GlobalThemeSettings = {
         themes: globalThemes,
         customizations: {},
-        lastUpdated: serverTimestamp()
+        lastUpdated: serverTimestamp(),
+        paletteVersion: GLOBAL_THEME_PALETTE_VERSION,
       };
 
       await setDoc(doc(db, 'global_themes', currentUser.uid), globalThemeSettings);

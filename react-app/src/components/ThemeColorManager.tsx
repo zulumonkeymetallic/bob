@@ -5,7 +5,7 @@ import { doc, getDoc, setDoc, serverTimestamp, collection, query, where, getDocs
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
-import { GLOBAL_THEMES, GlobalTheme } from '../constants/globalThemes';
+import { GLOBAL_THEMES, GLOBAL_THEME_PALETTE_VERSION, GlobalTheme } from '../constants/globalThemes';
 import CalendarSyncManager from './CalendarSyncManager';
 import { Settings, Palette, Database, Calendar } from 'lucide-react';
 
@@ -13,6 +13,7 @@ interface GlobalThemeSettings {
   themes: GlobalTheme[];
   customizations: Record<string, any>;
   lastUpdated: any;
+  paletteVersion?: number;
 }
 
 const themeDefinitionsCacheKey = (uid: string) => `bob-global-theme-definitions:${uid}`;
@@ -58,10 +59,13 @@ const ThemeColorManager: React.FC = () => {
         
         if (docSnap.exists()) {
           const data = docSnap.data() as GlobalThemeSettings;
-          const merged = mergeThemes(data.themes);
+          // A palette saved before GLOBAL_THEME_PALETTE_VERSION was bumped is a snapshot of the
+          // old, colour-colliding defaults, not an intentional customisation — ignore it.
+          const isCurrent = typeof data.paletteVersion === 'number' && data.paletteVersion >= GLOBAL_THEME_PALETTE_VERSION;
+          const merged = isCurrent ? mergeThemes(data.themes) : GLOBAL_THEMES;
           setGlobalThemes(merged);
           try {
-            localStorage.setItem(themeDefinitionsCacheKey(currentUser.uid), JSON.stringify(merged));
+            localStorage.setItem(themeDefinitionsCacheKey(currentUser.uid), JSON.stringify({ version: GLOBAL_THEME_PALETTE_VERSION, themes: merged }));
           } catch {
             // Ignore local storage failures
           }
@@ -228,12 +232,13 @@ const ThemeColorManager: React.FC = () => {
       const globalThemeSettings: GlobalThemeSettings = {
         themes: globalThemes,
         customizations: {},
-        lastUpdated: serverTimestamp()
+        lastUpdated: serverTimestamp(),
+        paletteVersion: GLOBAL_THEME_PALETTE_VERSION,
       };
 
       await setDoc(doc(db, 'global_themes', currentUser.uid), globalThemeSettings);
       try {
-        localStorage.setItem(themeDefinitionsCacheKey(currentUser.uid), JSON.stringify(globalThemes));
+        localStorage.setItem(themeDefinitionsCacheKey(currentUser.uid), JSON.stringify({ version: GLOBAL_THEME_PALETTE_VERSION, themes: globalThemes }));
       } catch {
         // Ignore local storage failures
       }
