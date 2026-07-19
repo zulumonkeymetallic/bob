@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Container, Card, Row, Col, Badge, Button, Alert, Collapse, OverlayTrigger, Tooltip, Form, Spinner, Table } from 'react-bootstrap';
 import { useNavigate, Link } from 'react-router-dom';
-import { Target, BookOpen, TrendingUp, Wallet, Clock, Clock3, ListChecks, Calendar as CalendarIcon, LayoutGrid, RefreshCw, Sparkles, Activity, GripVertical, Heart, X } from 'lucide-react';
+import { Target, BookOpen, TrendingUp, Wallet, Clock, Clock3, ListChecks, LayoutGrid, RefreshCw, Sparkles, Activity, GripVertical, Heart, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { collection, query, where, onSnapshot, orderBy, limit, getDocs, doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
@@ -12,8 +12,7 @@ import { useSprint } from '../contexts/SprintContext';
 import { functions } from '../firebase';
 import { httpsCallable } from 'firebase/functions';
 import ThemeBreakdown from './ThemeBreakdown';
-import { addDays, addMinutes, endOfDay, endOfMonth, format, getDay, isSameDay, parse, startOfDay, startOfMonth, startOfWeek } from 'date-fns';
-import { enGB } from 'date-fns/locale';
+import { addDays, addMinutes, endOfDay, endOfMonth, format, isSameDay, parse, startOfDay, startOfMonth, startOfWeek } from 'date-fns';
 import type { ScheduledInstanceModel } from '../domain/scheduler/repository';
 import { nextDueAt } from '../utils/recurrence';
 import StatCard from './common/StatCard';
@@ -34,8 +33,6 @@ import EditStoryModal from './EditStoryModal';
 import { useSidebar } from '../contexts/SidebarContext';
 import { goalNeedsLinkedPot } from '../utils/goalCost';
 import { ResponsiveContainer, LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip as RechartsTooltip, Legend } from 'recharts';
-import { Calendar as RBC, Views, dateFnsLocalizer } from 'react-big-calendar';
-import 'react-big-calendar/lib/css/react-big-calendar.css';
 import RecoveryWidget from './metrics/RecoveryWidget';
 import ActivityWidget from './metrics/ActivityWidget';
 import FitnessWidget from './metrics/FitnessWidget';
@@ -52,15 +49,6 @@ import {
   normalizePlannerCallableError,
 } from '../utils/plannerOrchestration';
 import { compareTop3Stories, compareTop3Tasks, isTop3Story, isTop3Task, top3DateForToday } from '../utils/top3';
-
-const _rbcLocales = { 'en-GB': enGB } as const;
-const _rbcLocalizer = dateFnsLocalizer({
-  format,
-  parse,
-  startOfWeek: (date: Date) => startOfWeek(date, { weekStartsOn: 1 }),
-  getDay,
-  locales: _rbcLocales,
-});
 
 const isSprintActiveStatus = (status: any): boolean => {
   const numeric = Number(status);
@@ -263,7 +251,6 @@ type DashboardWidgetKey =
   | 'kpiStudio'
   | 'unifiedTimeline'
   | 'tasksDueToday'
-  | 'calendar'
   | 'recoveryMetrics'
   | 'activityMetrics'
   | 'fitnessMetrics'
@@ -281,7 +268,6 @@ const DASHBOARD_WIDGET_TIER: Record<DashboardWidgetKey, DashboardWidgetTier> = {
   financeOverview: 'reference',
   themeProgress: 'reference',
   tasksDueToday: 'reference',
-  calendar: 'reference',
   recoveryMetrics: 'reference',
   activityMetrics: 'reference',
   fitnessMetrics: 'reference',
@@ -298,7 +284,7 @@ const DASHBOARD_WIDGET_TIER_LABEL: Record<Exclude<DashboardWidgetTier, 'now'>, s
 // the old top3 widget folded into it; see the standalone <DailyPlanWidget /> render above.)
 const SUMMARY_WIDGET_KEYS: DashboardWidgetKey[] = [
   'fitnessStrip',
-  'dailySummary', 'kpiStudio', 'unifiedTimeline', 'financeOverview', 'themeProgress', 'tasksDueToday', 'calendar', 'recoveryMetrics', 'activityMetrics', 'fitnessMetrics', 'sprintVelocity', 'lowHangingFruit',
+  'dailySummary', 'kpiStudio', 'unifiedTimeline', 'financeOverview', 'themeProgress', 'tasksDueToday', 'recoveryMetrics', 'activityMetrics', 'fitnessMetrics', 'sprintVelocity', 'lowHangingFruit',
 ];
 interface ThemeProgressGoalRow {
   id: string;
@@ -497,7 +483,6 @@ const DASHBOARD_WIDGET_CONFIG: Array<{ key: DashboardWidgetKey; label: string }>
   { key: 'financeOverview', label: 'Finance Summary' },
   { key: 'themeProgress', label: 'Theme progress' },
   { key: 'tasksDueToday', label: 'Tasks due today' },
-  { key: 'calendar', label: 'Calendar (mini)' },
   { key: 'recoveryMetrics', label: 'Recovery (HRV, Sleep, Calories)' },
   { key: 'activityMetrics', label: 'Activity (Steps + HRV trend)' },
   { key: 'fitnessMetrics', label: 'Fitness (Run / Swim / Bike sport cards)' },
@@ -514,7 +499,6 @@ const DASHBOARD_WIDGET_DEFAULT_VISIBILITY: DashboardWidgetVisibility = {
   kpiStudio: true,
   unifiedTimeline: true,
   tasksDueToday: false,
-  calendar: false,
   recoveryMetrics: false,
   activityMetrics: false,
   fitnessMetrics: false,
@@ -5622,40 +5606,6 @@ const Dashboard: React.FC = () => {
                                     );
                                   })()
                                 )}
-                              </Card.Body>
-                            </Card>
-                          </div>
-                        )}
-                                    {widgetKey === 'calendar' && widgetVisibility.calendar && (
-                          <div
-                            className="dashboard-widget-shell"
-                            style={getWidgetSizeStyle('calendar', 420)}
-                          >
-                            <Card className="shadow-sm border-0 mb-3 d-flex flex-column">
-                              <Card.Header className="d-flex align-items-center justify-content-between">
-                                <div className="fw-semibold d-flex align-items-center gap-2">
-                                  <CalendarIcon size={16} /> Calendar
-                                </div>
-                                <Link to="/calendar" className="btn btn-sm btn-outline-secondary">Open full calendar</Link>
-                              </Card.Header>
-                              <Card.Body className="p-0 flex-grow-1" style={{ minHeight: 0, overflow: 'hidden' }}>
-                                <RBC
-                                  localizer={_rbcLocalizer}
-                                  events={calendarEvents}
-                                  defaultView={Views.AGENDA}
-                                  view={Views.AGENDA}
-                                  date={new Date()}
-                                  onView={() => {}}
-                                  onNavigate={() => {}}
-                                  style={{ height: '100%', minHeight: 360 }}
-                                  eventPropGetter={(event: any) => ({
-                                    style: { backgroundColor: event.color || '#3b82f6', color: event.textColor || '#fff', border: 'none' },
-                                  })}
-                                  formats={{
-                                    timeGutterFormat: (date: Date) => format(date, 'HH:mm'),
-                                    eventTimeRangeFormat: ({ start, end }: { start: Date; end: Date }) => `${format(start, 'HH:mm')} – ${format(end, 'HH:mm')}`,
-                                  }}
-                                />
                               </Card.Body>
                             </Card>
                           </div>
