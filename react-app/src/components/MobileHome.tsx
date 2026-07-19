@@ -412,6 +412,13 @@ const MobileHome: React.FC = () => {
         .map((d) => ({ id: d.id, ...(d.data() as any) }) as Task)
         .filter((task) => !task.deleted)
         .filter((task) => {
+          // A recurring chore's due-ness is decided by its recurrence pattern landing on today,
+          // never by a stale one-off due-date stamp from a past cycle - see the identical fix
+          // in useDailyPlanTimeline.ts's selfChoresDueToday for the full explanation.
+          const hasRecurrenceConfig = !!(task as any).repeatFrequency
+            || (Array.isArray((task as any).daysOfWeek) && (task as any).daysOfWeek.length > 0)
+            || (Array.isArray((task as any).repeatDaysOfWeek) && (task as any).repeatDaysOfWeek.length > 0);
+          if (hasRecurrenceConfig) return !!getChoreKind(task) && isRecurringDueOnDate(task, todayDate);
           const due = getTaskDueMs(task);
           if (due) return due <= todayEnd.getTime();
           return !!getChoreKind(task) && isRecurringDueOnDate(task, todayDate, due);
