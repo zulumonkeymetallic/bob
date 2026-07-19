@@ -4360,6 +4360,233 @@ const Dashboard: React.FC = () => {
               );
             })()}
 
+            {false && (
+              <Row className="g-3 mb-1">
+                <Col xl={12}>
+                  <Card className="shadow-sm border-0">
+                    <Card.Header className="d-flex justify-content-between align-items-center flex-wrap gap-2 py-2">
+                      <div className="fw-semibold">Savings Runway</div>
+                      <div className="d-flex align-items-center gap-2 flex-wrap">
+                        <Form.Select
+                          size="sm"
+                          value={runwaySortMode}
+                          onChange={(e) => setRunwaySortMode(e.target.value as 'soonest' | 'shortfall' | 'theme')}
+                          style={{ width: 160 }}
+                        >
+                          <option value="soonest">Sort: Soonest funded</option>
+                          <option value="shortfall">Sort: Highest shortfall</option>
+                          <option value="theme">Sort: Theme</option>
+                        </Form.Select>
+                        <Form.Select
+                          size="sm"
+                          value={runwayThemeFilter}
+                          onChange={(e) => setRunwayThemeFilter(e.target.value)}
+                          style={{ width: 180 }}
+                        >
+                          <option value="all">Theme: All</option>
+                          {savingsRunwayThemes.map((theme) => (
+                            <option key={theme} value={theme}>{theme}</option>
+                          ))}
+                        </Form.Select>
+                      </div>
+                    </Card.Header>
+                    <Card.Body className="py-2">
+                      <div className="text-muted small mb-2">{financeSyncSummary}</div>
+                      {savingsRunwayRows.length === 0 ? (
+                        <div className="text-muted small">No linked savings-pot runway data available yet.</div>
+                      ) : (
+                        <div className="table-responsive">
+                          <Table size="sm" hover className="mb-0 align-middle">
+                            <thead>
+                              <tr>
+                                <th>Goal</th>
+                                <th style={{ textAlign: 'right' }}>Target</th>
+                                <th style={{ textAlign: 'right' }}>Pot Balance</th>
+                                <th style={{ textAlign: 'right' }}>Avg Monthly Allocation</th>
+                                <th style={{ textAlign: 'right' }}>Remaining</th>
+                                <th style={{ textAlign: 'right' }}>Estimated Months</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {savingsRunwayRows.slice(0, 12).map((row) => (
+                                <tr key={row.goalId || row.goalTitle}>
+                                  <td>
+                                    <div className="fw-semibold">{row.goalTitle}</div>
+                                    <div className="text-muted" style={{ fontSize: 12 }}>{row.themeName}</div>
+                                  </td>
+                                  <td style={{ textAlign: 'right' }}>{formatPotBalance(row.targetAmount * 100, 'GBP')}</td>
+                                  <td style={{ textAlign: 'right' }}>{formatPotBalance(row.linkedPotBalance * 100, 'GBP')}</td>
+                                  <td style={{ textAlign: 'right' }}>
+                                    {row.avgMonthlyAllocation && row.avgMonthlyAllocation > 0
+                                      ? formatPotBalance(row.avgMonthlyAllocation * 100, 'GBP')
+                                      : 'Insufficient history'}
+                                  </td>
+                                  <td style={{ textAlign: 'right' }}>{formatPotBalance(row.remainingAmount * 100, 'GBP')}</td>
+                                  <td style={{ textAlign: 'right' }}>
+                                    {row.monthsToTarget == null ? 'TBD' : (row.monthsToTarget <= 0 ? 'Funded' : `${Math.ceil(row.monthsToTarget)} mo`)}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </Table>
+                        </div>
+                      )}
+                    </Card.Body>
+                  </Card>
+                </Col>
+              </Row>
+            )}
+
+            <Row className="g-3 mb-1">
+              <Col xl={12}>
+                <Card className="h-100 shadow-sm border-0">
+                  <Card.Header className="d-flex justify-content-between align-items-start flex-wrap gap-2 py-2">
+                    <div className="d-flex flex-column gap-1">
+                      <span className="fw-semibold">Today’s Plan</span>
+                      {nextWorkLoading && !nextWorkRecommendation?.recommendedItem && (
+                        <div className="text-muted small d-flex align-items-center gap-2">
+                          <Spinner size="sm" animation="border" />
+                          <span>Calculating what to work on next…</span>
+                        </div>
+                      )}
+                      {!nextWorkLoading && nextWorkRecommendation?.recommendedItem && (
+                        <div className="text-muted small d-flex align-items-center gap-2 flex-wrap">
+                          <span className="fw-semibold text-body">What to work on next</span>
+                          <Badge bg={getNextWorkBadge(nextWorkRecommendation.status).bg}>
+                            {getNextWorkBadge(nextWorkRecommendation.status).label}
+                          </Badge>
+                          {nextWorkPath ? (
+                            <Link to={nextWorkPath} className="text-decoration-none">
+                              {nextWorkRecommendation.recommendedItem.label}
+                            </Link>
+                          ) : (
+                            <span className="text-body">{nextWorkRecommendation.recommendedItem.label}</span>
+                          )}
+                          {nextWorkRecommendation.recommendedItem.reason && (
+                            <span>· {nextWorkRecommendation.recommendedItem.reason}</span>
+                          )}
+                        </div>
+                      )}
+                      {!nextWorkLoading && !nextWorkRecommendation?.recommendedItem && nextWorkRecommendation?.spokenResponse && (
+                        <div className="text-muted small">
+                          <span className="fw-semibold text-body">What to work on next</span>
+                          {' · '}
+                          {nextWorkRecommendation.spokenResponse}
+                        </div>
+                      )}
+                      {nextWorkError && (
+                        <div className="text-danger small">{nextWorkError}</div>
+                      )}
+                      {eveningPullForward?.active && eveningPullForward.suggestions.length > 0 && (
+                        <div className="small mt-1">
+                          <div className="text-body fw-semibold">Evening opportunity</div>
+                          {eveningPullForward.message && (
+                            <div className="text-muted">{eveningPullForward.message}</div>
+                          )}
+                          <div className="d-flex align-items-center gap-2 flex-wrap mt-1">
+                            {eveningPullForward.suggestions.slice(0, 2).map((item) => (
+                              <Button
+                                key={`${item.type}-${item.id}`}
+                                variant="outline-success"
+                                size="sm"
+                                disabled={eveningPullForwardBusyId === item.id}
+                                onClick={() => handleApplyEveningPullForward(item)}
+                                title={item.reason || 'Bring this item forward to today'}
+                              >
+                                {eveningPullForwardBusyId === item.id ? (
+                                  <Spinner size="sm" animation="border" className="me-1" />
+                                ) : null}
+                                Bring forward: {item.label || item.title}
+                              </Button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    <div className="d-flex align-items-center gap-2 flex-wrap">
+                      <PlanActionBar />
+                      <Button
+                        variant="outline-primary"
+                        size="sm"
+                        disabled={replanLoading}
+                        onClick={handleReplan}
+                        title="Delta replan: quickly rebalance existing calendar blocks using current priorities."
+                      >
+                        {replanLoading ? <Spinner size="sm" animation="border" /> : <RefreshCw size={14} />}
+                        <span className="d-none d-xl-inline ms-1">Delta replan</span>
+                      </Button>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        disabled={fullReplanLoading}
+                        onClick={handleFullReplan}
+                        title="Full replan: runs full nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
+                      >
+                        {fullReplanLoading ? <Spinner size="sm" animation="border" /> : <Sparkles size={14} />}
+                        <span className="d-none d-xl-inline ms-1">Full replan</span>
+                      </Button>
+                      <Button
+                        variant={showWidgetSettings ? 'secondary' : 'outline-secondary'}
+                        size="sm"
+                        onClick={() => setShowWidgetSettings((prev) => !prev)}
+                        title={`Customize visible widgets for ${dashboardDeviceType}`}
+                      >
+                        <LayoutGrid size={14} className="me-1" /> Widgets
+                      </Button>
+                    </div>
+                  </Card.Header>
+                  <Card.Body>
+                    {replanFeedback && (
+                      <div className="text-muted small mb-2">{replanFeedback}</div>
+                    )}
+                    {showWidgetSettings && (
+                      <Card className="mb-3 border-0" style={{ background: 'var(--bs-light-bg-subtle, #f8f9fa)' }}>
+                        <Card.Body className="py-2">
+                          <div className="d-flex justify-content-between align-items-center mb-2">
+                            <div className="fw-semibold small">Visible Widgets</div>
+                            <div className="d-flex align-items-center gap-2">
+                              <span className="text-muted small">Profile: {dashboardDeviceType}</span>
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-outline-secondary"
+                                onClick={() => {
+                                  setWidgetVisibility({ ...DASHBOARD_WIDGET_DEFAULT_VISIBILITY });
+                                  try {
+                                    window.localStorage.removeItem(dashboardWidgetVisibilityStorageKey(dashboardDeviceType));
+                                  } catch { /* ignore */ }
+                                }}
+                                title="Reset visible widgets to defaults"
+                              >
+                                Reset to defaults
+                              </button>
+                            </div>
+                          </div>
+                          <div className="d-flex flex-wrap gap-3">
+                            {DASHBOARD_WIDGET_CONFIG.map((widget) => (
+                              <Form.Check
+                                key={widget.key}
+                                type="switch"
+                                id={`dashboard-widget-${widget.key}`}
+                                label={widget.label}
+                                checked={widgetVisibility[widget.key]}
+                                onChange={() => toggleWidgetVisibility(widget.key)}
+                              />
+                            ))}
+                          </div>
+                        </Card.Body>
+                      </Card>
+                    )}
+                    {/*
+                      Hero section — DailyPlanWidget is a permanent page section, not a grid
+                      widget: it's the single "what should I do today" surface (folds in the old
+                      standalone Top 3 widget as a pinned section, plus a Chores/Tasks/Stories
+                      filter that folds in the old standalone Chores & Habits widget), so it
+                      renders full-width above the tiered widget grid.
+                    */}
+                    <div className="mb-4 pb-4" style={{ borderBottom: '1px solid var(--bs-border-color)' }}>
+                      <DailyPlanWidget />
+                    </div>
+
             <Row className="g-2 mb-1">
               <Col xl={12}>
                 <Card className="shadow-sm border-0">
@@ -4847,232 +5074,6 @@ const Dashboard: React.FC = () => {
               </Col>
             </Row>
 
-            {false && (
-              <Row className="g-3 mb-1">
-                <Col xl={12}>
-                  <Card className="shadow-sm border-0">
-                    <Card.Header className="d-flex justify-content-between align-items-center flex-wrap gap-2 py-2">
-                      <div className="fw-semibold">Savings Runway</div>
-                      <div className="d-flex align-items-center gap-2 flex-wrap">
-                        <Form.Select
-                          size="sm"
-                          value={runwaySortMode}
-                          onChange={(e) => setRunwaySortMode(e.target.value as 'soonest' | 'shortfall' | 'theme')}
-                          style={{ width: 160 }}
-                        >
-                          <option value="soonest">Sort: Soonest funded</option>
-                          <option value="shortfall">Sort: Highest shortfall</option>
-                          <option value="theme">Sort: Theme</option>
-                        </Form.Select>
-                        <Form.Select
-                          size="sm"
-                          value={runwayThemeFilter}
-                          onChange={(e) => setRunwayThemeFilter(e.target.value)}
-                          style={{ width: 180 }}
-                        >
-                          <option value="all">Theme: All</option>
-                          {savingsRunwayThemes.map((theme) => (
-                            <option key={theme} value={theme}>{theme}</option>
-                          ))}
-                        </Form.Select>
-                      </div>
-                    </Card.Header>
-                    <Card.Body className="py-2">
-                      <div className="text-muted small mb-2">{financeSyncSummary}</div>
-                      {savingsRunwayRows.length === 0 ? (
-                        <div className="text-muted small">No linked savings-pot runway data available yet.</div>
-                      ) : (
-                        <div className="table-responsive">
-                          <Table size="sm" hover className="mb-0 align-middle">
-                            <thead>
-                              <tr>
-                                <th>Goal</th>
-                                <th style={{ textAlign: 'right' }}>Target</th>
-                                <th style={{ textAlign: 'right' }}>Pot Balance</th>
-                                <th style={{ textAlign: 'right' }}>Avg Monthly Allocation</th>
-                                <th style={{ textAlign: 'right' }}>Remaining</th>
-                                <th style={{ textAlign: 'right' }}>Estimated Months</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {savingsRunwayRows.slice(0, 12).map((row) => (
-                                <tr key={row.goalId || row.goalTitle}>
-                                  <td>
-                                    <div className="fw-semibold">{row.goalTitle}</div>
-                                    <div className="text-muted" style={{ fontSize: 12 }}>{row.themeName}</div>
-                                  </td>
-                                  <td style={{ textAlign: 'right' }}>{formatPotBalance(row.targetAmount * 100, 'GBP')}</td>
-                                  <td style={{ textAlign: 'right' }}>{formatPotBalance(row.linkedPotBalance * 100, 'GBP')}</td>
-                                  <td style={{ textAlign: 'right' }}>
-                                    {row.avgMonthlyAllocation && row.avgMonthlyAllocation > 0
-                                      ? formatPotBalance(row.avgMonthlyAllocation * 100, 'GBP')
-                                      : 'Insufficient history'}
-                                  </td>
-                                  <td style={{ textAlign: 'right' }}>{formatPotBalance(row.remainingAmount * 100, 'GBP')}</td>
-                                  <td style={{ textAlign: 'right' }}>
-                                    {row.monthsToTarget == null ? 'TBD' : (row.monthsToTarget <= 0 ? 'Funded' : `${Math.ceil(row.monthsToTarget)} mo`)}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </Table>
-                        </div>
-                      )}
-                    </Card.Body>
-                  </Card>
-                </Col>
-              </Row>
-            )}
-
-            <Row className="g-3 mb-1">
-              <Col xl={12}>
-                <Card className="h-100 shadow-sm border-0">
-                  <Card.Header className="d-flex justify-content-between align-items-start flex-wrap gap-2 py-2">
-                    <div className="d-flex flex-column gap-1">
-                      <span className="fw-semibold">Today’s Plan</span>
-                      {nextWorkLoading && !nextWorkRecommendation?.recommendedItem && (
-                        <div className="text-muted small d-flex align-items-center gap-2">
-                          <Spinner size="sm" animation="border" />
-                          <span>Calculating what to work on next…</span>
-                        </div>
-                      )}
-                      {!nextWorkLoading && nextWorkRecommendation?.recommendedItem && (
-                        <div className="text-muted small d-flex align-items-center gap-2 flex-wrap">
-                          <span className="fw-semibold text-body">What to work on next</span>
-                          <Badge bg={getNextWorkBadge(nextWorkRecommendation.status).bg}>
-                            {getNextWorkBadge(nextWorkRecommendation.status).label}
-                          </Badge>
-                          {nextWorkPath ? (
-                            <Link to={nextWorkPath} className="text-decoration-none">
-                              {nextWorkRecommendation.recommendedItem.label}
-                            </Link>
-                          ) : (
-                            <span className="text-body">{nextWorkRecommendation.recommendedItem.label}</span>
-                          )}
-                          {nextWorkRecommendation.recommendedItem.reason && (
-                            <span>· {nextWorkRecommendation.recommendedItem.reason}</span>
-                          )}
-                        </div>
-                      )}
-                      {!nextWorkLoading && !nextWorkRecommendation?.recommendedItem && nextWorkRecommendation?.spokenResponse && (
-                        <div className="text-muted small">
-                          <span className="fw-semibold text-body">What to work on next</span>
-                          {' · '}
-                          {nextWorkRecommendation.spokenResponse}
-                        </div>
-                      )}
-                      {nextWorkError && (
-                        <div className="text-danger small">{nextWorkError}</div>
-                      )}
-                      {eveningPullForward?.active && eveningPullForward.suggestions.length > 0 && (
-                        <div className="small mt-1">
-                          <div className="text-body fw-semibold">Evening opportunity</div>
-                          {eveningPullForward.message && (
-                            <div className="text-muted">{eveningPullForward.message}</div>
-                          )}
-                          <div className="d-flex align-items-center gap-2 flex-wrap mt-1">
-                            {eveningPullForward.suggestions.slice(0, 2).map((item) => (
-                              <Button
-                                key={`${item.type}-${item.id}`}
-                                variant="outline-success"
-                                size="sm"
-                                disabled={eveningPullForwardBusyId === item.id}
-                                onClick={() => handleApplyEveningPullForward(item)}
-                                title={item.reason || 'Bring this item forward to today'}
-                              >
-                                {eveningPullForwardBusyId === item.id ? (
-                                  <Spinner size="sm" animation="border" className="me-1" />
-                                ) : null}
-                                Bring forward: {item.label || item.title}
-                              </Button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                    <div className="d-flex align-items-center gap-2 flex-wrap">
-                      <PlanActionBar />
-                      <Button
-                        variant="outline-primary"
-                        size="sm"
-                        disabled={replanLoading}
-                        onClick={handleReplan}
-                        title="Delta replan: quickly rebalance existing calendar blocks using current priorities."
-                      >
-                        {replanLoading ? <Spinner size="sm" animation="border" /> : <RefreshCw size={14} />}
-                        <span className="d-none d-xl-inline ms-1">Delta replan</span>
-                      </Button>
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        disabled={fullReplanLoading}
-                        onClick={handleFullReplan}
-                        title="Full replan: runs full nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
-                      >
-                        {fullReplanLoading ? <Spinner size="sm" animation="border" /> : <Sparkles size={14} />}
-                        <span className="d-none d-xl-inline ms-1">Full replan</span>
-                      </Button>
-                      <Button
-                        variant={showWidgetSettings ? 'secondary' : 'outline-secondary'}
-                        size="sm"
-                        onClick={() => setShowWidgetSettings((prev) => !prev)}
-                        title={`Customize visible widgets for ${dashboardDeviceType}`}
-                      >
-                        <LayoutGrid size={14} className="me-1" /> Widgets
-                      </Button>
-                    </div>
-                  </Card.Header>
-                  <Card.Body>
-                    {replanFeedback && (
-                      <div className="text-muted small mb-2">{replanFeedback}</div>
-                    )}
-                    {showWidgetSettings && (
-                      <Card className="mb-3 border-0" style={{ background: 'var(--bs-light-bg-subtle, #f8f9fa)' }}>
-                        <Card.Body className="py-2">
-                          <div className="d-flex justify-content-between align-items-center mb-2">
-                            <div className="fw-semibold small">Visible Widgets</div>
-                            <div className="d-flex align-items-center gap-2">
-                              <span className="text-muted small">Profile: {dashboardDeviceType}</span>
-                              <button
-                                type="button"
-                                className="btn btn-sm btn-outline-secondary"
-                                onClick={() => {
-                                  setWidgetVisibility({ ...DASHBOARD_WIDGET_DEFAULT_VISIBILITY });
-                                  try {
-                                    window.localStorage.removeItem(dashboardWidgetVisibilityStorageKey(dashboardDeviceType));
-                                  } catch { /* ignore */ }
-                                }}
-                                title="Reset visible widgets to defaults"
-                              >
-                                Reset to defaults
-                              </button>
-                            </div>
-                          </div>
-                          <div className="d-flex flex-wrap gap-3">
-                            {DASHBOARD_WIDGET_CONFIG.map((widget) => (
-                              <Form.Check
-                                key={widget.key}
-                                type="switch"
-                                id={`dashboard-widget-${widget.key}`}
-                                label={widget.label}
-                                checked={widgetVisibility[widget.key]}
-                                onChange={() => toggleWidgetVisibility(widget.key)}
-                              />
-                            ))}
-                          </div>
-                        </Card.Body>
-                      </Card>
-                    )}
-                    {/*
-                      Hero section — DailyPlanWidget is a permanent page section, not a grid
-                      widget: it's the single "what should I do today" surface (folds in the old
-                      standalone Top 3 widget as a pinned section, plus a Chores/Tasks/Stories
-                      filter that folds in the old standalone Chores & Habits widget), so it
-                      renders full-width above the tiered widget grid.
-                    */}
-                    <div className="mb-4 pb-4" style={{ borderBottom: '1px solid var(--bs-border-color)' }}>
-                      <DailyPlanWidget />
-                    </div>
                     <div ref={todayPlanLayoutRef}>
                       {(() => {
                         // Fixed curated layout — SUMMARY_WIDGET_KEYS is the one and only order,
