@@ -6,8 +6,8 @@
  */
 import React from 'react';
 import { Form, ListGroup } from 'react-bootstrap';
-import { CalendarDays, Clock3 } from 'lucide-react';
-import type { Task } from '../../types';
+import { CalendarDays, Clock3, Trash2 } from 'lucide-react';
+import type { Story, Task } from '../../types';
 import type { DailyPlanTimelineItem } from '../../hooks/useDailyPlanTimeline';
 
 export interface DailyPlanDeferTarget {
@@ -22,6 +22,13 @@ export interface DailyPlanListProps {
   choreCompletionBusy?: Record<string, boolean>;
   onCompleteTask: (task: Task) => void;
   onCompleteChore: (task: Task) => void;
+  /** Optional — when omitted, story rows get no checkbox (matches today's behaviour). */
+  onCompleteStory?: (story: Story) => void;
+  /** Optional — when omitted, the delete (trash) icon is not rendered. Mirrors
+   * DeferralCandidatesBanner's quick-delete: no sidebar, direct deleteDoc. */
+  onDelete?: (item: DailyPlanTimelineItem) => void;
+  /** Optional — ids currently mid-delete, shows the trash icon disabled/spinning. */
+  deleteBusy?: Record<string, boolean>;
   /** Optional — when omitted, the defer button is not rendered. */
   onDefer?: (target: DailyPlanDeferTarget) => void;
 }
@@ -31,14 +38,24 @@ const DailyPlanList: React.FC<DailyPlanListProps> = ({
   choreCompletionBusy = {},
   onCompleteTask,
   onCompleteChore,
+  onCompleteStory,
+  onDelete,
+  deleteBusy = {},
   onDefer,
 }) => {
   return (
     <ListGroup variant="flush">
       {items.map((item) => {
         const isTask = item.kind === 'task' || item.kind === 'chore';
+        const isStory = item.kind === 'story';
         const isEvent = item.kind === 'event';
-        const isDone = !!item.task && Number(item.task.status ?? 0) === 2;
+        const isDone = isTask
+          ? !!item.task && Number(item.task.status ?? 0) === 2
+          : isStory
+            ? !!item.story && Number(item.story.status ?? 0) === 4
+            : false;
+        const deleteId = item.story?.id ?? item.task?.id;
+        const isDeleteBusy = !!deleteId && !!deleteBusy[deleteId];
         const iconBtnStyle: React.CSSProperties = {
           background: 'none', border: 'none', padding: '4px 6px',
           color: 'var(--bs-secondary)', cursor: 'pointer', flexShrink: 0,
@@ -58,6 +75,15 @@ const DailyPlanList: React.FC<DailyPlanListProps> = ({
                   if (item.kind === 'chore') onCompleteChore(item.task!);
                   else onCompleteTask(item.task!);
                 }}
+                aria-label={`Complete ${item.title}`}
+                style={{ flexShrink: 0 }}
+              />
+            ) : isStory && item.story && onCompleteStory ? (
+              <Form.Check
+                type="checkbox"
+                checked={isDone}
+                disabled={isDone}
+                onChange={() => onCompleteStory(item.story!)}
                 aria-label={`Complete ${item.title}`}
                 style={{ flexShrink: 0 }}
               />
@@ -83,6 +109,18 @@ const DailyPlanList: React.FC<DailyPlanListProps> = ({
                 })}
               >
                 <Clock3 size={14} />
+              </button>
+            )}
+            {onDelete && (item.task || item.story) && (
+              <button
+                type="button"
+                style={{ ...iconBtnStyle, color: 'var(--text-danger, #dc2626)', opacity: isDeleteBusy ? 0.5 : 1 }}
+                title="Delete"
+                aria-label={`Delete ${item.title}`}
+                disabled={isDeleteBusy}
+                onClick={() => onDelete(item)}
+              >
+                <Trash2 size={14} />
               </button>
             )}
           </ListGroup.Item>

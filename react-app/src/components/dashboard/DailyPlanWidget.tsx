@@ -37,7 +37,10 @@ const DailyPlanWidget: React.FC = () => {
   const { currentPersona } = usePersona();
   const [kindFilter, setKindFilter] = useState<KindFilter>('all');
 
-  const { items, bucketCounts, loading, choreCompletionBusy, completeTask, completeChore } = useDailyPlanTimeline({
+  const {
+    items, bucketCounts, loading, choreCompletionBusy, itemActionBusy,
+    completeTask, completeChore, completeStory, deleteItem,
+  } = useDailyPlanTimeline({
     uid: currentUser?.uid,
     persona: currentPersona,
   });
@@ -111,6 +114,9 @@ const DailyPlanWidget: React.FC = () => {
                   choreCompletionBusy={choreCompletionBusy}
                   onCompleteTask={(task) => { void completeTask(task); }}
                   onCompleteChore={(task) => { void completeChore(task); }}
+                  onCompleteStory={(story) => { void completeStory(story); }}
+                  onDelete={(item) => { void deleteItem(item); }}
+                  deleteBusy={itemActionBusy}
                 />
               </div>
             )}

@@ -13,7 +13,7 @@
  *    actions (`completeTask` / `completeChore`) for the widget's checkboxes.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { collection, doc, onSnapshot, orderBy, query, limit, updateDoc, serverTimestamp, where } from 'firebase/firestore';
+import { collection, doc, onSnapshot, orderBy, query, limit, updateDoc, deleteDoc, serverTimestamp, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../firebase';
 import type { Story, Task } from '../types';
@@ -182,8 +182,11 @@ export interface UseDailyPlanTimelineResult {
   bucketCounts: { morning: number; afternoon: number; evening: number };
   loading: boolean;
   choreCompletionBusy: Record<string, boolean>;
+  itemActionBusy: Record<string, boolean>;
   completeTask: (task: Task) => Promise<void>;
   completeChore: (task: Task) => Promise<void>;
+  completeStory: (story: Story) => Promise<void>;
+  deleteItem: (item: DailyPlanTimelineItem) => Promise<void>;
 }
 
 export function useDailyPlanTimeline(params: UseDailyPlanTimelineParams = {}): UseDailyPlanTimelineResult {
@@ -209,6 +212,7 @@ export function useDailyPlanTimeline(params: UseDailyPlanTimelineParams = {}): U
   const [fetchedSummary, setFetchedSummary] = useState<any | null>(null);
   const [fetchLoading, setFetchLoading] = useState<boolean>(selfContained);
   const [choreCompletionBusy, setChoreCompletionBusy] = useState<Record<string, boolean>>({});
+  const [itemActionBusy, setItemActionBusy] = useState<Record<string, boolean>>({});
 
   const todayStartMs = useMemo(() => {
     const d = new Date();
@@ -472,6 +476,33 @@ export function useDailyPlanTimeline(params: UseDailyPlanTimelineParams = {}): U
     }
   }, []);
 
+  // Mirrors DeferralCandidatesBanner's handleMarkComplete/handleDelete quick actions (green
+  // check / red trash, no sidebar) so the same gesture works the same way everywhere.
+  const completeStory = useCallback(async (story: Story) => {
+    try {
+      await updateDoc(doc(db, 'stories', story.id), { status: 4, updatedAt: serverTimestamp() });
+    } catch (err) {
+      console.warn('useDailyPlanTimeline: failed to complete story', err);
+    }
+  }, []);
+
+  const deleteItem = useCallback(async (item: DailyPlanTimelineItem) => {
+    const id = item.story?.id ?? item.task?.id;
+    if (!id) return;
+    if (itemActionBusy[id]) return;
+    setItemActionBusy((prev) => ({ ...prev, [id]: true }));
+    try {
+      await deleteDoc(doc(db, item.story ? 'stories' : 'tasks', id));
+    } catch (err) {
+      console.warn('useDailyPlanTimeline: failed to delete item', err);
+      setItemActionBusy((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    }
+  }, [itemActionBusy]);
+
   const completeChore = useCallback(async (task: Task) => {
     const taskId = task.id;
     if (!taskId || choreCompletionBusy[taskId]) return;
@@ -502,7 +533,10 @@ export function useDailyPlanTimeline(params: UseDailyPlanTimelineParams = {}): U
     bucketCounts,
     loading: selfContained ? fetchLoading : false,
     choreCompletionBusy,
+    itemActionBusy,
     completeTask,
     completeChore,
+    completeStory,
+    deleteItem,
   };
 }
