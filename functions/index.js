@@ -484,6 +484,10 @@ const MONDAY_API_TOKEN = defineSecret("MONDAY_API_TOKEN");
 // Strava integration secrets
 const STRAVA_CLIENT_ID = defineSecret("STRAVA_CLIENT_ID");
 const STRAVA_CLIENT_SECRET = defineSecret("STRAVA_CLIENT_SECRET");
+// Set to "bob.jc1.tech" in Secret Manager, matching the Strava app's registered Authorization
+// Callback Domain — but must be explicitly bound below (secrets: [...]) or it's never injected
+// into the function's process.env, which is exactly what let this drift silently for a while.
+const STRAVA_REDIRECT_HOST = defineSecret("STRAVA_REDIRECT_HOST");
 // Monzo integration secrets
 const MONZO_CLIENT_ID = defineSecret("MONZO_CLIENT_ID");
 const MONZO_CLIENT_SECRET = defineSecret("MONZO_CLIENT_SECRET");
@@ -4876,7 +4880,7 @@ exports.monzoSyncTransactions = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZ
 });
 
 // ===== Strava OAuth Start
-exports.stravaOAuthStart = httpsV2.onRequest({ secrets: [STRAVA_CLIENT_ID], invoker: 'public' }, async (req, res) => {
+exports.stravaOAuthStart = httpsV2.onRequest({ secrets: [STRAVA_CLIENT_ID, STRAVA_REDIRECT_HOST], invoker: 'public' }, async (req, res) => {
   try {
     const uid = String(req.query.uid || "");
     const nonce = String(req.query.nonce || "");
@@ -4899,7 +4903,7 @@ exports.stravaOAuthStart = httpsV2.onRequest({ secrets: [STRAVA_CLIENT_ID], invo
 });
 
 // ===== Strava OAuth Callback
-exports.stravaOAuthCallback = httpsV2.onRequest({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET], invoker: 'public' }, async (req, res) => {
+exports.stravaOAuthCallback = httpsV2.onRequest({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET, STRAVA_REDIRECT_HOST], invoker: 'public' }, async (req, res) => {
   try {
     const code = String(req.query.code || "");
     const state = stateDecode(req.query.state);
