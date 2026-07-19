@@ -35,6 +35,29 @@ const WeeklyPlannerSummaryCard: React.FC = () => {
       ? 'Weekly review due'
       : 'Weekly plan available';
 
+  // This is a weekly-cadence concern, not a daily one - genuinely actionable only during the
+  // Sun/Mon prompt window (and only until it's been reviewed). Outside that, keep it as a
+  // single compact line instead of a full card with Alert/badges/button every single day -
+  // same "don't occupy permanent daily real estate for a periodic thing" reasoning as the
+  // check-in banner rework.
+  const isActionable = isPlanningPromptWeek && !planningSummary?.completedAt;
+
+  if (currentUser?.uid && !isActionable) {
+    return (
+      <Card className="shadow-sm border-0 h-100">
+        <Card.Body className="d-flex align-items-center justify-content-between py-2 px-3">
+          <div className="small">
+            <span className="text-muted me-1">Weekly Planner —</span>
+            <span className={planningSummary?.completedAt ? 'text-success' : 'text-muted'}>{statusLabel}</span>
+          </div>
+          <Button size="sm" variant="link" className="p-0 text-decoration-none" onClick={() => navigate('/planner?level=week')}>
+            Open →
+          </Button>
+        </Card.Body>
+      </Card>
+    );
+  }
+
   return (
     <Card className="shadow-sm border-0 h-100">
       <Card.Header className="d-flex align-items-center justify-content-between">
