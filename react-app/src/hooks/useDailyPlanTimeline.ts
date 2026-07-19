@@ -303,6 +303,20 @@ export function useDailyPlanTimeline(params: UseDailyPlanTimelineParams = {}): U
     return fetchedStories.filter((s) => s.status !== 4);
   }, [selfContained, fetchedStories]);
 
+  // Top 3 is a ranking, not a due-today filter — a Top 3 story/task due tomorrow is still
+  // Top 3 today. Self-fetch mode's tasksDueToday/storyCandidates are scoped to "due today", so
+  // without this a Top 3 item due on any other date would silently disappear from the pinned
+  // Top 3 section instead of showing up (this was reported live: the dashboard's Today's Plan
+  // Top 3 didn't match the Calendar page's Top 3 priorities panel, which isn't due-date-scoped).
+  const selfTop3Tasks = useMemo(() => {
+    if (!selfContained) return [];
+    const todayIso = top3DateForToday();
+    return fetchedTasks
+      .filter((t) => !(t as any).deleted)
+      .filter((t) => (t.status ?? 0) !== 2)
+      .filter((t) => isTop3Task(t, undefined, todayIso));
+  }, [selfContained, fetchedTasks]);
+
   const items = useMemo<DailyPlanTimelineItem[]>(() => {
     const tasksDueToday = externalTasksDueToday ?? selfTasksDueToday;
     const chores = externalChoresDueToday ?? selfChoresDueToday;
@@ -326,6 +340,11 @@ export function useDailyPlanTimeline(params: UseDailyPlanTimelineParams = {}): U
       rows.push(row);
     };
 
+    const dueTodayTaskIds = new Set(tasksDueToday.map((t) => t.id));
+    // Top 3 tasks not otherwise due today (self-fetch mode only — see selfTop3Tasks) still need
+    // to appear, pinned, even though they have no "due today" timestamp to bucket by.
+    const extraTop3Tasks = selfTop3Tasks.filter((t) => !dueTodayTaskIds.has(t.id));
+
     tasksDueToday.forEach((task) => {
       const dueMs = resolveRecurringDueMs(task, today, startMs) ?? resolveTaskDueMs(task);
       add({
@@ -337,6 +356,19 @@ export function useDailyPlanTimeline(params: UseDailyPlanTimelineParams = {}): U
         bucket: bucketFromTime(dueMs, (task as any).timeOfDay),
         task,
         isTop3: isTop3Task(task, undefined, todayIso),
+      });
+    });
+
+    extraTop3Tasks.forEach((task) => {
+      add({
+        id: `task-${task.id}`,
+        kind: 'task',
+        title: task.title,
+        timeLabel: 'Top 3 · not due today',
+        sortMs: null,
+        bucket: bucketFromTime(null, (task as any).timeOfDay),
+        task,
+        isTop3: true,
       });
     });
 
@@ -365,18 +397,21 @@ export function useDailyPlanTimeline(params: UseDailyPlanTimelineParams = {}): U
         const matchedStartMs = resolveDateValue((story as any).calendarMatchedStart);
         const matchedEndMs = resolveDateValue((story as any).calendarMatchedEnd);
         const isToday = (ms: number | null) => ms !== null && ms >= startMs && ms <= endMs;
-        if (!isToday(dueMs) && !isToday(matchedStartMs)) return;
+        const storyIsTop3 = isTop3Story(story, todayIso);
+        // A Top 3 story is still Top 3 even when its own due date isn't today (see
+        // selfTop3Tasks comment above for the same reasoning applied to tasks).
+        if (!isToday(dueMs) && !isToday(matchedStartMs) && !storyIsTop3) return;
         const sortTime = matchedStartMs ?? dueMs;
         if (matchedStartMs !== null) gcalMatchedTitles.add(story.title.trim().toLowerCase());
         add({
           id: `story-${story.id}`,
           kind: 'story',
           title: story.title,
-          timeLabel: timelineTimeLabel(matchedStartMs ?? dueMs, matchedEndMs ?? undefined),
+          timeLabel: sortTime !== null ? timelineTimeLabel(matchedStartMs ?? dueMs, matchedEndMs ?? undefined) : 'Top 3 · not due today',
           sortMs: sortTime,
           bucket: bucketFromTime(sortTime, (story as any).timeOfDay),
           story,
-          isTop3: isTop3Story(story, todayIso),
+          isTop3: storyIsTop3,
         });
       });
 
@@ -416,6 +451,7 @@ export function useDailyPlanTimeline(params: UseDailyPlanTimelineParams = {}): U
     selfTasksDueToday,
     selfChoresDueToday,
     selfStoryCandidates,
+    selfTop3Tasks,
     fetchedSummary,
     sharedFilters,
     matchesTaskFilter,
