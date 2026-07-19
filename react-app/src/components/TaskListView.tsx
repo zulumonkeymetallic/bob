@@ -13,6 +13,7 @@ import EditTaskModal from './EditTaskModal';
 import { isStatus, isTheme } from '../utils/statusHelpers';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { useSprint } from '../contexts/SprintContext';
+import WorkSurfaceNav from './common/WorkSurfaceNav';
 
 const TaskListView: React.FC = () => {
   const { currentUser } = useAuth();
@@ -262,8 +263,9 @@ const TaskListView: React.FC = () => {
       width: '100%'
     }}>
       <div style={{ maxWidth: '100%', margin: '0' }}>
+        <WorkSurfaceNav />
         {/* Header */}
-        <div style={{ 
+        <div style={{
           display: 'flex', 
           justifyContent: 'space-between', 
           alignItems: 'center', 

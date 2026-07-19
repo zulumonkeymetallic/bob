@@ -18,6 +18,7 @@ import YearMultiSelect from './shared/YearMultiSelect';
 import { isStatus } from '../utils/statusHelpers';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import ConfirmDialog from './ConfirmDialog';
+import WorkSurfaceNav from './common/WorkSurfaceNav';
 import { arrayMove } from '@dnd-kit/sortable';
 import { useSidebar } from '../contexts/SidebarContext';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
@@ -685,6 +686,7 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
       boxSizing: 'border-box',
     }}>
       <div style={{ maxWidth: '100%', margin: '0', display: 'flex', flexDirection: 'column', gap: '10px', height: embedded ? '100%' : 'calc(100vh - 32px)' }}>
+        {!embedded && <WorkSurfaceNav />}
         <PlanActionBar />
         {/* Header */}
         <div style={{

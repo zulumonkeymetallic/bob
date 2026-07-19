@@ -1,0 +1,18 @@
+/* Responsive grid for the desktop Coach page — cards reflow into columns instead of
+   stacking in one long vertical strip, so a wide desktop viewport actually gets used. */
+.ai-coach-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+
+.ai-coach-grid-wide {
+  grid-column: span 2;
+}
+
+@media (max-width: 767.98px) {
+  .ai-coach-grid-wide {
+    grid-column: span 1;
+  }
+}

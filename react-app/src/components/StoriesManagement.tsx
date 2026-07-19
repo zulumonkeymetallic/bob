@@ -21,6 +21,7 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useSprint } from '../contexts/SprintContext';
 import StatCard from './common/StatCard';
 import PageHeader from './common/PageHeader';
+import WorkSurfaceNav from './common/WorkSurfaceNav';
 import { SkeletonStatCard } from './common/SkeletonLoader';
 import EmptyState from './common/EmptyState';
 import { colors } from '../utils/colors';
@@ -398,6 +399,7 @@ const StoriesManagement: React.FC = () => {
       width: '100%'
     }}>
       <div style={{ maxWidth: '100%', margin: '0' }}>
+        <WorkSurfaceNav />
         <PageHeader
           title="Stories Management"
           breadcrumbs={[

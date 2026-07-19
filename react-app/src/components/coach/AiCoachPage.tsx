@@ -36,6 +36,7 @@ import { CoachVerdictBanner } from './CoachVerdictBanner';
 import { AiCoachPhotoGallery } from './AiCoachPhotoGallery';
 import FitnessKpiGrid from '../fitness/FitnessKpiGrid';
 import type { CoachDaily } from '../../types/CoachTypes';
+import './AiCoachPage.css';
 
 // ─── Weekly sport helpers (shared with MetricsPage) ────────────────────────────
 function getISOWeekKey(date: Date): string {
@@ -888,6 +889,7 @@ export const AiCoachPage: React.FC = () => {
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [workouts, setWorkouts] = useState<any[]>([]);
   const [lastHealthKitSync, setLastHealthKitSync] = useState<number | null>(null);
+  const [healthKitSyncError, setHealthKitSyncError] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const today = todayStr();
 
@@ -949,14 +951,17 @@ export const AiCoachPage: React.FC = () => {
     return unsub;
   }, [uid]);
 
-  // Load workouts for weekly KPI grid
+  // Load workouts for weekly KPI grid — only the last 12 weeks are ever displayed
+  // (getLast12WeekKeys), so 2000 docs was pulling years of history on every page
+  // load for a chart that uses at most a few hundred of them. 400 comfortably
+  // covers 12 weeks even at 2+ sessions/day.
   useEffect(() => {
     if (!uid) return;
     const q = query(
       collection(db, 'metrics_workouts'),
       where('ownerUid', '==', uid),
       orderBy('startDate', 'desc'),
-      limit(2000)
+      limit(400)
     );
     return onSnapshot(q, snap => {
       setWorkouts(snap.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -973,11 +978,19 @@ export const AiCoachPage: React.FC = () => {
       limit(1)
     );
     return onSnapshot(q, snap => {
-      if (snap.empty) { setLastHealthKitSync(null); return; }
+      if (snap.empty) { setLastHealthKitSync(null); setHealthKitSyncError(false); return; }
       const d = snap.docs[0].data();
       const ts = d.updatedAt?.toMillis?.() ?? (typeof d.updatedAt === 'number' ? d.updatedAt : null);
       setLastHealthKitSync(ts);
-    }, () => setLastHealthKitSync(null));
+      setHealthKitSyncError(false);
+    }, (err) => {
+      // A missing composite index (or any other query failure) reads identically to "no
+      // data" unless we distinguish it — don't tell the user to re-sync their phone over
+      // a backend index problem they can't fix.
+      console.warn('[AiCoachPage] health_metrics sync query failed', err);
+      setLastHealthKitSync(null);
+      setHealthKitSyncError(true);
+    });
   }, [uid]);
 
   // Compute weekly sport KPI grid from workouts
@@ -1054,7 +1067,7 @@ export const AiCoachPage: React.FC = () => {
   const phase = coachData?.phase;
 
   return (
-    <div className="container-fluid py-3" style={{ maxWidth: 680 }}>
+    <div className="container-fluid py-3" style={{ maxWidth: 1400 }}>
       {/* Header */}
       <div className="d-flex align-items-center justify-content-between mb-4">
         <div>
@@ -1075,7 +1088,12 @@ export const AiCoachPage: React.FC = () => {
                 })()}
               </span>
             )}
-            {lastHealthKitSync === null && (
+            {lastHealthKitSync === null && healthKitSyncError && (
+              <span className="ms-2" style={{ fontSize: '0.7rem', color: 'var(--bs-warning)' }}>
+                · HealthKit: sync status unavailable right now
+              </span>
+            )}
+            {lastHealthKitSync === null && !healthKitSyncError && (
               <span className="ms-2" style={{ fontSize: '0.7rem', color: 'var(--bs-secondary)' }}>
                 · HealthKit: no data — open BOB on iPhone to sync
               </span>
@@ -1125,7 +1143,7 @@ export const AiCoachPage: React.FC = () => {
         <div className="alert alert-danger small mb-3">{uploadError}</div>
       )}
 
-      <div className="vstack gap-3">
+      <div className="ai-coach-grid">
         {/* Vitals dials — Recovery / Sleep / Training Load */}
         {coachData ? (
           <VitalsDialsRow coachData={coachData} />
@@ -1170,14 +1188,16 @@ export const AiCoachPage: React.FC = () => {
         {/* What the coach did today */}
         {coachData && <CoachActionsToday coachData={coachData} />}
 
-        {/* Phase card */}
+        {/* Phase card — wide: carries the 12-week KPI grid, benefits from the extra room */}
         {phase && coachData && (
-          <PhaseCard
-            phase={phase}
-            coachData={coachData}
-            weeklyKpiRows={weeklyKpiRows.length > 0 ? weeklyKpiRows : undefined}
-            onNavigate={navigate}
-          />
+          <div className="ai-coach-grid-wide">
+            <PhaseCard
+              phase={phase}
+              coachData={coachData}
+              weeklyKpiRows={weeklyKpiRows.length > 0 ? weeklyKpiRows : undefined}
+              onNavigate={navigate}
+            />
+          </div>
         )}
 
         {/* Macros */}
@@ -1223,8 +1243,8 @@ export const AiCoachPage: React.FC = () => {
           />
         )}
 
-        {/* Photo gallery */}
-        <div className="card border-0 shadow-sm">
+        {/* Photo gallery — wide: a grid of photos reads better with more width */}
+        <div className="ai-coach-grid-wide card border-0 shadow-sm">
           <div className="card-body">
             <h6 className="text-muted mb-3" style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
               Progress Photos

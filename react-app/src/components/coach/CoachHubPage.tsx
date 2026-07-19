@@ -9,11 +9,12 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Brain, TrendingUp } from 'lucide-react';
 import AiCoachPage from './AiCoachPage';
 import FinanceCoachPage from '../finance/FinanceCoachPage';
+import WorkSurfaceNav from '../common/WorkSurfaceNav';
 
 type CoachTab = 'ai' | 'finance';
 
 const TABS: Array<{ key: CoachTab; label: string; icon: React.ReactNode }> = [
-  { key: 'ai',      label: 'AI Coach',      icon: <Brain size={14} /> },
+  { key: 'ai',      label: 'Fitness Coach', icon: <Brain size={14} /> },
   { key: 'finance', label: 'Finance Coach', icon: <TrendingUp size={14} /> },
 ];
 
@@ -30,6 +31,7 @@ const CoachHubPage: React.FC = () => {
   return (
     <div className="d-flex flex-column" style={{ height: '100%', minHeight: 0 }}>
       <div className="border-bottom px-3 pt-2" style={{ flexShrink: 0, background: 'var(--bs-body-bg)' }}>
+        <WorkSurfaceNav />
         <Nav variant="tabs" className="border-0">
           {TABS.map(({ key, label, icon }) => (
             <Nav.Item key={key}>
