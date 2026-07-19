@@ -37,7 +37,9 @@ const StoriesManagement: React.FC = () => {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [sprints, setSprints] = useState<Sprint[]>([]); // Local state for sprints
   const [loading, setLoading] = useState(true);
-  const [filterStatus, setFilterStatus] = useState<string>('all');
+  // Default to hiding Done stories — reuses the existing status filter (see filteredStories
+  // below) rather than a separate toggle; "All Status" still shows everything including Done.
+  const [filterStatus, setFilterStatus] = useState<string>('not_done');
   const [filterTheme, setFilterTheme] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [showAddStoryModal, setShowAddStoryModal] = useState(false);
@@ -364,7 +366,8 @@ const StoriesManagement: React.FC = () => {
     : null;
   const filteredStories = stories.filter(story => {
     if (applyActiveSprintFilter && resolvedSprintId && story.sprintId !== resolvedSprintId) return false;
-    if (filterStatus !== 'all' && !isStatus(story.status, filterStatus)) return false;
+    if (filterStatus === 'not_done' && isStatus(story.status, 'done')) return false;
+    else if (filterStatus !== 'all' && filterStatus !== 'not_done' && !isStatus(story.status, filterStatus)) return false;
     if (filterTheme !== 'all' && String(story.theme ?? '') !== filterTheme) return false;
     // Match search term against title + goal title
     const goal = goals.find(g => g.id === story.goalId);
@@ -549,6 +552,7 @@ const StoriesManagement: React.FC = () => {
                     onChange={(e) => setFilterStatus(e.target.value)}
                     style={{ border: '1px solid var(--line)' }}
                   >
+                    <option value="not_done">Open (hide Done)</option>
                     <option value="all">All Status</option>
                     <option value="backlog">Backlog</option>
                     <option value="active">Active</option>
