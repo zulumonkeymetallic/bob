@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Button } from 'react-bootstrap';
 import { CalendarCheck, CalendarDays } from 'lucide-react';
 import { doc, getDoc } from 'firebase/firestore';
 import { format, startOfWeek, addDays } from 'date-fns';
@@ -26,6 +25,10 @@ const getEndOfTuesdayForWeek = (weekStart: Date): Date => {
   return cutoff;
 };
 
+// Only ever mounted inside NotificationStream's bell dropdown (confirmed: no other call
+// sites) — matches the plain-row style the rest of that dropdown already uses
+// (DeferralCandidatesBanner, GlobalGoalFocusBanner, CoachVerdictBanner's compact mode)
+// instead of a full-width react-bootstrap Alert with its own icon/button chrome.
 const CheckInBanner: React.FC = () => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
@@ -86,58 +89,66 @@ const CheckInBanner: React.FC = () => {
 
   if (!showDaily && !showWeekly) return null;
 
+  const rowStyle: React.CSSProperties = {
+    display: 'flex', alignItems: 'center', gap: 8,
+    background: 'var(--notion-hover, rgba(0,0,0,0.04))',
+    border: '1px solid var(--border, #e5e7eb)', borderRadius: 6,
+    padding: '5px 8px', textAlign: 'left', cursor: 'pointer', width: '100%',
+  };
+  const dismissStyle: React.CSSProperties = {
+    background: 'none', border: 'none', padding: 0, fontSize: 10,
+    color: 'var(--brand, #5f77dc)', cursor: 'pointer', textDecoration: 'underline', flexShrink: 0,
+  };
+
   return (
-    <div className="mb-3">
-      {showDaily && (
-        <Alert
-          variant="info"
-          dismissible
-          onClose={() => {
-            if (dailyKey) {
-              localStorage.setItem(DAILY_DISMISS_KEY(dailyKey), 'true');
-            }
-            setShowDaily(false);
-          }}
-          className="border-0 shadow-sm"
-        >
-          <div className="d-flex align-items-center justify-content-between">
-            <div className="d-flex align-items-center gap-2">
-              <CalendarCheck size={20} />
-              <div>
-                <div className="fw-semibold">Daily check-in</div>
-                <div className="text-muted small">{dailyMessage}</div>
-              </div>
-            </div>
-            <Button size="sm" variant="primary" onClick={() => navigate('/checkin/daily')}>
-              Start
-            </Button>
-          </div>
-        </Alert>
-      )}
-      {showWeekly && (
-        <Alert
-          variant="secondary"
-          dismissible
-          onClose={() => {
-            localStorage.setItem(WEEKLY_DISMISS_KEY(weekKey), 'true');
-            setShowWeekly(false);
-          }}
-          className="border-0 shadow-sm"
-        >
-          <div className="d-flex align-items-center justify-content-between">
-            <div className="d-flex align-items-center gap-2">
-              <CalendarDays size={20} />
-              <div>
-                <div className="fw-semibold">Weekly check-in</div>
-                <div className="text-muted small">Review last week’s planned vs completed items.</div>
-              </div>
-            </div>
-            <Button size="sm" variant="outline-primary" onClick={() => navigate('/checkin/weekly')}>
-              Review week
-            </Button>
-          </div>
-        </Alert>
-      )}
+    <div style={{ minWidth: 260 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--muted)', marginBottom: 6 }}>
+        Check-in
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {showDaily && (
+          <button type="button" style={rowStyle} onClick={() => navigate('/checkin/daily')}>
+            <CalendarCheck size={13} style={{ flexShrink: 0, color: 'var(--brand, #5f77dc)' }} />
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12, fontWeight: 600 }}>Daily check-in</div>
+              <div style={{ fontSize: 10, color: 'var(--muted)' }}>{dailyMessage}</div>
+            </span>
+            <span
+              role="button"
+              tabIndex={0}
+              style={dismissStyle}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (dailyKey) localStorage.setItem(DAILY_DISMISS_KEY(dailyKey), 'true');
+                setShowDaily(false);
+              }}
+            >
+              Dismiss
+            </span>
+          </button>
+        )}
+        {showWeekly && (
+          <button type="button" style={rowStyle} onClick={() => navigate('/checkin/weekly')}>
+            <CalendarDays size={13} style={{ flexShrink: 0, color: 'var(--brand, #5f77dc)' }} />
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12, fontWeight: 600 }}>Weekly check-in</div>
+              <div style={{ fontSize: 10, color: 'var(--muted)' }}>Review last week’s planned vs completed items.</div>
+            </span>
+            <span
+              role="button"
+              tabIndex={0}
+              style={dismissStyle}
+              onClick={(e) => {
+                e.stopPropagation();
+                localStorage.setItem(WEEKLY_DISMISS_KEY(weekKey), 'true');
+                setShowWeekly(false);
+              }}
+            >
+              Dismiss
+            </span>
+          </button>
+        )}
+      </div>
     </div>
   );
 };
