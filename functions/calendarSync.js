@@ -207,13 +207,37 @@ function isEntityTop3(entity) {
   return entity.aiTop3ForDay === true;
 }
 
+// Manual pin order (userPriorityRank, 1 = highest) takes precedence over the
+// P1-P4/critical-low `priority` field as the title tag — a pinned rank is Jim's
+// explicit ordering and is more specific than the coarser priority bucket.
+function priorityLabel(entity) {
+  if (!entity) return null;
+  const rank = Number(entity.userPriorityRank);
+  if (Number.isFinite(rank) && rank >= 1 && rank <= 5) return `#${rank}`;
+  if (entity.userPriorityFlag === true) return '#1';
+  const raw = entity.priority;
+  if (raw === null || raw === undefined || raw === '') return null;
+  const upper = String(raw).trim().toUpperCase();
+  if (/^P[0-4]$/.test(upper)) return upper;
+  const n = Number(raw);
+  if (Number.isFinite(n) && n >= 1 && n <= 4) return `P${n}`;
+  if (upper.includes('CRIT')) return 'P0';
+  if (upper.includes('HIGH')) return 'P1';
+  if (upper.includes('MED')) return 'P2';
+  if (upper.includes('LOW')) return 'P3';
+  return null;
+}
+
 // GCal event titles are the one surface Jim actually looks at while his day is happening —
-// a Top 3 item (or one with an AI score) should be identifiable without opening BOB.
+// a Top 3 item, its user order/priority, and its AI score should be identifiable without
+// opening BOB.
 function decorateEventTitle(baseTitle, entity, aiScoreVal) {
   const top3Prefix = isEntityTop3(entity) ? '⭐ TOP3 · ' : '';
-  const score = Number(aiScoreVal);
-  const aiSuffix = Number.isFinite(score) ? ` · AI ${Math.round(score)}` : '';
-  return `${top3Prefix}${baseTitle}${aiSuffix}`;
+  const pLabel = priorityLabel(entity);
+  const priorityPrefix = pLabel ? `${pLabel} · ` : '';
+  const score = aiScoreVal === null || aiScoreVal === undefined || aiScoreVal === '' ? NaN : Number(aiScoreVal);
+  const aiSuffix = Number.isFinite(score) && score > 0 ? ` · AI ${Math.round(score)}` : '';
+  return `${top3Prefix}${priorityPrefix}${baseTitle}${aiSuffix}`;
 }
 
 function isDoneStatus(value) {
@@ -2065,6 +2089,106 @@ exports.repairDuplicateCalendarEvents = functions.https.onCall(async (data, cont
       error: error?.message || String(error),
     });
     throw new functions.https.HttpsError('internal', error?.message || 'Failed to repair duplicate calendar events');
+  }
+});
+
+// Deletes Google Calendar events that BOB created (tagged via the bob-block-id private
+// extended property) but that no longer have a live calendar_blocks doc backing them, or
+// whose block has since been relinked to a different Google event (superseded, e.g. after
+// a reschedule that raced the async push — see onCalendarBlockWrite's delete branch, which
+// only fires a GCal delete when the deleted doc already had googleEventId set). This is the
+// reconciliation net for every gap in that chain, independent of which one caused the orphan:
+// it never trusts "the block was deleted cleanly," it always re-checks live Firestore state
+// against what's actually still sitting in Google Calendar.
+async function cleanupOrphanedCalendarEvents(uid, { dryRun = false, lookbackDays = 21, forwardDays = 90 } = {}) {
+  const now = Date.now();
+  const timeMin = new Date(now - (lookbackDays * MS_IN_DAY)).toISOString();
+  const timeMax = new Date(now + (forwardDays * MS_IN_DAY)).toISOString();
+
+  let calendar;
+  try {
+    ({ calendar } = await getCalendarClientForUser(uid));
+  } catch (e) {
+    // Not connected / no tokens — nothing to reconcile for this user.
+    return { ok: true, skippedUser: true, reason: e?.message || String(e), scanned: 0, deleted: 0 };
+  }
+
+  const events = await listAllEvents(calendar, { timeMin, timeMax });
+  const bobEvents = events.filter(isConfidentBobCreatedEvent);
+  if (!bobEvents.length) {
+    return { ok: true, scanned: 0, deleted: 0, skipped: 0 };
+  }
+
+  const db = admin.firestore();
+  const blockIds = [...new Set(bobEvents.map(getBobBlockIdFromEvent).filter(Boolean))];
+  const blockSnaps = blockIds.length
+    ? await db.getAll(...blockIds.map((id) => db.collection('calendar_blocks').doc(id)))
+    : [];
+  const liveBlocksById = new Map();
+  blockSnaps.forEach((snap) => { if (snap.exists) liveBlocksById.set(snap.id, snap.data() || {}); });
+
+  let deleted = 0;
+  let skipped = 0;
+  const removals = [];
+  for (const event of bobEvents) {
+    const blockId = getBobBlockIdFromEvent(event);
+    // No block-id tag at all — an older event style we can't safely reconcile. Leave it.
+    if (!blockId) { skipped += 1; continue; }
+    const block = liveBlocksById.get(blockId);
+    const isOrphaned = !block || (block.googleEventId && String(block.googleEventId) !== String(event.id));
+    if (!isOrphaned) continue;
+    removals.push({
+      blockId,
+      eventId: event.id,
+      title: event.summary || null,
+      reason: !block ? 'block_deleted' : 'superseded',
+    });
+    if (dryRun) { deleted += 1; continue; }
+    try {
+      await calendar.events.delete({ calendarId: 'primary', eventId: event.id });
+      deleted += 1;
+    } catch (e) {
+      console.warn('[cleanupOrphanedCalendarEvents] delete failed', uid, event.id, e?.message || e);
+      skipped += 1;
+    }
+  }
+
+  await logCalendarIntegration(uid, {
+    action: 'cleanup_orphans',
+    status: 'success',
+    dryRun,
+    scanned: bobEvents.length,
+    deleted,
+    skipped,
+    removals: removals.slice(0, 50),
+  });
+
+  return { ok: true, scanned: bobEvents.length, deleted, skipped };
+}
+
+exports._cleanupOrphanedCalendarEvents = cleanupOrphanedCalendarEvents;
+exports._cleanupOrphanedCalendarEventsForAllUsers = async function(options = {}) {
+  const db = admin.firestore();
+  const profiles = await db.collection('profiles').get().catch(() => ({ docs: [] }));
+  const results = [];
+  for (const p of profiles.docs) {
+    try {
+      const r = await cleanupOrphanedCalendarEvents(p.id, options);
+      results.push({ uid: p.id, ...r });
+    } catch (e) {
+      results.push({ uid: p.id, error: e?.message || String(e) });
+    }
+  }
+  return { ok: true, results };
+};
+
+exports.cleanupOrphanedCalendarEventsNow = functions.https.onCall(async (data, context) => {
+  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+  const dryRun = data?.dryRun === true;
+  try {
+    return await cleanupOrphanedCalendarEvents(context.auth.uid, { dryRun });
+  } catch (error) {
+    throw new functions.https.HttpsError('internal', error?.message || 'Failed to clean up orphaned calendar events');
   }
 });
 

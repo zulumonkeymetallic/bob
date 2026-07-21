@@ -4802,9 +4802,20 @@ exports.replanCalendarNow = onCall({
     console.warn('[replanCalendarNow] Sync to scheduled_instances failed:', error?.message);
   }
 
+  let orphanCleanup = null;
+  try {
+    const calSync = require('./calendarSync');
+    if (calSync?._cleanupOrphanedCalendarEvents) {
+      orphanCleanup = await calSync._cleanupOrphanedCalendarEvents(uid);
+    }
+  } catch (error) {
+    console.warn('[replanCalendarNow] Orphaned GCal event cleanup failed:', error?.message);
+  }
+
   return {
     ok: true,
     ...result,
+    orphanCleanup,
   };
 });
 
@@ -5251,6 +5262,20 @@ async function runNightlyChainCore() {
           const calSync = require('./calendarSync');
           if (!calSync?._pushPendingBlocksForAllUsers) return { skipped: true, reason: 'no export' };
           return await calSync._pushPendingBlocksForAllUsers();
+        } catch (e) {
+          return { skipped: true, reason: e?.message || String(e) };
+        }
+      },
+    },
+    {
+      // Runs after the push step so newly-created events have had a chance to land
+      // their googleEventId back onto the block before we judge anything orphaned.
+      name: 'cleanupOrphanedCalendarEvents',
+      fn: async () => {
+        try {
+          const calSync = require('./calendarSync');
+          if (!calSync?._cleanupOrphanedCalendarEventsForAllUsers) return { skipped: true, reason: 'no export' };
+          return await calSync._cleanupOrphanedCalendarEventsForAllUsers();
         } catch (e) {
           return { skipped: true, reason: e?.message || String(e) };
         }

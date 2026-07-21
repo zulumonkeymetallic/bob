@@ -1016,9 +1016,11 @@ const MobileHome: React.FC = () => {
 
   // Unified daily-plan timeline (tasks/chores/stories due today + shaded GCal event rows),
   // grouped into morning/afternoon/evening buckets. Shared with the desktop dashboard's
-  // DailyPlanWidget via useDailyPlanTimeline — this call is a pure derivation over data
-  // MobileHome already subscribes to, so it adds no new Firestore reads.
+  // DailyPlanWidget via useDailyPlanTimeline. Task/chore/story data is a pure derivation over
+  // data MobileHome already subscribes to; `uid` adds the one new live subscription (raw GCal
+  // event rows), replacing the once-a-day daily_summaries snapshot the hook used to fall back to.
   const { items: unifiedTimelineItems, bucketCounts: dailyPlanBucketCounts } = useDailyPlanTimeline({
+    uid: currentUser?.uid,
     tasksDueToday: tasksDueTodayForMobile,
     choresDueToday,
     storyCandidates: sortedStories,

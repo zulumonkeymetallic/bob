@@ -76,14 +76,38 @@ export async function loadEntitySummary(type: EntityLookupType, id: string): Pro
   }
 }
 
-export async function resolveEntityByRef<T extends { id: string }>(
-  collectionName: 'goals' | 'stories' | 'tasks',
-  refOrId: string
-): Promise<(T & { id: string }) | null> {
-  const trimmed = String(refOrId || '').trim();
-  if (!trimmed) return null;
+// BOB's own human-readable refs (TK-XXXXX, ST-XXXXX, GR-XXXXX, SP-XXXXX) never collide
+// with a Firestore auto-ID, so detecting the pattern lets us skip straight to the field
+// query instead of paying for a doomed direct-doc-ID lookup on every deep-link click.
+const REF_PATTERN = /^(TK|ST|GR|SP)-[A-Z0-9]+$/i;
 
-  // Attempt direct document lookup first
+async function queryByField<T extends { id: string }>(
+  collectionName: 'goals' | 'stories' | 'tasks',
+  field: string,
+  trimmed: string,
+): Promise<(T & { id: string }) | null> {
+  try {
+    const ownerUid = auth.currentUser?.uid;
+    const colRef = collection(db, collectionName);
+    const snap = await getDocs(
+      ownerUid
+        ? query(colRef, where(field, '==', trimmed), where('ownerUid', '==', ownerUid), limit(1))
+        : query(colRef, where(field, '==', trimmed), limit(1))
+    );
+    if (!snap.empty) {
+      const hit = snap.docs[0];
+      return { id: hit.id, ...(hit.data() as T) };
+    }
+  } catch {
+    // ignore query errors
+  }
+  return null;
+}
+
+async function getByDocId<T extends { id: string }>(
+  collectionName: 'goals' | 'stories' | 'tasks',
+  trimmed: string,
+): Promise<(T & { id: string }) | null> {
   try {
     const directSnap = await getDoc(doc(db, collectionName, trimmed));
     if (directSnap.exists()) {
@@ -92,26 +116,27 @@ export async function resolveEntityByRef<T extends { id: string }>(
   } catch {
     // ignore doc errors
   }
+  return null;
+}
 
-  // Fall back to querying by ref/reference fields
-  try {
-    const refs = ['ref', 'reference'];
-    const ownerUid = auth.currentUser?.uid;
-    const colRef = collection(db, collectionName);
-    for (const field of refs) {
-      const snap = await getDocs(
-        ownerUid
-          ? query(colRef, where(field, '==', trimmed), where('ownerUid', '==', ownerUid), limit(1))
-          : query(colRef, where(field, '==', trimmed), limit(1))
-      );
-      if (!snap.empty) {
-        const hit = snap.docs[0];
-        return { id: hit.id, ...(hit.data() as T) };
-      }
-    }
-  } catch {
-    // ignore query errors
+export async function resolveEntityByRef<T extends { id: string }>(
+  collectionName: 'goals' | 'stories' | 'tasks',
+  refOrId: string
+): Promise<(T & { id: string }) | null> {
+  const trimmed = String(refOrId || '').trim();
+  if (!trimmed) return null;
+
+  if (REF_PATTERN.test(trimmed)) {
+    // Human-readable ref: query by ref first (one round trip), then the legacy
+    // `reference` field, then fall back to treating it as a raw doc ID in case an
+    // old ID-based link is still in circulation.
+    return (await queryByField<T>(collectionName, 'ref', trimmed))
+      || (await queryByField<T>(collectionName, 'reference', trimmed))
+      || (await getByDocId<T>(collectionName, trimmed));
   }
 
-  return null;
+  // Not ref-shaped: it's almost certainly a Firestore doc ID (old-style link).
+  return (await getByDocId<T>(collectionName, trimmed))
+    || (await queryByField<T>(collectionName, 'ref', trimmed))
+    || (await queryByField<T>(collectionName, 'reference', trimmed));
 }

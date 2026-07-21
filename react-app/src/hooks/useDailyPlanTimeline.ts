@@ -5,12 +5,20 @@
  *
  * Two usage modes:
  *  - Controlled mode (MobileHome.tsx): pass already-fetched `tasksDueToday` / `choresDueToday` /
- *    `storyCandidates` / `summary` (MobileHome already subscribes to these for other tabs) plus
- *    the existing shared-filter predicates. This is a pure derivation — zero new Firestore reads.
+ *    `storyCandidates` (MobileHome already subscribes to these for other tabs) plus the existing
+ *    shared-filter predicates. Also pass `uid` so raw GCal event rows can be sourced live (see
+ *    below) — every other prop here stays a pure derivation with zero new Firestore reads.
  *  - Self-fetch mode (DailyPlanWidget on the desktop dashboard): pass `uid` (and optionally
- *    `persona`) and omit the data props; the hook subscribes to tasks/stories/daily_summaries
- *    itself, mirroring the queries MobileHome already runs, and exposes simple completion
- *    actions (`completeTask` / `completeChore`) for the widget's checkboxes.
+ *    `persona`) and omit the data props; the hook subscribes to tasks/stories itself, mirroring
+ *    the queries MobileHome already runs, and exposes simple completion actions (`completeTask` /
+ *    `completeChore`) for the widget's checkboxes.
+ *
+ * Raw GCal event rows: sourced live from `calendar_blocks` (source === 'gcal', today's window)
+ * whenever `uid` is supplied, in both modes — this is the one deliberate extra subscription,
+ * added because the previous source (`extractCalendarEventsFromSummary`, reading a `daily_summaries`
+ * doc) only refreshes once a day via the digest job, so events added/moved/cancelled later in the
+ * day never showed up until the next day's digest ran. `summary` is kept only as a fallback for
+ * callers that don't pass `uid`.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { collection, doc, onSnapshot, orderBy, query, limit, updateDoc, deleteDoc, serverTimestamp, where } from 'firebase/firestore';
@@ -160,7 +168,11 @@ const getTaskLastDoneMs = (task: Task): number | null => {
 };
 
 export interface UseDailyPlanTimelineParams {
-  /** Self-fetch mode only: owner uid to subscribe with. */
+  /**
+   * Owner uid. Required for self-fetch mode. In controlled mode it's optional but should still
+   * be passed — it's what powers the live `calendar_blocks` (source: 'gcal') subscription that
+   * raw GCal event rows are now sourced from, instead of the once-a-day `summary` snapshot.
+   */
   uid?: string | null;
   /** Self-fetch mode only: persona filter applied to the tasks/stories queries. */
   persona?: string | null;
@@ -219,6 +231,42 @@ export function useDailyPlanTimeline(params: UseDailyPlanTimelineParams = {}): U
     d.setHours(0, 0, 0, 0);
     return d.getTime();
   }, []);
+
+  const todayEndMs = useMemo(() => {
+    const d = new Date();
+    d.setHours(23, 59, 59, 999);
+    return d.getTime();
+  }, []);
+
+  // Live raw-GCal-event rows — runs in both modes whenever `uid` is supplied, independent of
+  // `selfContained`. Deliberately not persona-filtered: a work-calendar meeting still belongs on
+  // today's plan regardless of which persona tab is active.
+  const [liveGcalEvents, setLiveGcalEvents] = useState<DailyPlanCalendarEvent[]>([]);
+  useEffect(() => {
+    if (!uid) { setLiveGcalEvents([]); return; }
+    const q = query(
+      collection(db, 'calendar_blocks'),
+      where('ownerUid', '==', uid),
+      where('start', '>=', todayStartMs),
+      where('start', '<=', todayEndMs),
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const mapped = snap.docs
+        .map((docSnap) => {
+          const data = docSnap.data() as any;
+          if (String(data?.source || '').toLowerCase() !== 'gcal') return null;
+          const title = String(data?.title || '').trim();
+          if (!title) return null;
+          const startMs = typeof data?.start === 'number' ? data.start : null;
+          const endMs = typeof data?.end === 'number' ? data.end : null;
+          if (!startMs) return null;
+          return { id: docSnap.id, title, startMs, endMs } as DailyPlanCalendarEvent;
+        })
+        .filter(Boolean) as DailyPlanCalendarEvent[];
+      setLiveGcalEvents(mapped);
+    }, () => setLiveGcalEvents([]));
+    return () => unsub();
+  }, [uid, todayStartMs, todayEndMs]);
 
   useEffect(() => {
     if (!selfContained) return;
@@ -336,7 +384,9 @@ export function useDailyPlanTimeline(params: UseDailyPlanTimelineParams = {}): U
     const chores = externalChoresDueToday ?? selfChoresDueToday;
     const storiesSrc = externalStoryCandidates ?? selfStoryCandidates;
     const summarySrc = externalSummary !== undefined ? externalSummary : fetchedSummary;
-    const calendarEvents = extractCalendarEventsFromSummary(summarySrc);
+    // Prefer the live subscription; only fall back to the once-a-day summary snapshot when no
+    // uid was supplied (so calendarEvents isn't silently empty for a caller that never opted in).
+    const calendarEvents = uid ? liveGcalEvents : extractCalendarEventsFromSummary(summarySrc);
 
     const today = new Date();
     const start = new Date(today); start.setHours(0, 0, 0, 0);
@@ -478,6 +528,8 @@ export function useDailyPlanTimeline(params: UseDailyPlanTimelineParams = {}): U
     selfStoryCandidates,
     selfTop3Tasks,
     fetchedSummary,
+    uid,
+    liveGcalEvents,
     sharedFilters,
     matchesTaskFilter,
     matchesStoryFilter,

@@ -1,7 +1,7 @@
 #!/bin/bash
 # build - Simple BOB multi-repo build orchestrator
 
-MASTER="/Users/jim/GitHub/bob/orchestrate-build.sh"
+MASTER="/Users/jim/git/bob/orchestrate-build.sh"
 
 [ ! -f "$MASTER" ] && echo "❌ Master build script not found" && exit 1
 
