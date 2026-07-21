@@ -105,6 +105,15 @@ function isProtectedTrainingEvent(block) {
     || label.includes('crossfit') || label.includes('gym') || label.includes('training');
 }
 
+// Appointment-shaped events (dentist, doctor, etc.) are protected too, but by a different
+// signal than title keywords — per Jim, 2026-07-21: anything with a real attendee (booked
+// with someone else) rather than a title guess, since a title list would miss things and
+// false-positive on others. `hasAttendees` is populated by calendarSync.js's pull-sync
+// (see pullGoogleEventsForUser) from the raw Google event's attendee list, excluding self.
+function isAppointmentLikeEvent(block) {
+  return block?.hasAttendees === true;
+}
+
 function isFitnessBlock(block) {
   const label = String(block?.theme || block?.category || block?.title || '').toLowerCase();
   return label.includes('health') || label.includes('fitness') || label.includes('gym')
@@ -129,6 +138,25 @@ function findFreeGapsInSlot(slotStartMs, slotEndMs, busyList, minGapMs = MIN_BLO
     gaps.push({ start: cursor, end: slotEndMs });
   }
   return gaps;
+}
+
+// Finds a new home for a GCal event a pinned item just displaced. Not theme-bound —
+// these are casual personal entries (Walk, Meditate, chores), not work or fitness, so any
+// waking-hours gap is fair game. Searches forward from `afterMs` (the displaced event's own
+// original end time, so it tends to land later the same day) through `searchDays`, 6am-10pm.
+function findDisplacementSlot({ afterMs, durationMs, busyList, zone, searchDays = 14 }) {
+  const startDay = DateTime.fromMillis(afterMs, { zone }).startOf('day');
+  for (let offset = 0; offset < searchDays; offset += 1) {
+    const day = startDay.plus({ days: offset });
+    const dayStartMs = day.set({ hour: 6, minute: 0, second: 0, millisecond: 0 }).toMillis();
+    const dayEndMs = day.set({ hour: 22, minute: 0, second: 0, millisecond: 0 }).toMillis();
+    const searchStartMs = offset === 0 ? Math.max(dayStartMs, afterMs) : dayStartMs;
+    if (searchStartMs >= dayEndMs) continue;
+    const gaps = findFreeGapsInSlot(searchStartMs, dayEndMs, busyList, durationMs);
+    const fit = gaps.find((gap) => gap.end - gap.start >= durationMs);
+    if (fit) return { start: fit.start, end: fit.start + durationMs };
+  }
+  return null;
 }
 
 function buildPickSlots(themeAllocationPlan) {
@@ -220,9 +248,10 @@ function buildBusyIntervals(blocks, { planningMode, persona, excludedBlockIds, c
     // Real user calendar events are hard-busy by default — never let a title/theme match
     // (e.g. a GCal meeting titled "Work sync") make a genuine calendar event transparent
     // to the placer. The one deliberate exception: a Top3/pinned item in smart mode may
-    // displace a non-training personal GCal entry rather than being blocked by it.
+    // displace a non-training, non-appointment personal GCal entry rather than being
+    // blocked by it.
     if (isUserGcalEvent(block)) {
-      if (allowDisplaceMovableGcal && !isProtectedTrainingEvent(block)) {
+      if (allowDisplaceMovableGcal && !isProtectedTrainingEvent(block) && !isAppointmentLikeEvent(block)) {
         displaceable.push({ start, end, block });
         return;
       }
@@ -1047,35 +1076,66 @@ async function schedulePlannerItemMutation({
 
   await batch.commit();
 
-  // Delete any non-training personal GCal events the final placement actually landed on
-  // top of — only the ones genuinely overlapped, not every candidate that was merely
-  // eligible (chooseSplitPlacements may well have found gaps that avoided them entirely).
+  // Relocate (not remove) any non-training, non-appointment personal GCal events the final
+  // placement actually landed on top of — only the ones genuinely overlapped, not every
+  // candidate that was merely eligible (chooseSplitPlacements may well have found gaps that
+  // avoided them entirely). Move is the primary behaviour per Jim, 2026-07-21; delete is
+  // only a last resort when no slot can be found anywhere in the next two weeks.
   if (Array.isArray(displaceableGcalEvents) && displaceableGcalEvents.length && previewOnly !== true) {
     const displacedNow = displaceableGcalEvents.filter((candidate) =>
       placements.some((p) => candidate.start < p.appliedEndMs && candidate.end > p.appliedStartMs));
-    for (const candidate of displacedNow) {
-      const eventId = candidate.block?.googleEventId || null;
-      if (!eventId) continue;
+    if (displacedNow.length) {
       const calendarSync = require('../calendarSync');
-      const result = await calendarSync.deleteGoogleCalendarEvent(userId, eventId);
-      if (result?.ok) {
-        await logSchedulingActivity({
-          db,
-          ownerUid: userId,
-          entityId: itemId,
-          entityType: normalizedType,
-          referenceNumber: entity.ref || entity.referenceNumber || null,
-          persona,
-          description: `Displaced personal calendar event "${candidate.block?.title || 'Untitled'}" to make room for a pinned Top3 item.`,
-          metadata: {
-            displacedEventId: eventId,
-            displacedTitle: candidate.block?.title || null,
-            displacedStartMs: candidate.start,
-            displacedEndMs: candidate.end,
-          },
-          oldSprintId,
-          newSprintId: resolvedSprintId || oldSprintId,
-        });
+      // Grows as each candidate is relocated, so two displaced events in the same run can't
+      // both get placed into the same new gap.
+      const occupied = [...busyIntervals, ...placements.map((p) => ({ start: p.appliedStartMs, end: p.appliedEndMs }))];
+      for (const candidate of displacedNow) {
+        const eventId = candidate.block?.googleEventId || null;
+        if (!eventId) continue;
+        const durationMs = Math.max(MIN_BLOCK_MS, candidate.end - candidate.start);
+        const newSlot = findDisplacementSlot({ afterMs: candidate.end, durationMs, busyList: occupied, zone });
+        let outcome = null;
+        let metadata = null;
+        if (newSlot) {
+          const result = await calendarSync.moveGoogleCalendarEvent(userId, eventId, newSlot.start, newSlot.end);
+          if (result?.ok) {
+            occupied.push({ start: newSlot.start, end: newSlot.end });
+            if (candidate.block?.id) {
+              await db.collection('calendar_blocks').doc(candidate.block.id).set({
+                start: newSlot.start,
+                end: newSlot.end,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              }, { merge: true });
+            }
+            outcome = 'moved';
+            metadata = { displacedEventId: eventId, displacedTitle: candidate.block?.title || null, newStartMs: newSlot.start, newEndMs: newSlot.end };
+          }
+        }
+        if (!outcome) {
+          // No slot found, or the move itself failed — fall back to deleting rather than
+          // leaving the pinned item silently overlapping a personal event it displaced.
+          const deleteResult = await calendarSync.deleteGoogleCalendarEvent(userId, eventId);
+          if (deleteResult?.ok) {
+            outcome = 'deleted';
+            metadata = { displacedEventId: eventId, displacedTitle: candidate.block?.title || null, reason: newSlot ? 'move_failed' : 'no_slot_found' };
+          }
+        }
+        if (outcome) {
+          await logSchedulingActivity({
+            db,
+            ownerUid: userId,
+            entityId: itemId,
+            entityType: normalizedType,
+            referenceNumber: entity.ref || entity.referenceNumber || null,
+            persona,
+            description: outcome === 'moved'
+              ? `Moved personal calendar event "${candidate.block?.title || 'Untitled'}" to make room for a pinned Top3 item.`
+              : `Removed personal calendar event "${candidate.block?.title || 'Untitled'}" to make room for a pinned Top3 item (no relocation slot found in the next 14 days).`,
+            metadata,
+            oldSprintId,
+            newSprintId: resolvedSprintId || oldSprintId,
+          });
+        }
       }
     }
   }

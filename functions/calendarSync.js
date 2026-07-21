@@ -1912,24 +1912,36 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
     else if (action === 'delete') {
       // For delete, blockData must be provided or we can't get googleEventId if doc is gone
       eventId = block?.googleEventId || null;
+      let deleteError = null;
       if (eventId) {
         try {
           await calendar.events.delete({ calendarId: 'primary', eventId });
         } catch (e) {
-          console.warn('GCal delete failed (might be already deleted)', e.message);
+          const status = e?.code || e?.response?.status;
+          // 404/410 = the event was already gone — that's the delete succeeding, not
+          // failing. Any other error (auth, network, rate limit, ...) is a real failure
+          // and must not be reported as success — this was silently true of every delete
+          // before, which is why orphaned GCal events were untraceable (see
+          // cleanupOrphanedCalendarEvents): a failed delete looked identical to a
+          // successful one in this function's own logs.
+          if (status !== 404 && status !== 410) {
+            deleteError = e?.message || String(e);
+            console.warn('[syncBlockToGoogle] GCal delete failed', eventId, deleteError);
+          }
         }
       }
       await logCalendarIntegration(uid, {
         action: 'push',
         direction: action,
-        status: 'success',
+        status: deleteError ? 'error' : 'success',
         blockId,
         blockTitle: block?.title || null,
         storyId: block?.storyId || null,
         taskId: block?.taskId || null,
         eventId,
+        error: deleteError,
       });
-      return { success: true };
+      return { success: !deleteError, eventId, error: deleteError || undefined };
     }
     return { success: false };
   } catch (err) {
@@ -2208,6 +2220,28 @@ exports.deleteGoogleCalendarEvent = async function(uid, eventId) {
   }
 };
 
+// Used by the same displacement flow, preferred over deleteGoogleCalendarEvent — per Jim,
+// 2026-07-21: a displaced Walk/Meditate/chore should be moved to a new slot, not just
+// removed. Only falls back to delete (in schedulingService.js) when no slot can be found.
+exports.moveGoogleCalendarEvent = async function(uid, eventId, newStartMs, newEndMs) {
+  if (!eventId) return { ok: false, reason: 'no_event_id' };
+  try {
+    const { calendar } = await getCalendarClientForUser(uid);
+    await calendar.events.patch({
+      calendarId: 'primary',
+      eventId,
+      resource: {
+        start: { dateTime: new Date(newStartMs).toISOString() },
+        end: { dateTime: new Date(newEndMs).toISOString() },
+      },
+    });
+    return { ok: true };
+  } catch (e) {
+    console.warn('[moveGoogleCalendarEvent] failed', uid, eventId, e?.message || e);
+    return { ok: false, reason: e?.message || String(e) };
+  }
+};
+
 exports._syncBlockToGoogle = syncBlockToGoogle;
 exports._evaluateGoogleSyncPolicyForBlock = evaluateGoogleSyncPolicyForBlock;
 exports._pushPendingBlocksForAllUsers = async function() {
@@ -2475,6 +2509,10 @@ async function pullGoogleEventsForUser(uid, { windowStart, windowEnd }) {
           rationale: event.description || null,
           location: event.location || null,
           allDay: !!event.start?.date,
+          // Used by schedulingService.js's Top3/pinned-item GCal-displacement flow to spot
+          // appointment-like events (booked with someone else, e.g. a dentist) and keep
+          // them protected even though they're not a training session either.
+          hasAttendees: Array.isArray(event.attendees) && event.attendees.some((a) => a?.self !== true),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         };
 

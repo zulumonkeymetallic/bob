@@ -12,33 +12,13 @@ const DetailLevelContext = createContext<DetailLevelContextValue>({
   setDetailLevel: () => {},
 });
 
-const DETAIL_LEVEL_STORAGE_KEY = 'plannerDetailLevel';
-
-const isDetailLevel = (value: unknown): value is DetailLevel => (
-  value === 'full' || value === 'compact' || value === 'minimal'
-);
-
-// Default to minimal across planner/kanban surfaces unless the user has an explicit saved preference.
-const getInitialLevel = (): DetailLevel => {
-  if (typeof window !== 'undefined') {
-    try {
-      const stored = window.localStorage.getItem(DETAIL_LEVEL_STORAGE_KEY);
-      if (isDetailLevel(stored)) return stored;
-    } catch {}
-    return 'minimal';
-  }
-  return 'minimal';
-};
-
+// Always starts on 'minimal' on every load, every device, no exceptions — per Jim,
+// 2026-07-21. This used to persist the user's last choice to localStorage and read it
+// back on the next load, which meant toggling to Compact/Full even once made that the
+// de facto permanent default from then on (defeating the point of a "default"). Switching
+// within a session still works via setDetailLevel; it just never survives a reload.
 export const DetailLevelProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [detailLevel, setDetailLevel] = useState<DetailLevel>(getInitialLevel);
-
-  React.useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      window.localStorage.setItem(DETAIL_LEVEL_STORAGE_KEY, detailLevel);
-    } catch {}
-  }, [detailLevel]);
+  const [detailLevel, setDetailLevel] = useState<DetailLevel>('minimal');
 
   return (
     <DetailLevelContext.Provider value={{ detailLevel, setDetailLevel }}>
