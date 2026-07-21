@@ -153,13 +153,39 @@ build_web() {
 EOF
     
     if [ "$DRY_RUN" != "true" ]; then
-        # Deploy to Firebase Hosting
+        # Deploy to Firebase Hosting. Full output goes to a log file first, then we grep
+        # a summary out of the file — piping the live command straight into `head` is what
+        # bit us on the functions deploy below (see that comment), so both go through the
+        # same safe pattern even though hosting's own output is short enough it rarely hits it.
         log_info "Deploying to Firebase Hosting..."
-        firebase deploy --only hosting --force 2>&1 | grep -E "Deploy complete|Error" | head -5 >&2
-        
-        # Deploy functions
+        local hosting_log
+        hosting_log="$(mktemp /tmp/bob_hosting_deploy.XXXXXX.log)"
+        firebase deploy --only hosting --force > "$hosting_log" 2>&1
+        local hosting_status=$?
+        grep -E "Deploy complete|Error" "$hosting_log" | head -5 >&2
+        if [ $hosting_status -ne 0 ]; then
+            log_error "Firebase Hosting deploy failed (exit $hosting_status) — see $hosting_log"
+            return 1
+        fi
+
+        # Deploy functions. `firebase deploy --only functions` logs one line per function
+        # analyzed/deployed — with 100+ functions in this project that's always far more than
+        # 10 lines matching "functions", so piping straight into `head -N` closes head's stdin
+        # once N lines are read, which SIGPIPEs the firebase process and kills the deploy
+        # *silently mid-flight*, well before it reaches "Deploy complete". Confirmed live
+        # 2026-07-21: a brand-new function (cleanupOrphanedCalendarEventsNow) never made it to
+        # prod even though this script reported success. Full output goes to a log file instead
+        # so nothing can starve the writer, and the exit code is actually checked.
         log_info "Deploying Cloud Functions..."
-        firebase deploy --only functions --force 2>&1 | grep -E "Deploy complete|Error|functions" | head -10 >&2
+        local functions_log
+        functions_log="$(mktemp /tmp/bob_functions_deploy.XXXXXX.log)"
+        firebase deploy --only functions --force > "$functions_log" 2>&1
+        local functions_status=$?
+        grep -E "Deploy complete|Error|✔|✖" "$functions_log" | tail -20 >&2
+        if [ $functions_status -ne 0 ]; then
+            log_error "Cloud Functions deploy failed (exit $functions_status) — see $functions_log"
+            return 1
+        fi
     else
         log_warning "DRY RUN: Skipping Firebase deployment"
     fi
