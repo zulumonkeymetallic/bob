@@ -648,6 +648,43 @@ const SortableRow: React.FC<SortableRowProps> = ({
     })();
 
     if (isEditing && column.editable) {
+      // Story is a select-type column but with `options` populated from every story title
+      // (see the columns effect that fills it in) — a plain native <select> with hundreds
+      // of entries and no filtering. Searchable text + datalist matches every other
+      // story-linking surface in this app (EditTaskModal, this same file's Add Task modal),
+      // per Jim, 2026-07-21. handleCellSave already resolves a title string to a storyId
+      // (see the 'storyTitle' branch there), so only the input element needs to change.
+      if (column.key === 'storyTitle') {
+        return (
+          <td key={column.key} style={{ width: column.width }}>
+            <input
+              className="form-control"
+              list="modern-task-table-story-options"
+              placeholder="Search story by title..."
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onBlur={(e) => handleCellSave(column.key, e.currentTarget.value)}
+              style={{
+                width: '100%',
+                padding: '6px 8px',
+                border: `1px solid ${themeVars.brand}`,
+                borderRadius: '4px',
+                fontSize: '14px',
+                backgroundColor: themeVars.panel as string,
+                color: themeVars.text as string,
+                outline: 'none',
+                boxShadow: `0 0 0 2px ${rgbaCard(0.2)}`,
+              }}
+              autoFocus
+            />
+            <datalist id="modern-task-table-story-options">
+              {stories.map((s) => (
+                <option key={s.id} value={s.title || ''} />
+              ))}
+            </datalist>
+          </td>
+        );
+      }
       if (column.type === 'select') {
         return (
           <td key={column.key} style={{ width: column.width }}>
