@@ -41,6 +41,15 @@
   }
 }
 
+/* Always single-column, at every width — used when groupByParent is on. A multi-column
+   grid's row-major auto-flow scatters a parent and its children across different columns
+   (e.g. a 2-column grid puts child #1 next to the parent but child #2 a full row below in
+   the OTHER column), which defeats the point of sorting them adjacently in the first place.
+   Hierarchy legibility matters more than density here. */
+.goals-card-grid--stacked {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .goals-card-tile {
   display: flex;
   flex-direction: column;

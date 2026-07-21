@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useLayoutEffect, useRef } from 'react';
 import { startOfWeek, endOfWeek, startOfDay, subDays, format } from 'date-fns';
 import { Card, Badge, Button, Modal, Alert, Toast, ToastContainer } from 'react-bootstrap';
-import { Edit3, Target, Calendar, User, CalendarPlus, Wand2, Activity, Star } from 'lucide-react';
+import { Edit3, Target, Calendar, User, CalendarPlus, Wand2, Activity, Star, BarChart3 } from 'lucide-react';
 import { Goal, Story } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -36,6 +36,15 @@ interface GoalsCardViewProps {
   showDescriptions?: boolean;
   /** Optional small muted caption per goal, rendered under the title (e.g. sprint window on the Focus Goals page) */
   subtitleByGoalId?: Record<string, string>;
+  /** When true, orders goals so children immediately follow their parent (one level — the
+   * common case, e.g. an Ironman goal's phase sub-goals) and indents child cards slightly,
+   * instead of the default flat target-date sort. Off by default so existing callers (the
+   * main /goals page) are unaffected. */
+  groupByParent?: boolean;
+  /** When provided, renders a "Design KPI" quick-action icon on each card, alongside Edit/
+   * Activity/Auto-generate — lets a caller (e.g. Focus Goals' KPI studio) launch the KPI
+   * designer for a specific goal without leaving this view. Omitted entirely if not passed. */
+  onDesignKpi?: (goalId?: string) => void;
   goalKpiStatusByGoalId?: Record<string, {
     goalId: string;
     goalTitle: string;
@@ -60,6 +69,8 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   cardLayout = 'grid',
   showDescriptions,
   subtitleByGoalId,
+  groupByParent = false,
+  onDesignKpi,
   goalKpiStatusByGoalId
 }) => {
   const { showSidebar } = useSidebar();
@@ -175,7 +186,9 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
   };
 
   const showDetailed = cardLayout === 'comfortable';
-  const gridClassName = showDetailed
+  const gridClassName = groupByParent
+    ? 'goals-card-grid goals-card-grid--stacked'
+    : showDetailed
     ? 'goals-card-grid goals-card-grid--comfortable'
     : 'goals-card-grid goals-card-grid--grid';
 
@@ -204,8 +217,41 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
       return Number.POSITIVE_INFINITY;
     };
 
-    return [...goals].sort((a, b) => getTargetMillis(a) - getTargetMillis(b));
-  }, [goals]);
+    const dateSorted = [...goals].sort((a, b) => getTargetMillis(a) - getTargetMillis(b));
+    if (!groupByParent) return dateSorted;
+
+    const byId = new Map(dateSorted.map((g) => [g.id, g]));
+    const childrenByParent = new Map<string, Goal[]>();
+    const topLevel: Goal[] = [];
+    dateSorted.forEach((g) => {
+      const parentId = String((g as any).parentGoalId || '').trim();
+      if (parentId && byId.has(parentId)) {
+        if (!childrenByParent.has(parentId)) childrenByParent.set(parentId, []);
+        childrenByParent.get(parentId)!.push(g);
+      } else {
+        topLevel.push(g);
+      }
+    });
+    const ordered: Goal[] = [];
+    topLevel.forEach((g) => {
+      ordered.push(g);
+      (childrenByParent.get(g.id) || []).forEach((child) => ordered.push(child));
+    });
+    return ordered;
+  }, [goals, groupByParent]);
+
+  // Depth is derived from sortedGoals itself (not recomputed) so it always matches whatever
+  // grouping/ordering actually happened above, even if that logic changes later.
+  const goalDepthById = useMemo(() => {
+    if (!groupByParent) return new Map<string, number>();
+    const idsInView = new Set(sortedGoals.map((g) => g.id));
+    const depths = new Map<string, number>();
+    sortedGoals.forEach((g) => {
+      const parentId = String((g as any).parentGoalId || '').trim();
+      depths.set(g.id, parentId && idsInView.has(parentId) ? 1 : 0);
+    });
+    return depths;
+  }, [sortedGoals, groupByParent]);
 
   useLayoutEffect(() => {
     const gridEl = gridRef.current;
@@ -795,12 +841,16 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
             : '';
           const latestActivityUser = latestActivity?.userEmail ? latestActivity.userEmail.split('@')[0] : '';
           const rowSpan = rowSpans[goal.id];
+          const goalDepth = goalDepthById.get(goal.id) || 0;
           return (
             <div
               key={goal.id}
               className={`goals-card-tile${isFocusAligned ? ' goals-card-tile--focus' : ''}`}
               data-goal-id={goal.id}
-              style={rowSpan ? { gridRowEnd: `span ${rowSpan}` } : undefined}
+              style={{
+                ...(rowSpan ? { gridRowEnd: `span ${rowSpan}` } : null),
+                ...(goalDepth > 0 ? { marginLeft: 24, borderLeft: `3px solid ${themeColor}`, paddingLeft: 8 } : null),
+              }}
             >
               <Card
                 className={`h-100 goals-card goals-card--${showDetailed ? 'comfortable' : 'grid'}`}
@@ -912,6 +962,21 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                     >
                       <Edit3 size={14} />
                     </Button>
+                    {onDesignKpi && (
+                      <Button
+                        variant="link"
+                        size="sm"
+                        className="p-0"
+                        style={{ width: 24, height: 24, color: textColor }}
+                        title="Design KPI"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDesignKpi(goal.id);
+                        }}
+                      >
+                        <BarChart3 size={14} />
+                      </Button>
+                    )}
                     <Button
                       variant="link"
                       size="sm"

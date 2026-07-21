@@ -9,7 +9,6 @@ import { FocusGoal, Goal, Story } from '../types';
 import { useFocusGoals } from '../hooks/useFocusGoals';
 import FocusGoalCountdownBanner from './FocusGoalCountdownBanner';
 import FocusGoalWizard from './FocusGoalWizard';
-import GoalKpiStudioPanel from './GoalKpiStudioPanel';
 import KPIDesigner from './KPIDesigner';
 import GoalsCardView from './GoalsCardView';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
@@ -108,6 +107,26 @@ export const FocusGoalsPage: React.FC = () => {
       : goals),
     [activeProtectedGoalIdSet, goals]
   );
+
+  // Aggregated sprint-window caption per leaf goal, across every active focus goal — replaces
+  // the old per-focus-goal "Milestone sprint rollout" card (which duplicated this same goal
+  // set, just with a separate GoalsCardView render). Folded into the one consolidated KPI
+  // studio card below instead, via GoalsCardView's subtitleByGoalId prop.
+  const sprintWindowSubtitleByGoalId = React.useMemo(() => {
+    const subtitles: Record<string, string> = {};
+    activeFocusGoals.forEach((focusGoal) => {
+      if (!Array.isArray(focusGoal.sprintPlanSegments) || !focusGoal.sprintPlanSegments.length || !focusGoal.sprintPlanByGoalId) return;
+      Object.entries(focusGoal.sprintPlanByGoalId).forEach(([goalId, segmentIndexes]) => {
+        if (!Array.isArray(segmentIndexes) || !segmentIndexes.length) return;
+        const labels = segmentIndexes
+          .map((segmentIndex) => focusGoal.sprintPlanSegments?.find((segment) => segment.index === segmentIndex)?.label)
+          .filter(Boolean)
+          .join(', ');
+        if (labels) subtitles[goalId] = labels;
+      });
+    });
+    return subtitles;
+  }, [activeFocusGoals]);
 
   const monzoLinkTimeoutGoals = React.useMemo(
     () =>
@@ -576,43 +595,6 @@ export const FocusGoalsPage: React.FC = () => {
                 monzoBudgetSummary={monzoBudgetSummary}
                 monzoGoalAlignment={monzoGoalAlignment}
               />
-              {Array.isArray(focusGoal.sprintPlanSegments) && focusGoal.sprintPlanSegments.length > 0 && focusGoal.sprintPlanByGoalId && (() => {
-                const rolloutEntries = Object.entries(focusGoal.sprintPlanByGoalId)
-                  .filter(([, segmentIndexes]) => Array.isArray(segmentIndexes) && segmentIndexes.length > 0);
-                const rolloutGoals = rolloutEntries
-                  .map(([goalId]) => goals.find((item) => item.id === goalId))
-                  .filter((goal): goal is Goal => !!goal);
-                const sprintWindowByGoalId: Record<string, string> = {};
-                rolloutEntries.forEach(([goalId, segmentIndexes]) => {
-                  const labels = segmentIndexes
-                    .map((segmentIndex) => focusGoal.sprintPlanSegments?.find((segment) => segment.index === segmentIndex)?.label)
-                    .filter(Boolean)
-                    .join(', ');
-                  sprintWindowByGoalId[goalId] = labels || 'No sprint window assigned';
-                });
-                if (rolloutGoals.length === 0) return null;
-                return (
-                  <Card className="mt-3 border-0 shadow-sm">
-                    <Card.Body>
-                      <div style={{ fontWeight: 600, marginBottom: 8 }}>Milestone sprint rollout</div>
-                      <div style={{ fontSize: '13px', color: '#666', marginBottom: 10 }}>
-                        Leaf goals are mapped to the sprint windows shown on each card for this focus period.
-                      </div>
-                      <GoalsCardView
-                        goals={rolloutGoals}
-                        onGoalUpdate={handleGoalUpdate}
-                        onGoalDelete={handleGoalDelete}
-                        onGoalPriorityChange={handleGoalPriorityChange}
-                        themes={globalThemes}
-                        focusGoalIds={rolloutGoals.map((goal) => goal.id)}
-                        cardLayout={goalsDetailLevel === 'full' ? 'comfortable' : 'grid'}
-                        showDescriptions={goalsDetailLevel !== 'minimal'}
-                        subtitleByGoalId={sprintWindowByGoalId}
-                      />
-                    </Card.Body>
-                  </Card>
-                );
-              })()}
             </div>
           ))}
 
@@ -724,16 +706,50 @@ export const FocusGoalsPage: React.FC = () => {
         </Alert>
       )}
 
-      <GoalKpiStudioPanel
-        ownerUid={currentUser?.uid || ''}
-        goals={kpiStudioGoals}
-        title={activeFocusLeafGoalIdSet.size > 0 ? 'Focus KPI Studio' : 'Goal KPI Studio'}
-        subtitle={activeFocusLeafGoalIdSet.size > 0
-          ? 'Design KPIs for your active focus goals and pin the right ones to the dashboard.'
-          : 'Design KPIs for your current goals and pin the right ones to the dashboard.'}
-        onCreateKpi={handleOpenKpiDesigner}
-        themes={globalThemes}
-      />
+      {/* Consolidated with what used to be the separate per-focus-goal "Milestone sprint
+          rollout" card — that duplicated this same goal set with its own GoalsCardView
+          render. One hierarchy-grouped view now: same goal card everywhere in the app
+          (medium detail by default, via goalsDetailLevel), with a Design KPI quick-action
+          and the sprint-window caption folded in via subtitleByGoalId. */}
+      <Card className="border-0 shadow-sm mb-4">
+        <Card.Body>
+          <div className="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+            <div>
+              <div className="fw-semibold">
+                {activeFocusLeafGoalIdSet.size > 0 ? 'Focus KPI Studio' : 'Goal KPI Studio'}
+              </div>
+              <div className="text-muted small">
+                {activeFocusLeafGoalIdSet.size > 0
+                  ? 'Design KPIs for your active focus goals and pin the right ones to the dashboard.'
+                  : 'Design KPIs for your current goals and pin the right ones to the dashboard.'}
+              </div>
+            </div>
+            <Form.Select
+              size="sm"
+              value={goalsDetailLevel}
+              onChange={(e) => setGoalsDetailLevel(e.target.value as 'minimal' | 'medium' | 'full')}
+              style={{ width: 'auto' }}
+            >
+              <option value="minimal">Minimal</option>
+              <option value="medium">Medium</option>
+              <option value="full">Full</option>
+            </Form.Select>
+          </div>
+          <GoalsCardView
+            goals={kpiStudioGoals}
+            onGoalUpdate={handleGoalUpdate}
+            onGoalDelete={handleGoalDelete}
+            onGoalPriorityChange={handleGoalPriorityChange}
+            themes={globalThemes}
+            focusGoalIds={Array.from(activeFocusLeafGoalIdSet)}
+            groupByParent
+            onDesignKpi={handleOpenKpiDesigner}
+            cardLayout={goalsDetailLevel === 'full' ? 'comfortable' : 'grid'}
+            showDescriptions={goalsDetailLevel !== 'minimal'}
+            subtitleByGoalId={sprintWindowSubtitleByGoalId}
+          />
+        </Card.Body>
+      </Card>
 
       {/* Past Focus Goals */}
       {focusGoals.length > activeFocusGoals.length && (
