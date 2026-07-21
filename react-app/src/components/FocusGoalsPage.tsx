@@ -732,6 +732,7 @@ export const FocusGoalsPage: React.FC = () => {
           ? 'Design KPIs for your active focus goals and pin the right ones to the dashboard.'
           : 'Design KPIs for your current goals and pin the right ones to the dashboard.'}
         onCreateKpi={handleOpenKpiDesigner}
+        themes={globalThemes}
       />
 
       {/* Past Focus Goals */}
