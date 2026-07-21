@@ -2192,6 +2192,22 @@ exports.cleanupOrphanedCalendarEventsNow = functions.https.onCall(async (data, c
   }
 });
 
+// Used by schedulingService.js's Top3/pinned-item GCal-displacement flow (see
+// buildBusyIntervals) — deletes a real Google Calendar event the user created (not a BOB
+// block) that a pinned item's placement has just displaced. Best-effort: a missing/already-
+// deleted event is not an error worth surfacing to the scheduling flow that called this.
+exports.deleteGoogleCalendarEvent = async function(uid, eventId) {
+  if (!eventId) return { ok: false, reason: 'no_event_id' };
+  try {
+    const { calendar } = await getCalendarClientForUser(uid);
+    await calendar.events.delete({ calendarId: 'primary', eventId });
+    return { ok: true };
+  } catch (e) {
+    console.warn('[deleteGoogleCalendarEvent] failed', uid, eventId, e?.message || e);
+    return { ok: false, reason: e?.message || String(e) };
+  }
+};
+
 exports._syncBlockToGoogle = syncBlockToGoogle;
 exports._evaluateGoogleSyncPolicyForBlock = evaluateGoogleSyncPolicyForBlock;
 exports._pushPendingBlocksForAllUsers = async function() {

@@ -94,6 +94,17 @@ function isUserGcalEvent(block) {
   return source === 'gcal' || source === 'google_calendar' || block?.createdBy === 'google';
 }
 
+// Structured training sessions Jim actually trains for — protected even from Top3/pinned
+// displacement in smart mode. Deliberately narrower than isFitnessBlock below: a casual
+// "Walk" or "Meditate" GCal entry should NOT match this, because those ARE meant to be
+// movable/deletable to make room for a pinned item (per Jim, 2026-07-21) — only real
+// training sessions (run, swim, strength training, crossfit, gym) are off-limits.
+function isProtectedTrainingEvent(block) {
+  const label = String(block?.title || block?.theme || block?.category || '').toLowerCase();
+  return label.includes('run') || label.includes('swim') || label.includes('strength')
+    || label.includes('crossfit') || label.includes('gym') || label.includes('training');
+}
+
 function isFitnessBlock(block) {
   const label = String(block?.theme || block?.category || block?.title || '').toLowerCase();
   return label.includes('health') || label.includes('fitness') || label.includes('gym')
@@ -185,8 +196,17 @@ function isPlannerThemeBlock(block) {
   return st === 'work_shift_allocation' || st === 'health_allocation' || block?.source === 'theme_allocation';
 }
 
-function buildBusyIntervals(blocks, { planningMode, persona, excludedBlockIds, constraintMode }) {
+// Returns { busy, displaceable }. `displaceable` collects real user GCal events that are
+// NOT protected training sessions and NOT Work (Main Gig) — only populated when
+// `allowDisplaceMovableGcal` is set (smart mode + a Top3/pinned item being placed, per
+// Jim, 2026-07-21: "if we have smart enabled then the top 3 items should be able to
+// remove items from gcal unless it looks fitness... if its Walk or meditate or chores...
+// it can be moved or deleted by the planner"). Work (Main Gig) stays hard-busy with zero
+// exceptions regardless of this flag — that guarantee (fixed 2026-07-17, see below) is
+// never up for negotiation, pinned items or not.
+function buildBusyIntervals(blocks, { planningMode, persona, excludedBlockIds, constraintMode, allowDisplaceMovableGcal = false }) {
   const busy = [];
+  const displaceable = [];
   blocks.forEach((block) => {
     const blockId = String(block?.id || '').trim();
     if (blockId && excludedBlockIds.has(blockId)) return;
@@ -197,10 +217,15 @@ function buildBusyIntervals(blocks, { planningMode, persona, excludedBlockIds, c
       busy.push({ start, end });
       return;
     }
-    // Real user calendar events are always hard-busy, regardless of mode or persona —
-    // never let a title/theme match (e.g. a GCal meeting titled "Work sync") make a
-    // genuine calendar event transparent to the placer.
+    // Real user calendar events are hard-busy by default — never let a title/theme match
+    // (e.g. a GCal meeting titled "Work sync") make a genuine calendar event transparent
+    // to the placer. The one deliberate exception: a Top3/pinned item in smart mode may
+    // displace a non-training personal GCal entry rather than being blocked by it.
     if (isUserGcalEvent(block)) {
+      if (allowDisplaceMovableGcal && !isProtectedTrainingEvent(block)) {
+        displaceable.push({ start, end, block });
+        return;
+      }
       busy.push({ start, end });
       return;
     }
@@ -219,7 +244,7 @@ function buildBusyIntervals(blocks, { planningMode, persona, excludedBlockIds, c
     if (constraintMode === 'override' && isPlannerThemeBlock(block)) return;
     busy.push({ start, end });
   });
-  return busy;
+  return { busy, displaceable };
 }
 
 function formatTimeString(ms, zone) {
@@ -650,7 +675,6 @@ async function schedulePlannerItemMutation({
   const themePlan = normalizeThemeAllocationPlan(themePlanSnap && themePlanSnap.exists ? (themePlanSnap.data() || {}) : {});
   const { pickSlots } = buildPickSlots(themePlan);
   const normalizedSearchDays = Math.max(1, Math.min(Number(searchDays || DEFAULT_SEARCH_DAYS), 84));
-  const busyIntervals = buildBusyIntervals(allBlocks, { planningMode: effectivePlanningMode, persona, excludedBlockIds, constraintMode: resolvedConstraintMode });
   const forcedStartMs = Number(exactTargetStartMs);
   const forcedEndMs = Number(exactTargetEndMs);
   const forcedDurationMs = Math.max(MIN_BLOCK_MS, Math.round(effectiveDurationMinutes) * 60 * 1000);
@@ -661,6 +685,16 @@ async function schedulePlannerItemMutation({
   // below if theme-block placement comes up empty.
   const isTopPriorityEntity = Boolean(manualPriorityRank) || entity?.aiTop3ForDay === true;
   const topItemMinBlockMs = 30 * 60 * 1000;
+  // Smart mode + a Top3/pinned item may displace non-training personal GCal events
+  // rather than being blocked by them — see buildBusyIntervals for the exact rule.
+  const allowDisplaceMovableGcal = isTopPriorityEntity && effectivePlanningMode === 'smart';
+  const { busy: busyIntervals, displaceable: displaceableGcalEvents } = buildBusyIntervals(allBlocks, {
+    planningMode: effectivePlanningMode,
+    persona,
+    excludedBlockIds,
+    constraintMode: resolvedConstraintMode,
+    allowDisplaceMovableGcal,
+  });
 
   let placements = Number.isFinite(forcedStartMs) && forcedStartMs > 0
     ? [{
@@ -1012,6 +1046,40 @@ async function schedulePlannerItemMutation({
     });
 
   await batch.commit();
+
+  // Delete any non-training personal GCal events the final placement actually landed on
+  // top of — only the ones genuinely overlapped, not every candidate that was merely
+  // eligible (chooseSplitPlacements may well have found gaps that avoided them entirely).
+  if (Array.isArray(displaceableGcalEvents) && displaceableGcalEvents.length && previewOnly !== true) {
+    const displacedNow = displaceableGcalEvents.filter((candidate) =>
+      placements.some((p) => candidate.start < p.appliedEndMs && candidate.end > p.appliedStartMs));
+    for (const candidate of displacedNow) {
+      const eventId = candidate.block?.googleEventId || null;
+      if (!eventId) continue;
+      const calendarSync = require('../calendarSync');
+      const result = await calendarSync.deleteGoogleCalendarEvent(userId, eventId);
+      if (result?.ok) {
+        await logSchedulingActivity({
+          db,
+          ownerUid: userId,
+          entityId: itemId,
+          entityType: normalizedType,
+          referenceNumber: entity.ref || entity.referenceNumber || null,
+          persona,
+          description: `Displaced personal calendar event "${candidate.block?.title || 'Untitled'}" to make room for a pinned Top3 item.`,
+          metadata: {
+            displacedEventId: eventId,
+            displacedTitle: candidate.block?.title || null,
+            displacedStartMs: candidate.start,
+            displacedEndMs: candidate.end,
+          },
+          oldSprintId,
+          newSprintId: resolvedSprintId || oldSprintId,
+        });
+      }
+    }
+  }
+
     console.info('[schedulePlannerItemMutation] committed', {
     ...logContext,
     effectivePlanningMode,
