@@ -159,7 +159,7 @@ EOF
         # same safe pattern even though hosting's own output is short enough it rarely hits it.
         log_info "Deploying to Firebase Hosting..."
         local hosting_log
-        hosting_log="$(mktemp /tmp/bob_hosting_deploy.XXXXXX.log)"
+        hosting_log="$(mktemp -t bob_hosting_deploy)"
         firebase deploy --only hosting --force > "$hosting_log" 2>&1
         local hosting_status=$?
         grep -E "Deploy complete|Error" "$hosting_log" | head -5 >&2
@@ -178,7 +178,7 @@ EOF
         # so nothing can starve the writer, and the exit code is actually checked.
         log_info "Deploying Cloud Functions..."
         local functions_log
-        functions_log="$(mktemp /tmp/bob_functions_deploy.XXXXXX.log)"
+        functions_log="$(mktemp -t bob_functions_deploy)"
         firebase deploy --only functions --force > "$functions_log" 2>&1
         local functions_status=$?
         grep -E "Deploy complete|Error|✔|✖" "$functions_log" | tail -20 >&2
