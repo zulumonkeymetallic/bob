@@ -174,7 +174,15 @@ const TaskListView: React.FC = () => {
         ...updates,
         updatedAt: serverTimestamp()
       });
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.code === 'not-found') {
+        // Benign race: the task was deleted (duplicate cleanup, nightly archival, etc.)
+        // between this row rendering and the edit landing. Not an error worth alarming
+        // over — the live onSnapshot listener above will drop it from `tasks` on its own
+        // as soon as the delete's snapshot update arrives.
+        console.warn('Skipped update — task no longer exists:', taskId);
+        return;
+      }
       console.error('Error updating task:', error);
     }
   };
@@ -193,7 +201,11 @@ const TaskListView: React.FC = () => {
         priority: newPriority,
         updatedAt: serverTimestamp()
       });
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.code === 'not-found') {
+        console.warn('Skipped priority update — task no longer exists:', taskId);
+        return;
+      }
       console.error('Error updating task priority:', error);
     }
   };
