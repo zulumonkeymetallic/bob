@@ -42,7 +42,7 @@ const DailyPlanWidget: React.FC = () => {
 
   const {
     items, bucketCounts, loading, choreCompletionBusy, itemActionBusy,
-    completeTask, completeChore, completeStory, deleteItem,
+    completeChore, deleteItem,
   } = useDailyPlanTimeline({
     uid: currentUser?.uid,
     persona: currentPersona,
@@ -133,9 +133,7 @@ const DailyPlanWidget: React.FC = () => {
                 <DailyPlanList
                   items={pinnedTop3}
                   choreCompletionBusy={choreCompletionBusy}
-                  onCompleteTask={(task) => { void completeTask(task); }}
                   onCompleteChore={(task) => { void completeChore(task); }}
-                  onCompleteStory={(story) => { void completeStory(story); }}
                   onDelete={(item) => { void deleteItem(item); }}
                   deleteBusy={itemActionBusy}
                   onDefer={setDeferTarget}
@@ -156,9 +154,7 @@ const DailyPlanWidget: React.FC = () => {
                   <DailyPlanList
                     items={bucketItems}
                     choreCompletionBusy={choreCompletionBusy}
-                    onCompleteTask={(task) => { void completeTask(task); }}
                     onCompleteChore={(task) => { void completeChore(task); }}
-                    onCompleteStory={(story) => { void completeStory(story); }}
                     onDelete={(item) => { void deleteItem(item); }}
                     deleteBusy={itemActionBusy}
                     onDefer={setDeferTarget}

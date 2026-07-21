@@ -1019,7 +1019,7 @@ const MobileHome: React.FC = () => {
   // DailyPlanWidget via useDailyPlanTimeline. Task/chore/story data is a pure derivation over
   // data MobileHome already subscribes to; `uid` adds the one new live subscription (raw GCal
   // event rows), replacing the once-a-day daily_summaries snapshot the hook used to fall back to.
-  const { items: unifiedTimelineItems, bucketCounts: dailyPlanBucketCounts } = useDailyPlanTimeline({
+  const { items: unifiedTimelineItems, bucketCounts: dailyPlanBucketCounts, deleteItem: deleteDailyPlanItem, itemActionBusy: dailyPlanDeleteBusy } = useDailyPlanTimeline({
     uid: currentUser?.uid,
     tasksDueToday: tasksDueTodayForMobile,
     choresDueToday,
@@ -1796,8 +1796,9 @@ const MobileHome: React.FC = () => {
                     <DailyPlanList
                       items={items}
                       choreCompletionBusy={choreCompletionBusy}
-                      onCompleteTask={(task) => void updateTaskField(task, { status: 2 })}
                       onCompleteChore={(task) => void handleCompleteChoreTask(task)}
+                      onDelete={(item) => void deleteDailyPlanItem(item)}
+                      deleteBusy={dailyPlanDeleteBusy}
                       onDefer={(target) => setDeferTarget(target)}
                     />
                   ) : (
