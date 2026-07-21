@@ -186,6 +186,24 @@ EOF
             log_error "Cloud Functions deploy failed (exit $functions_status) — see $functions_log"
             return 1
         fi
+
+        # firestore.rules has no deploy step anywhere else in this pipeline — it's a
+        # separate `--only firestore:rules` target Firebase doesn't bundle into hosting or
+        # functions deploys. Confirmed live 2026-07-21: the committed rules file was 18 days
+        # ahead of what was actually live, and the gap (missing null-ownerUid fallback on
+        # tasks/stories update) was the real cause of "Failed to move item" on Kanban drags —
+        # a genuine permission-denied, not a code bug. Every web build now keeps rules in
+        # sync with whatever's committed, so this can't silently drift again.
+        log_info "Deploying Firestore rules..."
+        local rules_log
+        rules_log="$(mktemp -t bob_firestore_rules_deploy)"
+        firebase deploy --only firestore:rules --force > "$rules_log" 2>&1
+        local rules_status=$?
+        grep -E "Deploy complete|Error|✔|✖|compiled" "$rules_log" | tail -20 >&2
+        if [ $rules_status -ne 0 ]; then
+            log_error "Firestore rules deploy failed (exit $rules_status) — see $rules_log"
+            return 1
+        fi
     else
         log_warning "DRY RUN: Skipping Firebase deployment"
     fi

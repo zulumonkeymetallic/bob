@@ -358,14 +358,26 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
 
                     await updateDoc(doc(db, collectionName, itemId), updatePayload);
 
-                    // Track change
-                    const oldLabel = String((item as any).status ?? '');
-                    const newLabel = String(actualStatus);
-                    await trackFieldChange(itemId, type, 'status', oldLabel, newLabel, (item as any).ref);
+                    // Activity-stream tracking is best-effort — trackFieldChange already
+                    // swallows its own errors internally, but keeping it in its own try/catch
+                    // here too means a future change to that hook can never make a logging
+                    // side-effect look like the drag itself failed.
+                    try {
+                        const oldLabel = String((item as any).status ?? '');
+                        const newLabel = String(actualStatus);
+                        await trackFieldChange(itemId, type, 'status', oldLabel, newLabel, (item as any).ref);
+                    } catch (trackingError) {
+                        console.warn('Kanban move succeeded but activity tracking failed', trackingError);
+                    }
 
-                } catch (error) {
+                } catch (error: any) {
+                    // Surface the real cause instead of a dead-end generic message — this was
+                    // previously just alert('Failed to move item'), which gave neither Jim nor
+                    // whoever's debugging it any way to tell a permission error from a network
+                    // blip from a stale-document race.
                     console.error('Failed to update item status', error);
-                    alert('Failed to move item');
+                    const detail = error?.code || error?.message || 'Unknown error';
+                    alert(`Failed to move item: ${detail}\n\nCheck the browser console for the full error — it's logged there too.`);
                 }
             },
         });

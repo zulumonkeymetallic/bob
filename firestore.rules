@@ -39,9 +39,16 @@ service cloud.firestore {
     match /tasks/{id} {
       allow create: if isOwnerForCreate();
       allow read, delete: if isOwner();
+      // Legacy documents with no ownerUid can't satisfy either clause below when a client
+      // update omits ownerUid from the patch (e.g. KanbanBoardV2's drag-and-drop status
+      // update) — Firestore merges the patch onto the existing doc, so
+      // request.resource.data.ownerUid stays null too. Confirmed live 2026-07-21: this was
+      // the exact cause of "Failed to move item" on Kanban drags — permission-denied, not a
+      // code bug. Mirrors the null fallback stories' delete rule already had.
       allow update: if isSignedIn() && (
         (resource.data.ownerUid == request.auth.uid) ||
-        (request.resource.data.ownerUid == request.auth.uid)
+        (request.resource.data.ownerUid == request.auth.uid) ||
+        (resource.data.ownerUid == null)
       );
     }
     match /stories/{id} {
@@ -51,9 +58,11 @@ service cloud.firestore {
         resource.data.ownerUid == request.auth.uid ||
         resource.data.ownerUid == null
       );
+      // See matching comment on /tasks update above — same gap, same fix.
       allow update: if isSignedIn() && (
         (resource.data.ownerUid == request.auth.uid) ||
-        (request.resource.data.ownerUid == request.auth.uid)
+        (request.resource.data.ownerUid == request.auth.uid) ||
+        (resource.data.ownerUid == null)
       );
     }
     match /journals/{id} {

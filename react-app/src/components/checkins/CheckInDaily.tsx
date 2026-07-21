@@ -1417,18 +1417,31 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
             {supportsProgressForItem(item) && (
               <Form.Group className="daily-checkin-work-card__field">
                 <Form.Label className="daily-checkin-work-card__label">Progress</Form.Label>
-                <Form.Control
+                {/* Fixed steps rather than free-text — per Jim, 2026-07-21: a coarse 0/10/25/
+                    50/75/100% read is what actually feeds nightly orchestration's capacity
+                    calc (via pointsRemaining, see handleSave below), and a precise-looking
+                    free-text number invites false precision on a subjective daily estimate. */}
+                <Form.Select
                   size="sm"
-                  type="number"
-                  min={0}
-                  max={100}
-                  placeholder="0-100"
                   value={item.progressPct ?? ''}
                   onChange={(e) => {
-                    const v = e.target.value === '' ? null : Math.min(100, Math.max(0, Number(e.target.value)));
+                    const v = e.target.value === '' ? null : Number(e.target.value);
                     handleProgressChange(item.key, v);
                   }}
-                />
+                >
+                  <option value="">Not started</option>
+                  {/* A value from the old free-text input (e.g. 42%) won't match any fixed
+                      step — show it as its own option rather than silently rendering "Not
+                      started" and making it look like the recorded progress vanished. */}
+                  {![null, 10, 25, 50, 75, 100].includes(item.progressPct ?? null) && item.progressPct != null && (
+                    <option value={item.progressPct}>{item.progressPct}% (previous entry)</option>
+                  )}
+                  <option value={10}>10%</option>
+                  <option value={25}>25%</option>
+                  <option value={50}>50%</option>
+                  <option value={75}>75%</option>
+                  <option value={100}>100% — done</option>
+                </Form.Select>
               </Form.Group>
             )}
             {supportsCommentsForItem(item) && (
