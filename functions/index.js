@@ -140,6 +140,7 @@ try {
     exports.scheduledCalendarSync = calendarSync.scheduledCalendarSync;
     exports.gcalLinkUnlinkedEvents = calendarSync.gcalLinkUnlinkedEvents;
     exports.repairDuplicateCalendarEvents = calendarSync.repairDuplicateCalendarEvents;
+    exports.cleanupOrphanedCalendarEventsNow = calendarSync.cleanupOrphanedCalendarEventsNow;
   }
 } catch (e) {
   console.warn('[init] calendarSync not loaded', e?.message || e);
