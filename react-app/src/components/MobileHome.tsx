@@ -1826,6 +1826,7 @@ const MobileHome: React.FC = () => {
                         const parentStory = cardType === 'task' && item.task?.parentType === 'story'
                           ? storiesById.get(item.task.parentId)
                           : undefined;
+                        const isChore = item.kind === 'chore';
                         return (
                           <div key={item.id} style={{ marginBottom: 8 }}>
                             <KanbanCardV2
@@ -1835,6 +1836,8 @@ const MobileHome: React.FC = () => {
                               story={parentStory}
                               showDescription={false}
                               onEdit={() => { if (item.task) setEditingTask(item.task); else if (item.story) setEditingStory(item.story!); }}
+                              onCompleteChore={isChore ? (task) => void handleCompleteChoreTask(task) : undefined}
+                              choreCompleteBusy={isChore && item.task ? !!choreCompletionBusy[item.task.id] : false}
                             />
                           </div>
                         );

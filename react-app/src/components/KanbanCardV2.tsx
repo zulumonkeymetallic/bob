@@ -61,6 +61,16 @@ interface KanbanCardV2Props {
         lastSyncAt?: any;
     };
     isFocusAligned?: boolean;
+    /**
+     * Chore/habit/routine tasks must complete through the completeChoreTask Cloud Function
+     * (recurrence rollover, lastDoneAt, KPI crediting) rather than a plain status write — the
+     * same distinction DailyPlanList already makes (checkbox vs status chip). When set, the
+     * status select below is replaced with a completion checkbox that calls this instead of
+     * patching status directly. Only passed by callers that know the item is chore-kind (e.g.
+     * MobileHome's Daily Plan Detail view) — every other KanbanCardV2 usage is unaffected.
+     */
+    onCompleteChore?: (task: Task) => void;
+    choreCompleteBusy?: boolean;
 }
 
 const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
@@ -86,6 +96,8 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     showTags,
     isFocusAligned = false,
     detailLevel: detailLevelProp,
+    onCompleteChore,
+    choreCompleteBusy = false,
 }) => {
     const { detailLevel: ctxDetailLevel } = useDetailLevel();
     const detailLevel = detailLevelProp ?? ctxDetailLevel;
@@ -1058,6 +1070,18 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                             title="Due date"
                         />
                     )}
+                    {onCompleteChore && type === 'task' ? (
+                        <input
+                            type="checkbox"
+                            checked={statusValue === 2 || choreCompleteBusy}
+                            disabled={statusValue === 2 || choreCompleteBusy}
+                            onChange={(e) => { e.stopPropagation(); onCompleteChore(item as Task); }}
+                            onClick={(e) => e.stopPropagation()}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            aria-label={`Complete ${(item as any).title}`}
+                            title="Complete"
+                        />
+                    ) : (
                     <select
                         className="kanban-card__chip-select"
                         value={statusValue}
@@ -1088,6 +1112,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                             </>
                         )}
                     </select>
+                    )}
                 </div>
 
                 {detailLevel !== 'minimal' && resolvedShowTags && visibleTags.length > 0 && (
