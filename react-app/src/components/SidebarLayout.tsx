@@ -550,9 +550,12 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
               Menu
             </Button>
           ) : <div />}
+          {/* Brand text hidden on phone specifically — it was eating the row's width right next
+              to the notification bell for no real benefit on a screen this narrow. iPad (which
+              also renders this header) keeps the full wordmark since it has the room. */}
           <Navbar.Brand className="mx-auto d-flex align-items-center gap-2" style={{ fontSize: '1rem', color: '#000' }}>
             <img src="/logo192.png" alt="Logo" style={{ width: '24px', height: '24px', objectFit: 'contain' }} />
-            blueprint.organize.build
+            {deviceInfo.isIPad && 'blueprint.organize.build'}
           </Navbar.Brand>
           <div className="d-flex align-items-center gap-2">
             {isSmallScreen && <NotificationStream isLargeScreen={false} />}

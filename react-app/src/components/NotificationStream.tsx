@@ -117,13 +117,15 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
         aria-label="Notifications"
         title="Notifications"
         style={{
+          // No bordered/tinted "box" around the bell at any notification count — the small
+          // count badge below is the indicator; the button itself always stays plain.
           position: 'relative',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           width: 30, height: 30,
-          background: prominent ? 'var(--bg-accent, rgba(95,119,220,0.12))' : 'transparent',
-          border: prominent ? '1px solid var(--brand, #5f77dc)' : '1px solid transparent',
+          background: 'transparent',
+          border: '1px solid transparent',
           borderRadius: 8,
-          color: prominent ? 'var(--brand, #5f77dc)' : 'var(--text, #000)',
+          color: 'var(--text, #000)',
           cursor: 'pointer',
         }}
       >
