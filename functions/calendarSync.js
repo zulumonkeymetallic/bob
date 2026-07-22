@@ -971,10 +971,20 @@ function getGoogleOAuthConfig() {
   const projectId = process.env.GCLOUD_PROJECT;
   const region = 'europe-west2';
   const env = process.env || {};
-  const clientId = env.GOOGLE_OAUTH_CLIENT_ID || (functions.config().google && functions.config().google.client_id);
-  const clientSecret = env.GOOGLE_OAUTH_CLIENT_SECRET || (functions.config().google && functions.config().google.client_secret);
-  const redirectFromConfig = functions.config().google && functions.config().google.redirect_uri;
-  const redirectUri = redirectFromConfig || (projectId ? `https://${region}-${projectId}.cloudfunctions.net/oauthCallback` : undefined);
+  // functions.config() throws unconditionally when called from a Cloud Functions gen 2
+  // (v2) runtime — this only worked before because every existing caller of
+  // getCalendarClientForUser happened to be a v1 function. A v2 caller (e.g.
+  // dataIntegrityGuards.js's deleteGoogleCalendarEventsNow) hit this immediately, even
+  // though the client_id/secret lookups already preferred env vars — the unconditional
+  // redirect_uri lookup below was the one line still reaching for it unguarded.
+  let legacyConfig = {};
+  try {
+    legacyConfig = functions.config().google || {};
+  } catch { /* v2 runtime — config() unavailable; env vars / fallback below are authoritative */ }
+  const clientId = env.GOOGLE_OAUTH_CLIENT_ID || legacyConfig.client_id;
+  const clientSecret = env.GOOGLE_OAUTH_CLIENT_SECRET || legacyConfig.client_secret;
+  const redirectUri = legacyConfig.redirect_uri
+    || (projectId ? `https://${region}-${projectId}.cloudfunctions.net/oauthCallback` : undefined);
   return { clientId, clientSecret, redirectUri };
 }
 

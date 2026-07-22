@@ -1,6 +1,20 @@
 {
   "indexes": [
     {
+      "collectionGroup": "stories",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "userPriorityRank",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
       "collectionGroup": "activity",
       "queryScope": "COLLECTION",
       "fields": [

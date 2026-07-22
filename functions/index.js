@@ -146,6 +146,20 @@ try {
   console.warn('[init] calendarSync not loaded', e?.message || e);
 }
 
+// Data integrity guards: unique manual-priority-rank enforcement + calendar cleanup
+// cascade on task/story deletion (see functions/dataIntegrityGuards.js for why).
+try {
+  const dataIntegrityGuards = require('./dataIntegrityGuards');
+  if (dataIntegrityGuards) {
+    exports.enforceUniqueStoryPriorityRank = dataIntegrityGuards.enforceUniqueStoryPriorityRank;
+    exports.onTaskDeleteCleanupCalendar = dataIntegrityGuards.onTaskDeleteCleanupCalendar;
+    exports.onStoryDeleteCleanupCalendar = dataIntegrityGuards.onStoryDeleteCleanupCalendar;
+    exports.deleteGoogleCalendarEventsNow = dataIntegrityGuards.deleteGoogleCalendarEventsNow;
+  }
+} catch (e) {
+  console.warn('[init] dataIntegrityGuards not loaded', e?.message || e);
+}
+
 // Import reference backfill utility
 try {
   const referenceBackfill = require('./utils/referenceBackfill');
