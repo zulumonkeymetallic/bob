@@ -5209,7 +5209,12 @@ async function runNightlyChainCore() {
     { name: 'generateMissingAcceptanceCriteria', fn: generateMissingAcceptanceCriteria },
     { name: 'runAutoPointing', fn: runAutoPointingJob },
     { name: 'runAutoConversions', fn: runAutoConversionsJob },
+    { name: 'runPriorityScoring', fn: runPriorityScoringJob },
     {
+      // Must run AFTER runPriorityScoring — it now pulls user-pinned/Top-3 stories into the
+      // active sprint, and needs tonight's freshly-computed aiTop3ForDay flags to do that
+      // correctly rather than acting on yesterday's. Previously ran before scoring, so this
+      // check had no visibility into same-night Top-3 promotions.
       name: 'alignStoriesToGoalSprints',
       fn: async () => {
         const align = require('./alignStoriesToGoalSprints');
@@ -5219,7 +5224,6 @@ async function runNightlyChainCore() {
         return null;
       },
     },
-    { name: 'runPriorityScoring', fn: runPriorityScoringJob },
     { name: 'rolloverMissedChoresRoutines', fn: runRolloverForAllUsers },
     { name: 'runCalendarPlanner', fn: runCalendarPlannerJob },
     { name: 'applyProjectedDueDates', fn: applyProjectedDueDatesForUnscheduledSprintItems },

@@ -6,10 +6,25 @@
  * (within ±6 months). If no sprint qualifies, move the story to the
  * backlog (sprintId = null).
  *
+ * Priority override (added 2026-07-22): a story that's user-pinned
+ * (userPriorityFlag / userPriorityRank) or in today's AI Top 3
+ * (aiTop3ForDay) is instead pulled into the active sprint for its persona,
+ * regardless of its goal's date window. This runs BEFORE the
+ * sprintAlignmentOverride check and goal-date matching, because a human
+ * (or the Top-3 engine) explicitly saying "this is what I'm working on now"
+ * is a stronger, more recent signal than either a goal's start date or a
+ * possibly-stale manual lock. Confirmed live 2026-07-22: ST-20320 (pinned
+ * #1) sat parked in a future sprint for weeks because this function had no
+ * concept of priority at all — only status and sprintAlignmentOverride
+ * gated it. Once a pinned story is in the active sprint, this same check
+ * makes every subsequent run a no-op (target === current), so "moved once,
+ * then left alone" falls out naturally without needing the override flag.
+ *
  * Extracted from functions/index.js so the unified nightly orchestrator
  * can call it directly without circular deps. The manual callable
  * (runAlignStoriesToGoalSprintsNow) and the unified nightly chain both
- * call runForUser.
+ * call runForUser. Must run AFTER runPriorityScoring in the nightly chain
+ * so same-night Top-3 promotions are visible here, not just yesterday's.
  */
 
 const admin = require('firebase-admin');
@@ -34,8 +49,17 @@ function toMillisAlign(v) {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
+function isPinnedStory(s) {
+  if (s.userPriorityFlag === true) return true;
+  const rank = Number(s.userPriorityRank);
+  if (Number.isFinite(rank) && rank >= 1 && rank <= 5) return true;
+  if (s.aiTop3ForDay === true) return true;
+  return false;
+}
+
 async function runForUser(db, uid, options = {}) {
   const dryRun = !!options.dryRun;
+  const nowMs = Date.now();
 
   const goalsSnap = await db.collection('goals').where('ownerUid', '==', uid).get();
   const goalStartByGoalId = new Map();
@@ -46,9 +70,6 @@ async function runForUser(db, uid, options = {}) {
     if (startMs != null) goalStartByGoalId.set(g.id, startMs);
     if (data.title) goalTitleByGoalId.set(g.id, String(data.title));
   }
-  if (goalStartByGoalId.size === 0) {
-    return { user: uid, dryRun, moved: 0, backlogged: 0, skipped: 0, wouldMove: [] };
-  }
 
   const sprintsSnap = await db.collection('sprints').where('ownerUid', '==', uid).get();
   const sprints = sprintsSnap.docs
@@ -58,11 +79,36 @@ async function runForUser(db, uid, options = {}) {
       id: s.id,
       name: s.name || s.id,
       startMs: toMillisAlign(s.startDate),
+      endMs: toMillisAlign(s.endDate),
       persona: normalizePersona(s.persona),
     }))
     .filter((s) => s.startMs != null)
     .sort((a, b) => a.startMs - b.startMs);
   const sprintNameById = new Map(sprints.map((s) => [s.id, s.name]));
+
+  // Active sprint per persona: prefer whichever sprint's own [start, end] window actually
+  // contains "now" — status flags alone are ambiguous in this account (more than one sprint
+  // can be marked active simultaneously, e.g. a broad year-long container sprint alongside
+  // the real current one). Among sprints containing now, the shortest-duration one wins,
+  // since a long placeholder sprint is never the one work should actually land in. Falls
+  // back to the nearest not-yet-started sprint if nothing contains "now".
+  const activeSprintIdByPersona = new Map();
+  const resolveActiveSprintId = (persona) => {
+    if (activeSprintIdByPersona.has(persona)) return activeSprintIdByPersona.get(persona);
+    const personaSprints = sprints.filter((s) => s.persona === persona);
+    const containingNow = personaSprints.filter(
+      (s) => s.endMs != null && nowMs >= s.startMs && nowMs <= s.endMs
+    );
+    let target = null;
+    if (containingNow.length) {
+      target = containingNow.sort((a, b) => (a.endMs - a.startMs) - (b.endMs - b.startMs))[0];
+    } else {
+      target = personaSprints.find((s) => s.startMs >= nowMs) || null;
+    }
+    const targetId = target ? target.id : null;
+    activeSprintIdByPersona.set(persona, targetId);
+    return targetId;
+  };
 
   // Target sprint is resolved per (goal, persona): a story must never be aligned to a
   // sprint of a different persona (e.g. a personal story landing in the "Work 2026"
@@ -95,24 +141,43 @@ async function runForUser(db, uid, options = {}) {
   for (const doc of storiesSnap.docs) {
     const s = doc.data();
     const status = Number(s.status);
-    if (Number.isFinite(status) && status >= 2) { skipped++; continue; }
-    if (s.sprintAlignmentOverride === true) { skipped++; continue; }
-    const currentSprintId = s.sprintId ? String(s.sprintId) : null;
-    if (!currentSprintId) { skipped++; continue; }
-    const goalId = s.goalId ? String(s.goalId) : null;
-    if (!goalId || !goalStartByGoalId.has(goalId)) { skipped++; continue; }
+    const pinned = isPinnedStory(s);
+    // Pinned/Top-3 stories only skip once truly Done (>=4) — an in-progress pinned story
+    // (status 2) is exactly the case that should be pulled into the active sprint, not
+    // excluded from it. Non-pinned stories keep the original, more conservative >=2 skip
+    // (In Progress/Review/Done) since goal-date realignment mid-flight is disruptive.
+    const doneThreshold = pinned ? 4 : 2;
+    if (Number.isFinite(status) && status >= doneThreshold) { skipped++; continue; }
+
     const persona = normalizePersona(s.persona);
-    const targetId = resolveTargetForGoalPersona(goalId, persona);
+    const currentSprintId = s.sprintId ? String(s.sprintId) : null;
+
+    let targetId;
+    let goalId = null;
+    let moveKind;
+    if (pinned) {
+      targetId = resolveActiveSprintId(persona);
+      if (!targetId) { skipped++; continue; } // no active sprint to pull it into
+      moveKind = 'priority_active_sprint';
+    } else {
+      if (s.sprintAlignmentOverride === true) { skipped++; continue; }
+      if (!currentSprintId) { skipped++; continue; }
+      goalId = s.goalId ? String(s.goalId) : null;
+      if (!goalId || !goalStartByGoalId.has(goalId)) { skipped++; continue; }
+      targetId = resolveTargetForGoalPersona(goalId, persona);
+      moveKind = 'goal_start_date_match';
+    }
     if (targetId === currentSprintId) { skipped++; continue; }
 
     const moveRecord = {
       storyId: doc.id,
       storyTitle: s.title || 'Untitled',
+      reason: moveKind,
       goalId,
-      goalTitle: goalTitleByGoalId.get(goalId) || null,
-      goalStartDateMs: goalStartByGoalId.get(goalId) || null,
+      goalTitle: goalId ? (goalTitleByGoalId.get(goalId) || null) : null,
+      goalStartDateMs: goalId ? (goalStartByGoalId.get(goalId) || null) : null,
       fromSprintId: currentSprintId,
-      fromSprintName: sprintNameById.get(currentSprintId) || currentSprintId,
+      fromSprintName: currentSprintId ? (sprintNameById.get(currentSprintId) || currentSprintId) : '(backlog)',
       toSprintId: targetId,
       toSprintName: targetId ? (sprintNameById.get(targetId) || targetId) : '(backlog)',
     };
@@ -133,11 +198,13 @@ async function runForUser(db, uid, options = {}) {
         entityId: doc.id,
         entityType: 'story',
         activityType: 'updated',
-        description: targetId
-          ? `Auto-aligned story to sprint matching parent goal's start date`
-          : `Auto-moved story to backlog (no sprint within 6 months of parent goal's start date)`,
+        description: moveKind === 'priority_active_sprint'
+          ? `Auto-moved into the active sprint — user-pinned or Top 3 priority`
+          : (targetId
+            ? `Auto-aligned story to sprint matching parent goal's start date`
+            : `Auto-moved story to backlog (no sprint within 6 months of parent goal's start date)`),
         source: 'align_stories_nightly',
-        payload: { fromSprintId: currentSprintId, toSprintId: targetId, goalId },
+        payload: { fromSprintId: currentSprintId, toSprintId: targetId, goalId, reason: moveKind },
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
       });
       writes++;
