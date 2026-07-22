@@ -198,12 +198,18 @@ async function runForUser(db, uid, options = {}) {
   const tomorrowStart = nowLocal.plus({ days: 1 }).startOf('day');
 
   // ── 1. Active sprints ──────────────────────────────────────────────────────
+  // status===1 only — not "anything not closed" (status<2). Backlog-status (0) sprints
+  // are routinely used as long-running catch-all buckets (confirmed live 2026-07-22: one
+  // held 828 never-triaged stories spanning two months) and must never be treated as
+  // schedulable just because they haven't been explicitly closed. Per Jim: only the
+  // genuinely active sprint is eligible, full stop — pinned/Top3 items rely on
+  // alignStoriesToGoalSprints (runs earlier in the nightly chain) to already be living in
+  // this sprint, not on this function reaching into other sprints to find them.
   const sprintsSnap = await db.collection('sprints').where('ownerUid', '==', uid).get();
   const activeSprints = sprintsSnap.docs
     .map(d => ({ id: d.id, ...d.data() }))
     .filter(s => {
-      const status = Number(s.status ?? -1);
-      if (status >= 2) return false; // closed / cancelled
+      if (Number(s.status) !== 1) return false;
       if (String(s.persona || '').toLowerCase() !== 'personal') return false; // work sprints excluded
       const endMs = toMs(s.endDate || s.targetDate);
       if (!endMs) return false;
@@ -258,31 +264,31 @@ async function runForUser(db, uid, options = {}) {
     return { user: uid, blocks: 0, items: 0, reason: 'no incomplete items in active sprints' };
   }
 
-  // ── 4. Score and sort ──────────────────────────────────────────────────────
-  // Sprints here include anything status<2 — in practice that's not just tight 2-3 week
-  // active sprints but also long-running "bucket" sprints holding hundreds of
-  // never-triaged backlog items (confirmed live 2026-07-22: one such sprint held 828
-  // stories, median AI score 16, 500+ scoring under 20). Without a floor, once the day's
-  // pinned/Top3 items are satisfied the greedy allocator kept reaching further into that
-  // pile to fill leftover capacity — which is why near-random low-value stories kept
-  // landing on the calendar. Pinned/Top3 items always bypass this floor; anything else
-  // below it stays in the backlog (still visible everywhere else in the app) until a
-  // human actually prioritises it, instead of auto-claiming calendar time.
-  const MIN_SCORE_TO_SCHEDULE = 20;
-  const isCalendarEligible = (item) => isPinnedItem(item) || Number(item.aiCriticalityScore || 0) >= MIN_SCORE_TO_SCHEDULE;
+  // ── 4. Two-tier eligibility, per Jim 2026-07-22 ────────────────────────────
+  // Tier A — pinned (manual rank 1-5 / flag) or AI Top-3-for-day: always eligible,
+  // any type, spread across the sprint as before. These rely on alignStoriesToGoalSprints
+  // to already be living in the active sprint (step 5 of the nightly chain, runs before
+  // this one) — this function does not itself reach outside the active sprint to find them.
+  // Tier B — "extra safety" fallback, only fills capacity Tier A doesn't use: TASKS ONLY
+  // (no stories), due on the specific day being planned, aiCriticalityScore descending,
+  // pointsRemaining >= 1 (below is MIN_POINTS_TO_SCHEDULE — nothing under 1pt/1hr may
+  // ever claim calendar time). Everything else — the 828-story backlog-bucket problem —
+  // never becomes a candidate at all.
+  const MIN_POINTS_TO_SCHEDULE = 1;
 
-  const items = [
-    ...stories.filter(isCalendarEligible).map(s => ({ ...s, _type: 'story', _score: effectiveScore(s), _mins: Math.round(pointsRemaining(s) * MINS_PER_POINT) })),
-    ...tasks.filter(isCalendarEligible).map(t => ({ ...t, _type: 'task',  _score: effectiveScore(t), _mins: Math.round(pointsRemaining(t) * MINS_PER_POINT) })),
+  const getDueMs = (item) => toMs(item.dueDate ?? item.targetDate ?? item.dueDateMs ?? item.dueAt ?? item.due);
+
+  const tierAItems = [
+    ...stories.filter(isPinnedItem).map(s => ({ ...s, _type: 'story', _score: effectiveScore(s), _mins: Math.round(pointsRemaining(s) * MINS_PER_POINT) })),
+    ...tasks.filter(isPinnedItem).map(t => ({ ...t, _type: 'task',  _score: effectiveScore(t), _mins: Math.round(pointsRemaining(t) * MINS_PER_POINT) })),
   ].sort((a, b) => {
-    // 1. Human-prioritised (manual rank 1-5, ascending) always first.
+    // 1. Human-prioritised (manual rank 1-5, ascending) first.
     const ar = Number(a.userPriorityRank || 0);
     const br = Number(b.userPriorityRank || 0);
     if (ar > 0 && br === 0) return -1;
     if (ar === 0 && br > 0) return  1;
     if (ar > 0 && br > 0 && ar !== br) return ar - br;
-    // 2. AI-ranked Top 3 next (this tier was previously missing entirely — Top 3
-    // items were falling through to plain score order, same as everything else).
+    // 2. AI-ranked Top 3 next.
     const at = a.aiTop3ForDay === true ? 1 : 0;
     const bt = b.aiTop3ForDay === true ? 1 : 0;
     if (at !== bt) return bt - at;
@@ -291,6 +297,16 @@ async function runForUser(db, uid, options = {}) {
     // 4. AI score, descending.
     return b._score - a._score;
   });
+
+  // Tier B candidates are resolved per-day below (each is only a candidate on its own
+  // due date), not spread across the whole sprint like Tier A.
+  const tierBTaskPool = tasks
+    .filter(t => !isPinnedItem(t))
+    .filter(t => pointsRemaining(t) >= MIN_POINTS_TO_SCHEDULE)
+    .map(t => ({ ...t, _type: 'task', _score: effectiveScore(t), _dueMs: getDueMs(t), _mins: Math.round(pointsRemaining(t) * MINS_PER_POINT) }))
+    .filter(t => t._dueMs != null);
+
+  const items = tierAItems; // Tier A drives the multi-day spread allocation below.
 
   // ── 5. Build GCal- and work-block-aware free-slot map: tomorrow → sprint end ─
   // Real work_shift_allocation blocks (materialised from the user's theme plan) are
@@ -327,26 +343,36 @@ async function runForUser(db, uid, options = {}) {
   // them is still competing for that day, so the day's gaps are shared instead of
   // claimed entirely by one item; the moment only one contender is left for a day it
   // reverts to filling at full speed (no artificial fragmentation for the common case).
-  const ROUND_ROBIN_CHUNK_MINS = 45;
+  //
+  // MIN_BLOCK_MINS enforces "nothing under 1pt/1hr may appear on the calendar" at the
+  // chunk level too — a slot too small to hold a full floor-sized chunk is left for
+  // something else rather than sliced up, except for an item's genuine final chunk
+  // (finishing off less than a full point of remaining work is fine; carving a
+  // sub-floor fragment out of a larger remaining amount is what created the clutter).
+  // Round-robin turns are sized to match the floor exactly so the two never conflict.
+  const MIN_BLOCK_MINS = MINS_PER_POINT; // 60
+  const ROUND_ROBIN_CHUNK_MINS = MIN_BLOCK_MINS;
   const blocksToCreate = [];
   const minsLeftById = new Map(items.map(item => [item.id, item._mins]));
-  const priorityItems = items.filter(isPinnedItem);
-  const regularItems  = items.filter(item => !isPinnedItem(item));
+  const priorityItems = items; // Tier A only — already pinned-only by construction above.
 
   const allocateFromDay = (item, slots, iso, capMins) => {
-    let minsLeft = minsLeftById.get(item.id) || 0;
+    let minsLeft = minsLeftById.get(item.id) ?? item._mins;
     let capLeft  = capMins == null ? minsLeft : Math.min(minsLeft, capMins);
-    while (capLeft > 0 && minsLeft > 0 && slots.length > 0) {
-      const slot = slots[0];
+    const minChunk = Math.min(MIN_BLOCK_MINS, minsLeft); // allows a genuine final chunk < floor
+    let i = 0;
+    while (capLeft > 0 && minsLeft > 0 && i < slots.length) {
+      const slot = slots[i];
       const slotMins = (slot.endMs - slot.startMs) / 60_000;
-      if (slotMins <= 0) { slots.shift(); continue; }
+      if (slotMins <= 0) { slots.splice(i, 1); continue; }
+      if (slotMins < minChunk) { i += 1; continue; } // too small for this chunk — leave for later
 
       const allocated  = Math.min(minsLeft, capLeft, slotMins);
       const blockStart = slot.startMs;
       const blockEnd   = blockStart + allocated * 60_000;
 
       slot.startMs += allocated * 60_000;
-      if (slot.startMs >= slot.endMs) slots.shift();
+      if (slot.startMs >= slot.endMs) { slots.splice(i, 1); } else { i = 0; }
 
       minsLeft -= allocated;
       capLeft  -= allocated;
@@ -386,7 +412,7 @@ async function runForUser(db, uid, options = {}) {
     const slots = daySlots.get(iso);
     if (!slots || slots.length === 0) continue;
 
-    // Priority pass: fair-share this day's capacity among competing pinned/Top3 items.
+    // Tier A, pass 1: fair-share this day's capacity among competing pinned/Top3 items.
     while (slots.length > 0) {
       const active = priorityItems.filter(item => (minsLeftById.get(item.id) || 0) > 0);
       if (active.length === 0) break;
@@ -404,16 +430,33 @@ async function runForUser(db, uid, options = {}) {
       if (!progressed) break;
     }
 
-    // Greedy pass: anything still unfilled today (leftover priority mins beyond their
-    // fair share, plus all regular/non-pinned items) fills the remaining gaps in
-    // existing score order.
-    for (const item of [...priorityItems, ...regularItems]) {
+    // Tier A, pass 2: anything still unfilled today (leftover priority mins beyond
+    // their fair share) fills the remaining gaps in existing score order.
+    for (const item of priorityItems) {
       if (slots.length === 0) break;
       if ((minsLeftById.get(item.id) || 0) <= 0) continue;
       allocateFromDay(item, slots, iso, null);
     }
+
+    // Tier B, "extra safety" fallback: only tasks due on this exact day, sorted by AI
+    // score, fill whatever capacity Tier A left over. Each is scheduled entirely within
+    // its own due day — not spread across days like Tier A — so a task that doesn't
+    // fully fit today simply gets whatever fits today and nothing more.
+    if (slots.length > 0) {
+      const dayStart = DateTime.fromISO(iso, { zone }).startOf('day').toMillis();
+      const dayEnd   = DateTime.fromISO(iso, { zone }).endOf('day').toMillis();
+      const dueTodayTasks = tierBTaskPool
+        .filter(t => t._dueMs >= dayStart && t._dueMs <= dayEnd)
+        .sort((a, b) => b._score - a._score);
+      for (const t of dueTodayTasks) {
+        if (slots.length === 0) break;
+        minsLeftById.set(t.id, t._mins);
+        allocateFromDay(t, slots, iso, null);
+      }
+    }
   }
-  // items that don't fit within the sprint are simply not given a block
+  // items that don't fit within the sprint (or don't fit their due day, for Tier B)
+  // are simply not given a block.
 
   // ── 7. Write blocks in batches ────────────────────────────────────────────
   let written = 0;
