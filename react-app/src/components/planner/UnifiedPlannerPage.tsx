@@ -656,9 +656,16 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
   );
 
   const getTaskDueMs = useCallback((task: Task): number | null => {
-    const raw: any = (task as any).dueDateMs
-      ?? (task as any).dueDate
+    // dueDate/targetDate are the live fields every reschedule (nightly, manual edit) writes
+    // to — dueDateMs is a legacy field that stops being touched once a task has a fresher
+    // dueDate. Checking it first (as this used to) meant a task nightly-deferred forward
+    // could still carry a months-old dueDateMs, making it read as catastrophically overdue
+    // and surface in "due today" a full day before its real (now tomorrow) due date. Every
+    // other reader in the codebase (EditTaskModal, MobileHome, Dashboard, TasksList, ...)
+    // already checks dueDate/targetDate first — this one was the odd one out.
+    const raw: any = (task as any).dueDate
       ?? (task as any).targetDate
+      ?? (task as any).dueDateMs
       ?? (task as any).dueAt
       ?? (task as any).due;
     if (!raw) return null;
