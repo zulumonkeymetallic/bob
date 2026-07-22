@@ -1,15 +1,24 @@
 /**
- * sprintForwardPlanner — nightly sprint-wide calendar block generator.
+ * sprintForwardPlanner — "extra safety" fallback calendar block generator.
  *
- * For each active sprint, sorts all stories + tasks by effective score
- * (aiCriticalityScore + critical-priority bonus + userPriorityRank boost),
- * then allocates each item's remaining points across future working days,
- * packing blocks into free slots derived from the waking window (05:00–21:00) minus GCal commitments.
+ * Pinned/Top3 items are NOT handled here — that's runCalendarPlannerJob's job
+ * (functions/services/schedulingService.js, step 6, runs before this one): it books each
+ * item's full remaining duration as one consolidated block and can displace movable GCal
+ * entries (a casual Walk/Meditate) to make room, while Work (Main Gig) and any event with
+ * real attendees stay untouchable. This function used to also schedule pinned/Top3 items,
+ * which left fragmented leftover blocks that runCalendarPlannerJob's own "already
+ * scheduled?" check then read as "handled" on every subsequent night — starving it of the
+ * chance to ever place those items properly (fixed 2026-07-22, see git history for detail).
+ *
+ * What remains: TASKS ONLY (no stories), due on the specific day being planned, sorted by
+ * AI score, pointsRemaining >= 1pt — filling whatever free capacity is genuinely left over
+ * once the real placement job has done its work. Nothing here is spread across days; a
+ * task that doesn't fully fit its own due day just gets whatever fits and no more.
  *
  * Produces calendar_blocks with source='sprint_forward_plan'.
  * The existing calendarSync step pushes these to Google Calendar.
  *
- * Step 6 of the nightly chain — runs after runCalendarPlanner so today's
+ * Step 8 of the nightly chain — runs after runCalendarPlanner so today's
  * schedule is already set; this handles tomorrow → sprint end.
  */
 
@@ -264,49 +273,36 @@ async function runForUser(db, uid, options = {}) {
     return { user: uid, blocks: 0, items: 0, reason: 'no incomplete items in active sprints' };
   }
 
-  // ── 4. Two-tier eligibility, per Jim 2026-07-22 ────────────────────────────
-  // Tier A — pinned (manual rank 1-5 / flag) or AI Top-3-for-day: always eligible,
-  // any type, spread across the sprint as before. These rely on alignStoriesToGoalSprints
-  // to already be living in the active sprint (step 5 of the nightly chain, runs before
-  // this one) — this function does not itself reach outside the active sprint to find them.
-  // Tier B — "extra safety" fallback, only fills capacity Tier A doesn't use: TASKS ONLY
-  // (no stories), due on the specific day being planned, aiCriticalityScore descending,
-  // pointsRemaining >= 1 (below is MIN_POINTS_TO_SCHEDULE — nothing under 1pt/1hr may
-  // ever claim calendar time). Everything else — the 828-story backlog-bucket problem —
-  // never becomes a candidate at all.
+  // ── 4. Tier B only, per Jim 2026-07-22 ─────────────────────────────────────
+  // Pinned/Top3 items (former "Tier A") are deliberately NOT handled here anymore.
+  // runCalendarPlannerJob (functions/services/schedulingService.js, step 6 — runs
+  // BEFORE this one) already owns that job properly: it books each item's full
+  // remaining duration as one consolidated block and can displace movable GCal
+  // entries (a casual Walk/Meditate) to make room, while Work (Main Gig) and any
+  // event with real attendees stay untouchable. The problem was never that this
+  // function scheduled pinned items badly — it's that it ALSO scheduled them,
+  // leaving fragmented leftover blocks that runCalendarPlannerJob's own
+  // "is this already scheduled?" check (collectScheduledMinutesByEntity, which sums
+  // ANY block regardless of source) then read as "already handled" on every
+  // subsequent night — starving the better, displacement-aware system of the chance
+  // to ever place these items properly. Confirmed live 2026-07-22: zero
+  // planner_schedule_service blocks existed for any of Jim's 5 pinned stories despite
+  // hundreds of sprint_forward_plan fragments. Removing pinned/Top3 from this
+  // function's scope lets runCalendarPlannerJob actually do its job.
+  //
+  // What remains is the "extra safety" fallback only: TASKS ONLY (no stories), due on
+  // the specific day being planned, aiCriticalityScore descending, pointsRemaining >= 1
+  // (MIN_POINTS_TO_SCHEDULE — nothing under 1pt/1hr may ever claim calendar time).
+  // This only fills genuine leftover gaps runCalendarPlannerJob didn't use.
   const MIN_POINTS_TO_SCHEDULE = 1;
 
   const getDueMs = (item) => toMs(item.dueDate ?? item.targetDate ?? item.dueDateMs ?? item.dueAt ?? item.due);
 
-  const tierAItems = [
-    ...stories.filter(isPinnedItem).map(s => ({ ...s, _type: 'story', _score: effectiveScore(s), _mins: Math.round(pointsRemaining(s) * MINS_PER_POINT) })),
-    ...tasks.filter(isPinnedItem).map(t => ({ ...t, _type: 'task',  _score: effectiveScore(t), _mins: Math.round(pointsRemaining(t) * MINS_PER_POINT) })),
-  ].sort((a, b) => {
-    // 1. Human-prioritised (manual rank 1-5, ascending) first.
-    const ar = Number(a.userPriorityRank || 0);
-    const br = Number(b.userPriorityRank || 0);
-    if (ar > 0 && br === 0) return -1;
-    if (ar === 0 && br > 0) return  1;
-    if (ar > 0 && br > 0 && ar !== br) return ar - br;
-    // 2. AI-ranked Top 3 next.
-    const at = a.aiTop3ForDay === true ? 1 : 0;
-    const bt = b.aiTop3ForDay === true ? 1 : 0;
-    if (at !== bt) return bt - at;
-    // 3. Stories fill ahead of tasks.
-    if (a._type !== b._type) return a._type === 'story' ? -1 : 1;
-    // 4. AI score, descending.
-    return b._score - a._score;
-  });
-
-  // Tier B candidates are resolved per-day below (each is only a candidate on its own
-  // due date), not spread across the whole sprint like Tier A.
   const tierBTaskPool = tasks
     .filter(t => !isPinnedItem(t))
     .filter(t => pointsRemaining(t) >= MIN_POINTS_TO_SCHEDULE)
     .map(t => ({ ...t, _type: 'task', _score: effectiveScore(t), _dueMs: getDueMs(t), _mins: Math.round(pointsRemaining(t) * MINS_PER_POINT) }))
     .filter(t => t._dueMs != null);
-
-  const items = tierAItems; // Tier A drives the multi-day spread allocation below.
 
   // ── 5. Build GCal- and work-block-aware free-slot map: tomorrow → sprint end ─
   // Real work_shift_allocation blocks (materialised from the user's theme plan) are
@@ -333,28 +329,15 @@ async function runForUser(db, uid, options = {}) {
     return { user: uid, blocks: 0, items: 0, reason: 'no working days left in sprint' };
   }
 
-  // ── 6. Allocate items into free slots ─────────────────────────────────────
-  // Day-major, not item-major: draining one item fully across every day before
-  // touching the next let whichever pinned/Top3 item sorted first (including exact
-  // rank ties — two stories sharing userPriorityRank=1 hit this in production on
-  // 2026-07-23) swallow 100% of a sparse day's free slots, leaving sibling Top3 items
-  // with zero presence that day despite being equally pinned. Pinned/Top3 items now
-  // round-robin through each day's capacity in bounded turns whenever more than one of
-  // them is still competing for that day, so the day's gaps are shared instead of
-  // claimed entirely by one item; the moment only one contender is left for a day it
-  // reverts to filling at full speed (no artificial fragmentation for the common case).
-  //
+  // ── 6. Allocate Tier B items into leftover free slots ──────────────────────
   // MIN_BLOCK_MINS enforces "nothing under 1pt/1hr may appear on the calendar" at the
-  // chunk level too — a slot too small to hold a full floor-sized chunk is left for
-  // something else rather than sliced up, except for an item's genuine final chunk
-  // (finishing off less than a full point of remaining work is fine; carving a
-  // sub-floor fragment out of a larger remaining amount is what created the clutter).
-  // Round-robin turns are sized to match the floor exactly so the two never conflict.
+  // chunk level — a slot too small to hold a full floor-sized chunk is left alone rather
+  // than sliced up, except for an item's genuine final chunk (finishing off less than a
+  // full point of remaining work is fine; carving a sub-floor fragment out of a larger
+  // remaining amount is what created the clutter this was built to fix).
   const MIN_BLOCK_MINS = MINS_PER_POINT; // 60
-  const ROUND_ROBIN_CHUNK_MINS = MIN_BLOCK_MINS;
   const blocksToCreate = [];
-  const minsLeftById = new Map(items.map(item => [item.id, item._mins]));
-  const priorityItems = items; // Tier A only — already pinned-only by construction above.
+  const minsLeftById = new Map();
 
   const allocateFromDay = (item, slots, iso, capMins) => {
     let minsLeft = minsLeftById.get(item.id) ?? item._mins;
@@ -412,51 +395,23 @@ async function runForUser(db, uid, options = {}) {
     const slots = daySlots.get(iso);
     if (!slots || slots.length === 0) continue;
 
-    // Tier A, pass 1: fair-share this day's capacity among competing pinned/Top3 items.
-    while (slots.length > 0) {
-      const active = priorityItems.filter(item => (minsLeftById.get(item.id) || 0) > 0);
-      if (active.length === 0) break;
-      if (active.length === 1) {
-        allocateFromDay(active[0], slots, iso, null);
-        break;
-      }
-      let progressed = false;
-      for (const item of active) {
-        if (slots.length === 0) break;
-        const before = minsLeftById.get(item.id);
-        allocateFromDay(item, slots, iso, ROUND_ROBIN_CHUNK_MINS);
-        if (minsLeftById.get(item.id) !== before) progressed = true;
-      }
-      if (!progressed) break;
-    }
-
-    // Tier A, pass 2: anything still unfilled today (leftover priority mins beyond
-    // their fair share) fills the remaining gaps in existing score order.
-    for (const item of priorityItems) {
-      if (slots.length === 0) break;
-      if ((minsLeftById.get(item.id) || 0) <= 0) continue;
-      allocateFromDay(item, slots, iso, null);
-    }
-
     // Tier B, "extra safety" fallback: only tasks due on this exact day, sorted by AI
-    // score, fill whatever capacity Tier A left over. Each is scheduled entirely within
-    // its own due day — not spread across days like Tier A — so a task that doesn't
-    // fully fit today simply gets whatever fits today and nothing more.
-    if (slots.length > 0) {
-      const dayStart = DateTime.fromISO(iso, { zone }).startOf('day').toMillis();
-      const dayEnd   = DateTime.fromISO(iso, { zone }).endOf('day').toMillis();
-      const dueTodayTasks = tierBTaskPool
-        .filter(t => t._dueMs >= dayStart && t._dueMs <= dayEnd)
-        .sort((a, b) => b._score - a._score);
-      for (const t of dueTodayTasks) {
-        if (slots.length === 0) break;
-        minsLeftById.set(t.id, t._mins);
-        allocateFromDay(t, slots, iso, null);
-      }
+    // score, fill whatever free capacity exists (runCalendarPlannerJob has already
+    // placed pinned/Top3 items elsewhere in the chain). Each task is scheduled entirely
+    // within its own due day — not spread across days — so one that doesn't fully fit
+    // today simply gets whatever fits today and nothing more.
+    const dayStart = DateTime.fromISO(iso, { zone }).startOf('day').toMillis();
+    const dayEnd   = DateTime.fromISO(iso, { zone }).endOf('day').toMillis();
+    const dueTodayTasks = tierBTaskPool
+      .filter(t => t._dueMs >= dayStart && t._dueMs <= dayEnd)
+      .sort((a, b) => b._score - a._score);
+    for (const t of dueTodayTasks) {
+      if (slots.length === 0) break;
+      minsLeftById.set(t.id, t._mins);
+      allocateFromDay(t, slots, iso, null);
     }
   }
-  // items that don't fit within the sprint (or don't fit their due day, for Tier B)
-  // are simply not given a block.
+  // Tasks that don't fit their due day are simply not given a block.
 
   // ── 7. Write blocks in batches ────────────────────────────────────────────
   let written = 0;
@@ -474,8 +429,8 @@ async function runForUser(db, uid, options = {}) {
     }
   }
 
-  console.log(`[sprint_forward_plan] uid=${uid} items=${items.length} blocks=${dryRun ? blocksToCreate.length + '(dry)' : written}`);
-  return { user: uid, items: items.length, blocks: dryRun ? blocksToCreate.length : written, dryRun };
+  console.log(`[sprint_forward_plan] uid=${uid} tierBCandidates=${tierBTaskPool.length} blocks=${dryRun ? blocksToCreate.length + '(dry)' : written}`);
+  return { user: uid, items: tierBTaskPool.length, blocks: dryRun ? blocksToCreate.length : written, dryRun };
 }
 
 // ─── all-users runner ─────────────────────────────────────────────────────────
