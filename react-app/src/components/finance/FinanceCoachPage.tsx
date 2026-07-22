@@ -1,8 +1,10 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Container, Card, Row, Col, Button, Spinner, Alert, Badge } from 'react-bootstrap';
 import { Bot, TrendingUp, PiggyBank, AlertCircle, RefreshCw, ExternalLink } from 'lucide-react';
 import { httpsCallable } from 'firebase/functions';
-import { functions } from '../../firebase';
+import { doc, getDoc } from 'firebase/firestore';
+import { db, functions } from '../../firebase';
+import { useAuth } from '../../contexts/AuthContext';
 import { useDashboardData } from '../../hooks/useDashboardData';
 import ReactECharts from 'echarts-for-react';
 import { Link } from 'react-router-dom';
@@ -22,7 +24,7 @@ const BudgetHealthGauge: React.FC<{ score: number; label: string }> = ({ score, 
   return (
     <div className="d-flex flex-column align-items-center">
       <svg width={140} height={140} viewBox="0 0 140 140">
-        <circle cx={cx} cy={cy} r={r} fill="none" stroke="#1f2937" strokeWidth={10} />
+        <circle cx={cx} cy={cy} r={r} fill="none" style={{ stroke: 'var(--line)' }} strokeWidth={10} />
         <circle
           cx={cx} cy={cy} r={r}
           fill="none" stroke={color} strokeWidth={10}
@@ -31,13 +33,19 @@ const BudgetHealthGauge: React.FC<{ score: number; label: string }> = ({ score, 
           transform={`rotate(-90 ${cx} ${cy})`}
         />
         <text x={cx} y={cy - 6} textAnchor="middle" fill={color} fontSize={22} fontWeight="700">{Math.round(pct)}</text>
-        <text x={cx} y={cy + 14} textAnchor="middle" fill="#9ca3af" fontSize={11}>{label}</text>
+        <text x={cx} y={cy + 14} textAnchor="middle" style={{ fill: 'var(--muted)' }} fontSize={11}>{label}</text>
       </svg>
     </div>
   );
 };
 
+// Insights older than this trigger a silent background refresh even though the cached
+// copy is shown immediately — keeps the page feeling instant without ever blocking on
+// the LLM round-trip that generateFinanceActionInsights makes on every call.
+const INSIGHTS_STALE_MS = 24 * 60 * 60 * 1000;
+
 const FinanceCoachPage: React.FC = () => {
+  const { currentUser } = useAuth();
   const { data, loading: dataLoading } = useDashboardData();
   const [insights, setInsights] = useState<any[]>([]);
   const [insightsLoading, setInsightsLoading] = useState(false);
@@ -45,6 +53,7 @@ const FinanceCoachPage: React.FC = () => {
   const [insightsAt, setInsightsAt] = useState<Date | null>(null);
   const [convertingId, setConvertingId] = useState<string | null>(null);
   const [convertStatus, setConvertStatus] = useState<Record<string, string>>({});
+  const hasLoadedCacheRef = useRef(false);
 
   const income = data?.totalIncome || 0;
   const spend = data?.totalSpend || 0;
@@ -59,14 +68,17 @@ const FinanceCoachPage: React.FC = () => {
   const budgetScore = budgetRows.length > 0 ? Math.round((onBudgetCount / budgetRows.length) * 100) : 100;
   const overBudget = budgetRows.filter((r) => r.actual > r.budget);
 
+  // color-mix against var(--card) instead of a fixed hex so the tint stays subtle in both
+  // light and dark mode rather than a hardcoded near-black background looking wrong in light.
+  const tint = (color: string) => `color-mix(in srgb, var(--card) 85%, ${color} 15%)`;
   const verdict = savingsRate >= 20 && overBudget.length === 0
-    ? { label: 'Your finances are healthy', color: '#22c55e', bg: '#052e16' }
+    ? { label: 'Your finances are healthy', color: '#22c55e', bg: tint('#22c55e') }
     : savingsRate >= 10 || overBudget.length <= 2
-    ? { label: 'Watch your discretionary spend', color: '#f59e0b', bg: '#431407' }
-    : { label: 'Budget alert — action needed', color: '#ef4444', bg: '#3b0a0a' };
+    ? { label: 'Watch your discretionary spend', color: '#f59e0b', bg: tint('#f59e0b') }
+    : { label: 'Budget alert — action needed', color: '#ef4444', bg: tint('#ef4444') };
 
   const topCategories = useMemo(() => {
-    const byCategory = (data as any)?.byCategory || {};
+    const byCategory = (data as any)?.spendByCategory || {};
     return Object.entries(byCategory)
       .map(([key, value]: [string, any]) => ({ name: key.replace(/_/g, ' '), value: Math.abs(value) }))
       .sort((a, b) => b.value - a.value)
@@ -109,6 +121,35 @@ const FinanceCoachPage: React.FC = () => {
     }
   };
 
+  // Cache-first load: generateFinanceActionInsights always makes an LLM call, so the old
+  // "click Refresh, wait" flow meant every page visit paid that latency before showing
+  // anything. Read the persisted finance_action_insights doc instantly instead; only fall
+  // back to a blocking compute when there's genuinely no cache yet, and silently refresh
+  // in the background when the cache is stale.
+  useEffect(() => {
+    if (!currentUser?.uid || hasLoadedCacheRef.current) return;
+    hasLoadedCacheRef.current = true;
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, 'finance_action_insights', currentUser.uid));
+        if (snap.exists()) {
+          const cached = snap.data() as any;
+          const actions = Array.isArray(cached.actions) ? cached.actions : [];
+          const updatedAt: Date | null = cached.updatedAt?.toDate ? cached.updatedAt.toDate() : null;
+          setInsights(actions);
+          setInsightsAt(updatedAt);
+          const isStale = !updatedAt || (Date.now() - updatedAt.getTime()) > INSIGHTS_STALE_MS;
+          if (isStale) void refreshInsights();
+          return;
+        }
+      } catch (err) {
+        console.warn('[FinanceCoachPage] cached insights lookup failed', err);
+      }
+      void refreshInsights();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.uid]);
+
   const convertToStory = async (action: any) => {
     setConvertingId(action.id);
     try {
@@ -133,14 +174,14 @@ const FinanceCoachPage: React.FC = () => {
   }
 
   return (
-    <div style={{ background: 'linear-gradient(180deg, #0b1220 0%, #111827 100%)', minHeight: '100vh', padding: '24px 0' }}>
+    <div style={{ background: 'var(--bg)', minHeight: '100vh', padding: '24px 0' }}>
       <Container style={{ maxWidth: 720 }}>
-        <div className="d-flex justify-content-between align-items-center mb-4 text-white">
+        <div className="d-flex justify-content-between align-items-center mb-4" style={{ color: 'var(--text)' }}>
           <div>
             <h4 className="mb-1 d-flex align-items-center gap-2"><Bot size={20} /> AI Finance Coach</h4>
-            <div className="text-muted small">Spending verdict + AI-powered action plan</div>
+            <div className="small" style={{ color: 'var(--muted)' }}>Spending verdict + AI-powered action plan</div>
           </div>
-          <Link to="/finance/dashboard" className="btn btn-sm btn-outline-light"><ExternalLink size={14} className="me-1" />Finance Hub</Link>
+          <Link to="/finance/dashboard" className="btn btn-sm btn-outline-secondary"><ExternalLink size={14} className="me-1" />Finance Hub</Link>
         </div>
 
         {/* Verdict banner */}
@@ -150,8 +191,8 @@ const FinanceCoachPage: React.FC = () => {
         >
           <div>
             <div className="fw-bold mb-1" style={{ color: verdict.color }}>{verdict.label}</div>
-            <div className="small text-white-50">
-              Savings rate: <strong style={{ color: '#fff' }}>{savingsRate.toFixed(1)}%</strong>
+            <div className="small" style={{ color: 'var(--text)', opacity: 0.75 }}>
+              Savings rate: <strong style={{ color: 'var(--text)', opacity: 1 }}>{savingsRate.toFixed(1)}%</strong>
               {overBudget.length > 0 && <> · <span className="text-danger">{overBudget.length} categor{overBudget.length === 1 ? 'y' : 'ies'} over budget</span></>}
             </div>
           </div>
@@ -161,11 +202,11 @@ const FinanceCoachPage: React.FC = () => {
         <Row className="g-3 mb-3">
           {/* Budget health score */}
           <Col md={5}>
-            <Card style={{ background: '#111827', border: '1px solid #1f2937', color: '#fff' }}>
-              <Card.Header style={{ background: '#0b1220', borderColor: '#1f2937' }} className="small fw-semibold">Budget Health Score</Card.Header>
+            <Card style={{ background: 'var(--card)', border: '1px solid var(--line)', color: 'var(--text)' }}>
+              <Card.Header style={{ background: 'var(--panel)', borderColor: 'var(--line)', color: 'var(--text)' }} className="small fw-semibold">Budget Health Score</Card.Header>
               <Card.Body className="text-center py-3">
                 <BudgetHealthGauge score={budgetScore} label="on budget" />
-                <div className="small text-muted mt-2">
+                <div className="small mt-2" style={{ color: 'var(--muted)' }}>
                   {onBudgetCount} / {budgetRows.length} categories within budget
                 </div>
                 <div className="mt-2 small">
@@ -177,13 +218,13 @@ const FinanceCoachPage: React.FC = () => {
 
           {/* Top categories */}
           <Col md={7}>
-            <Card style={{ background: '#111827', border: '1px solid #1f2937', color: '#fff', height: '100%' }}>
-              <Card.Header style={{ background: '#0b1220', borderColor: '#1f2937' }} className="small fw-semibold">
+            <Card style={{ background: 'var(--card)', border: '1px solid var(--line)', color: 'var(--text)', height: '100%' }}>
+              <Card.Header style={{ background: 'var(--panel)', borderColor: 'var(--line)', color: 'var(--text)' }} className="small fw-semibold">
                 <TrendingUp size={14} className="me-1" />Top Spending (30 days)
               </Card.Header>
               <Card.Body className="py-2">
                 {topCategories.length === 0 ? (
-                  <div className="text-muted small">No category data — categorise transactions first.</div>
+                  <div className="small" style={{ color: 'var(--muted)' }}>No category data — categorise transactions first.</div>
                 ) : (
                   <ReactECharts option={barOption} style={{ height: 160 }} />
                 )}
@@ -194,14 +235,14 @@ const FinanceCoachPage: React.FC = () => {
 
         {/* Over-budget alerts */}
         {overBudget.length > 0 && (
-          <Card className="mb-3" style={{ background: '#2f1118', border: '1px solid #ef4444' }}>
-            <Card.Header style={{ background: '#3b0a0a', borderColor: '#ef4444' }} className="small fw-semibold text-danger">
+          <Card className="mb-3" style={{ background: 'var(--card)', border: '1px solid #ef4444' }}>
+            <Card.Header style={{ background: 'var(--panel)', borderColor: '#ef4444' }} className="small fw-semibold text-danger">
               <AlertCircle size={14} className="me-1" />Over-Budget Categories
             </Card.Header>
             <Card.Body className="py-2 px-3">
               {overBudget.map(({ key, actual, budget }) => (
                 <div key={key} className="d-flex justify-content-between align-items-center mb-1">
-                  <span className="small text-white">{key.replace(/_/g, ' ')}</span>
+                  <span className="small" style={{ color: 'var(--text)' }}>{key.replace(/_/g, ' ')}</span>
                   <span className="small text-danger fw-bold">{fmt(actual)} / {fmt(budget)} (+{fmt(actual - budget)})</span>
                 </div>
               ))}
@@ -210,12 +251,12 @@ const FinanceCoachPage: React.FC = () => {
         )}
 
         {/* AI Insights */}
-        <Card className="mb-3" style={{ background: '#111827', border: '1px solid #1f2937' }}>
-          <Card.Header style={{ background: '#0b1220', borderColor: '#1f2937' }} className="d-flex justify-content-between align-items-center">
-            <span className="small fw-semibold text-white"><Bot size={14} className="me-1" />AI Insights</span>
+        <Card className="mb-3" style={{ background: 'var(--card)', border: '1px solid var(--line)' }}>
+          <Card.Header style={{ background: 'var(--panel)', borderColor: 'var(--line)' }} className="d-flex justify-content-between align-items-center">
+            <span className="small fw-semibold" style={{ color: 'var(--text)' }}><Bot size={14} className="me-1" />AI Insights</span>
             <div className="d-flex align-items-center gap-2">
-              {insightsAt && <span className="small text-muted">Updated {insightsAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</span>}
-              <Button size="sm" variant="outline-light" onClick={refreshInsights} disabled={insightsLoading}>
+              {insightsAt && <span className="small" style={{ color: 'var(--muted)' }}>Updated {insightsAt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</span>}
+              <Button size="sm" variant="outline-secondary" onClick={refreshInsights} disabled={insightsLoading}>
                 {insightsLoading ? <Spinner size="sm" animation="border" /> : <><RefreshCw size={12} className="me-1" />Refresh insights</>}
               </Button>
             </div>
@@ -223,18 +264,18 @@ const FinanceCoachPage: React.FC = () => {
           <Card.Body>
             {insightsError && <Alert variant="danger" className="small">{insightsError}</Alert>}
             {insights.length === 0 && !insightsLoading && (
-              <div className="text-muted small">Click "Refresh insights" to analyse your last 90 days of spend and get AI recommendations.</div>
+              <div className="small" style={{ color: 'var(--muted)' }}>Click "Refresh insights" to analyse your last 90 days of spend and get AI recommendations.</div>
             )}
             {insights.map((action: any) => (
-              <div key={action.id} className="border rounded p-3 mb-2" style={{ borderColor: '#1f2937', background: '#0b1220' }}>
-                <div className="fw-semibold small text-white mb-1">{action.title}</div>
-                <div className="text-muted small mb-2">{action.reason}</div>
+              <div key={action.id} className="border rounded p-3 mb-2" style={{ borderColor: 'var(--line)', background: 'var(--panel)' }}>
+                <div className="fw-semibold small mb-1" style={{ color: 'var(--text)' }}>{action.title}</div>
+                <div className="small mb-2" style={{ color: 'var(--muted)' }}>{action.reason}</div>
                 {convertStatus[action.id] ? (
                   <Badge bg="success">{convertStatus[action.id]}</Badge>
                 ) : (
                   <Button
                     size="sm"
-                    variant="outline-light"
+                    variant="outline-secondary"
                     disabled={convertingId === action.id}
                     onClick={() => convertToStory(action)}
                   >
@@ -248,16 +289,16 @@ const FinanceCoachPage: React.FC = () => {
 
         {/* Subscriptions */}
         {subscriptions.length > 0 && (
-          <Card className="mb-3" style={{ background: '#111827', border: '1px solid #1f2937' }}>
-            <Card.Header style={{ background: '#0b1220', borderColor: '#1f2937' }} className="small fw-semibold text-white">Subscriptions</Card.Header>
+          <Card className="mb-3" style={{ background: 'var(--card)', border: '1px solid var(--line)' }}>
+            <Card.Header style={{ background: 'var(--panel)', borderColor: 'var(--line)', color: 'var(--text)' }} className="small fw-semibold">Subscriptions</Card.Header>
             <Card.Body className="py-2 px-3">
               {subscriptions.map((s) => (
                 <div key={s.name} className="d-flex justify-content-between align-items-center mb-1">
-                  <span className="small text-white">{s.name}</span>
+                  <span className="small" style={{ color: 'var(--text)' }}>{s.name}</span>
                   <Badge bg="secondary">{fmt(s.totalPence)}/mo</Badge>
                 </div>
               ))}
-              <div className="text-muted small mt-2">
+              <div className="small mt-2" style={{ color: 'var(--muted)' }}>
                 Total: <strong>{fmt(subscriptions.reduce((s, r) => s + r.totalPence, 0))}</strong>/month in subscriptions
               </div>
             </Card.Body>

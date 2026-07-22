@@ -11,6 +11,8 @@ interface DashboardData {
   discretionarySpend: number;
   mandatorySpend: number;
   byCategory: Record<string, number>;
+  /** Same breakdown as byCategory but excludes income/savings buckets — for spend-only charts. */
+  spendByCategory: Record<string, number>;
   recentTransactions: any[];
   uncategorizedCount: number;
   pots?: any[];
@@ -73,6 +75,12 @@ export function useDashboardData() {
         discretionarySpend: Math.abs(latestTotals.optional || 0),
         mandatorySpend: Math.abs(latestTotals.mandatory || 0),
         byCategory: latestCategories.reduce((acc: any, cat: any) => {
+          acc[cat.label] = Math.abs(cat.amount);
+          return acc;
+        }, {}),
+        spendByCategory: latestCategories.reduce((acc: any, cat: any) => {
+          const bucket = String(cat.bucket || cat.type || '').toLowerCase();
+          if (bucket === 'income' || bucket === 'savings') return acc;
           acc[cat.label] = Math.abs(cat.amount);
           return acc;
         }, {}),
