@@ -3409,7 +3409,14 @@ async function runPriorityScoringJob() {
       })).catch((err) => console.warn('[Priority] summary activity write failed', err?.message || err));
     }
 
-    const nowLocal = DateTime.now();
+    // DateTime.now() defaults to the process's local zone (UTC on Cloud Functions), not the
+    // user's — endOf('day') in UTC is 23:59:59.999 UTC, which is 00:59:59.999 the *next* local
+    // day once BST (UTC+1) is in effect. That's the "things are scheduled at 23:59" bug Jim
+    // reported live 2026-07-22: Top 3 stories/tasks were landing on tomorrow at 00:59 instead
+    // of today at 23:59. Must resolve the user's own zone first, same as
+    // applyAggressiveDueDateReplanForUser above.
+    const zone = coerceZone(resolveTimezone(prof.data() || {}, 'Europe/London'));
+    const nowLocal = DateTime.now().setZone(zone);
     const todayIso = nowLocal.toISODate();
     const todayEnd = nowLocal.endOf('day').toMillis();
     const tomorrowEnd = nowLocal.plus({ days: 1 }).endOf('day').toMillis();
@@ -5399,7 +5406,12 @@ exports.applyEveningPullForward = onCall({
     return { ok: true, skipped: 'already_done' };
   }
 
-  const nowLocal = DateTime.now();
+  // See the matching comment in runPriorityScoringJob — DateTime.now() without a zone
+  // defaults to UTC, so endOf('day') lands an hour into tomorrow once BST is in effect.
+  const profileSnap = await db.collection('profiles').doc(uid).get().catch(() => null);
+  const profile = profileSnap && profileSnap.exists ? (profileSnap.data() || {}) : {};
+  const zone = coerceZone(resolveTimezone(profile, 'Europe/London'));
+  const nowLocal = DateTime.now().setZone(zone);
   const todayEnd = nowLocal.endOf('day').toMillis();
   const reason = 'User accepted evening pull-forward suggestion';
 
@@ -5552,7 +5564,14 @@ exports.deltaPriorityRescore = onCall({
 // `persona` is retained for backwards compatibility with existing callers,
 // but Top 3 is now global (story-first) per user.
 async function _deltaTop3ForPersona(db, userId, persona) {
-  const nowLocal = DateTime.now();
+  // See the matching comment in runPriorityScoringJob — DateTime.now() without a zone
+  // defaults to UTC, so endOf('day') lands an hour into tomorrow once BST is in effect. This
+  // function runs on every deltaPriorityRescore call (i.e. every task/story save from the
+  // app), so it's the most frequent source of the bug, not just a nightly one.
+  const profileSnap = await db.collection('profiles').doc(userId).get().catch(() => null);
+  const profile = profileSnap && profileSnap.exists ? (profileSnap.data() || {}) : {};
+  const zone = coerceZone(resolveTimezone(profile, 'Europe/London'));
+  const nowLocal = DateTime.now().setZone(zone);
   const todayIso = nowLocal.toISODate();
   const todayEnd = nowLocal.endOf('day').toMillis();
   const tomorrowEnd = nowLocal.plus({ days: 1 }).endOf('day').toMillis();
