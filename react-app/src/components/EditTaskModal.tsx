@@ -116,7 +116,6 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
     daysOfWeek: [] as string[],
     persona: 'personal' as 'personal' | 'work',
     sprintAlignmentOverride: false as boolean,
-    linkedGoalId: '' as string,
   });
   const [showAlignmentWarning, setShowAlignmentWarning] = useState(false);
   const goalInputRef = useRef<HTMLInputElement>(null);
@@ -211,7 +210,6 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         timeOfDay: '',
         storyId: '',
         goalId: '',
-        linkedGoalId: '',
         tags: [],
         type: 'task',
         repeatFrequency: '',
@@ -248,17 +246,19 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       dueTime: task.dueTime || '',
       timeOfDay: task.timeOfDay || '',
       storyId: linkedStoryId,
-      goalId: (task as any).goalId || linkedStory?.goalId || '',
+      // linkedGoalId used to be a separate override field (habit/routine KPI-crediting only);
+      // merged into this single field — an existing override still surfaces here so it isn't
+      // silently lost, and gets written back out as the one authoritative goalId on next save.
+      goalId: (task as any).goalId || (task as any).linkedGoalId || linkedStory?.goalId || '',
       tags: Array.isArray((task as any).tags) ? (task as any).tags : [],
       type: normalizeTaskType((task as any).type),
       repeatFrequency: ((task as any).repeatFrequency || '') as '' | 'daily' | 'weekly' | 'monthly' | 'yearly',
       repeatInterval: Number((task as any).repeatInterval || 1) || 1,
       daysOfWeek: Array.isArray((task as any).daysOfWeek) ? (task as any).daysOfWeek : [],
       persona: ((task as any).persona || 'personal') as 'personal' | 'work',
-      linkedGoalId: (task as any).linkedGoalId || '',
     });
     setStoryInput(linkedStory ? (linkedStory.title || '') : '');
-    const resolvedGoalId = (task as any)?.goalId || linkedStory?.goalId || '';
+    const resolvedGoalId = (task as any)?.goalId || (task as any)?.linkedGoalId || linkedStory?.goalId || '';
     const linkedGoalInit = resolvedGoalId ? goals.find((g) => g.id === resolvedGoalId) : undefined;
     setGoalInput(linkedGoalInit ? getGoalDisplayPath(linkedGoalInit.id, goals) : '');
   }, [task, show, stories, goals, currentPersona]);
@@ -361,7 +361,9 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
         parentType: form.storyId ? 'story' : null,
         parentId: form.storyId || null,
         goalId: form.goalId || null,
-        linkedGoalId: form.linkedGoalId || null,
+        // linkedGoalId (separate KPI-tracking override) is retired — clear it explicitly so a
+        // resave converges a task fully onto the single goalId field.
+        linkedGoalId: null,
         tags: Array.isArray(form.tags) ? form.tags.map((tag) => tag.trim()).filter(Boolean) : [],
         type: normalizedTaskType,
         repeatFrequency: normalizedFrequency,
@@ -466,9 +468,19 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       }
       onUpdated?.();
       onHide();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to update task', error);
-      alert('Failed to update task. Please try again.');
+      if (error?.code === 'not-found') {
+        // The task was already archived/deleted server-side (e.g. by nightly archival of a
+        // Done task) while this modal had it open from a stale client cache — same class of
+        // race as TaskListView's not-found handling. There's nothing to retry; just close.
+        console.warn('Task no longer exists — likely archived. Closing modal.');
+        onUpdated?.();
+        onHide();
+        return;
+      }
+      const detail = error?.code || error?.message || 'Unknown error';
+      alert(`Failed to update task: ${detail}\n\nCheck the browser console for the full error — it's logged there too.`);
     } finally {
       setSaving(false);
     }
@@ -927,35 +939,14 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                       </div>
                     ) : null}
                     {RECURRING_TASK_TYPES.has(form.type) && (
-                      <div className="form-text">Recurring work only contributes to KPI adherence when linked to a leaf goal.</div>
+                      <div className="form-text">
+                        Recurring work only contributes to KPI adherence when linked to a leaf goal — this is also what
+                        sprint planners use to surface the habit/routine under that goal.
+                      </div>
                     )}
               </Form.Group>
                 </Col>
               </Row>
-              {(form.type === 'habit' || form.type === 'routine') && (
-              <Row>
-                <Col md={12}>
-                  <Form.Group className="mb-3">
-                    <Form.Label>Linked goal (KPI tracking)</Form.Label>
-                    <Form.Select
-                      size="sm"
-                      value={form.linkedGoalId}
-                      onChange={(e) => setForm((prev) => ({ ...prev, linkedGoalId: e.target.value }))}
-                    >
-                      <option value="">— none —</option>
-                      {goals.filter(g => Number((g as any).status) !== 4).map((g) => (
-                        <option key={g.id} value={g.id}>
-                          {getGoalDisplayPath(g.id, goals)}
-                        </option>
-                      ))}
-                    </Form.Select>
-                    <div className="form-text">
-                      Links this habit to a goal so sprint planners can surface it under that goal, and KPI adherence counts against it.
-                    </div>
-                  </Form.Group>
-                </Col>
-              </Row>
-              )}
               <Row>
                 <Col md={12}>
                   <Form.Group className="mb-3">

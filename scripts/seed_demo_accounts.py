@@ -440,6 +440,12 @@ def seed_for_uid(uid, display_name, email):
     for g in goals:
         gid = g.pop('_id')
         g['ownerUid'] = uid
+        # Same account-scoped ID prefix as every other cross-reference below (goalId,
+        # storyId, sprintId) — parentGoalId was the one reference left un-prefixed, so it
+        # pointed at a document ID that never existed, breaking hierarchy grouping on
+        # anything that groups goals by parentGoalId (e.g. GoalsCardView's groupByParent).
+        if g.get('parentGoalId'):
+            g['parentGoalId'] = f"{uid}-{g['parentGoalId']}"
         g['createdAt'] = now_ts
         g['updatedAt'] = now_ts
         ops.append((db.collection('goals').document(f'{uid}-{gid}'), g))
