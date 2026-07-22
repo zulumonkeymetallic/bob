@@ -259,9 +259,21 @@ async function runForUser(db, uid, options = {}) {
   }
 
   // ── 4. Score and sort ──────────────────────────────────────────────────────
+  // Sprints here include anything status<2 — in practice that's not just tight 2-3 week
+  // active sprints but also long-running "bucket" sprints holding hundreds of
+  // never-triaged backlog items (confirmed live 2026-07-22: one such sprint held 828
+  // stories, median AI score 16, 500+ scoring under 20). Without a floor, once the day's
+  // pinned/Top3 items are satisfied the greedy allocator kept reaching further into that
+  // pile to fill leftover capacity — which is why near-random low-value stories kept
+  // landing on the calendar. Pinned/Top3 items always bypass this floor; anything else
+  // below it stays in the backlog (still visible everywhere else in the app) until a
+  // human actually prioritises it, instead of auto-claiming calendar time.
+  const MIN_SCORE_TO_SCHEDULE = 20;
+  const isCalendarEligible = (item) => isPinnedItem(item) || Number(item.aiCriticalityScore || 0) >= MIN_SCORE_TO_SCHEDULE;
+
   const items = [
-    ...stories.map(s => ({ ...s, _type: 'story', _score: effectiveScore(s), _mins: Math.round(pointsRemaining(s) * MINS_PER_POINT) })),
-    ...tasks.map(t => ({ ...t, _type: 'task',  _score: effectiveScore(t), _mins: Math.round(pointsRemaining(t) * MINS_PER_POINT) })),
+    ...stories.filter(isCalendarEligible).map(s => ({ ...s, _type: 'story', _score: effectiveScore(s), _mins: Math.round(pointsRemaining(s) * MINS_PER_POINT) })),
+    ...tasks.filter(isCalendarEligible).map(t => ({ ...t, _type: 'task',  _score: effectiveScore(t), _mins: Math.round(pointsRemaining(t) * MINS_PER_POINT) })),
   ].sort((a, b) => {
     // 1. Human-prioritised (manual rank 1-5, ascending) always first.
     const ar = Number(a.userPriorityRank || 0);
