@@ -1,21 +1,21 @@
 {
-  "buildId": "1784741295667",
-  "timestamp": "2026-07-22T17:28:15Z",
-  "date": "2026-07-22 18:28:15",
+  "buildId": "1784744480756",
+  "timestamp": "2026-07-22T18:21:20Z",
+  "date": "2026-07-22 19:21:20",
   "branch": "main",
   "user": "jim",
   "versions": {
-    "web": "4.5.484.5667",
+    "web": "4.5.484.0756",
     "ios": "",
     "mac": ""
   },
   "commits": {
-    "web": "340ad4e8",
+    "web": "8f315e0c",
     "ios": "",
     "mac": ""
   },
   "durations": {
-    "web": "86s",
+    "web": "manual (functions deploy hit Cloud Run quota wall, retried directly)",
     "ios": "",
     "mac": ""
   },
