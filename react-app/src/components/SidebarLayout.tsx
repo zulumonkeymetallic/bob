@@ -18,6 +18,7 @@ import CompactSprintMetrics from './CompactSprintMetrics';
 import AssistantDock from './AssistantDock';
 import ProcessTextActivityHost from './ProcessTextActivityHost';
 import NotificationStream from './NotificationStream';
+import { useDeviceInfo } from '../utils/deviceDetection';
 // Test mode UI removed per request
 
 interface SidebarLayoutProps {
@@ -70,6 +71,12 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const location = useLocation();
   const [isSmallScreen, setIsSmallScreen] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth < 768 : false);
   const [isLargeScreen, setIsLargeScreen] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth >= 1200 : true);
+  // isSmallScreen (width<768) misses iPad portrait (768-1024px), which the app's own
+  // routing (useDeviceInfo().isMobile) already treats as mobile — that gap meant iPad
+  // portrait got routed to the phone-style MobileHome experience but this header's old
+  // `d-md-none` CSS class hid at exactly the point iPad needed it, leaving no way to reach
+  // the full nav menu at all. deviceInfo.isMobile is the authoritative signal instead.
+  const deviceInfo = useDeviceInfo();
   const NAV_COLLAPSED_KEY = 'navCollapsedV3'; // V2 resets all users to collapsed default
   const [navCollapsed, setNavCollapsed] = useState<boolean>(() => {
     if (typeof window !== 'undefined' && window.innerWidth < 1200) return true;
@@ -312,10 +319,14 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
 
   return (
     <div className="d-flex sidebar-layout-outer" style={{ height: '100vh', overflow: 'hidden' }}>
-      {/* Desktop Sidebar (collapsible) */}
+      {/* Desktop Sidebar (collapsible) — mutually exclusive with the Mobile Header/bottom
+          tabs via deviceInfo.isMobile (was a static `d-none d-md-flex` CSS breakpoint at
+          768px, which showed this alongside MobileHome for iPad portrait, 768-1024px). */}
+      {!deviceInfo.isMobile && (
       <div
-        className="sidebar-desktop d-none d-md-flex flex-column"
+        className="sidebar-desktop flex-column"
         style={{
+          display: 'flex',
           width: navCollapsed ? '56px' : '250px',
           height: '100vh',
           flexShrink: 0,
@@ -509,9 +520,16 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           </>
         )}
       </div>
+      )}
 
-      {/* Mobile Header */}
-      <div className="d-md-none fixed-top" style={{
+      {/* Mobile Header — shown whenever the app has routed to the phone-style experience
+          (deviceInfo.isMobile covers both true phones and iPad portrait), not gated by a
+          static CSS breakpoint that missed iPad. The full-nav "Menu" hamburger inside it is
+          iPad-only: on a phone the bottom tab bar is the only nav surface (Jim wants it
+          kept simple there), but iPad still needs a way to reach pages the tab bar doesn't
+          cover (Journals, Backlog, Sprints, Calendar, Travel, Settings). */}
+      {deviceInfo.isMobile && (
+      <div className="fixed-top" style={{
         background: currentPersona === 'work' ? '#d3d3d3' : 'var(--panel)',
         color: currentPersona === 'work' ? '#000' : '#000',
         zIndex: 1050
@@ -519,17 +537,19 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         <Navbar className="px-3" style={{
           background: 'transparent'
         }}>
-          <Button
-            variant={currentPersona === 'work' ? 'outline-dark' : 'outline-dark'}
-            size="sm"
-            onClick={() => setShowSidebar(true)}
-            style={{
-              color: '#000',
-              borderColor: '#000'
-            }}
-          >
-            Menu
-          </Button>
+          {deviceInfo.isIPad ? (
+            <Button
+              variant="outline-dark"
+              size="sm"
+              onClick={() => setShowSidebar(true)}
+              style={{
+                color: '#000',
+                borderColor: '#000'
+              }}
+            >
+              Menu
+            </Button>
+          ) : <div />}
           <Navbar.Brand className="mx-auto d-flex align-items-center gap-2" style={{ fontSize: '1rem', color: '#000' }}>
             <img src="/logo192.png" alt="Logo" style={{ width: '24px', height: '24px', objectFit: 'contain' }} />
             blueprint.organize.build
@@ -545,6 +565,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           </div>
         </Navbar>
       </div>
+      )}
 
       {/* Mobile Sidebar Offcanvas */}
       <Offcanvas
@@ -677,7 +698,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       <div
         className="flex-grow-1 sidebar-layout-main"
         style={{
-          paddingTop: isSmallScreen ? '60px' : '0',
+          paddingTop: deviceInfo.isMobile ? '60px' : '0',
           marginRight: isRightSidebarVisible && window.innerWidth >= 768 ? (isRightSidebarCollapsed ? '60px' : '400px') : '0',
           transition: 'margin-right 0.3s ease',
           minWidth: 0,
@@ -686,8 +707,12 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           height: '100%',
         }}
       >
-        {/* Desktop top toolbar with global Sprint selector */}
-        <div className="d-none d-md-block sidebar-layout-toolbar" style={{
+        {/* Desktop top toolbar with global Sprint selector — mutually exclusive with the
+            Mobile Header above via deviceInfo.isMobile (was a static `d-none d-md-block`
+            CSS breakpoint at 768px, which overlapped with iPad portrait once the Mobile
+            Header above switched to the same 1024px-aware isMobile signal). */}
+        {!deviceInfo.isMobile && (
+        <div className="sidebar-layout-toolbar" style={{
           borderBottom: '1px solid var(--notion-border)',
           background: currentPersona === 'work' ? '#d3d3d3' : 'var(--panel)',
           position: 'relative',
@@ -733,6 +758,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             </div>
           </div>
         </div>
+        )}
 
         <ProcessTextActivityHost />
 

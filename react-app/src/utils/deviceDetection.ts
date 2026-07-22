@@ -8,6 +8,9 @@ export interface DeviceInfo {
   isDesktop: boolean;
   isTouchDevice: boolean;
   screenSize: 'xs' | 'sm' | 'md' | 'lg' | 'xl';
+  /** iPad specifically (any orientation) — used to keep the full nav menu available on
+   * iPad even while it's routed to the mobile (phone-style) experience in portrait. */
+  isIPad: boolean;
 }
 
 export const getDeviceInfo = (): DeviceInfo => {
@@ -44,7 +47,8 @@ export const getDeviceInfo = (): DeviceInfo => {
     isTablet,
     isDesktop,
     isTouchDevice,
-    screenSize
+    screenSize,
+    isIPad
   };
 };
 

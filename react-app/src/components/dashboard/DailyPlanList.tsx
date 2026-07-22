@@ -39,6 +39,10 @@ export interface DailyPlanListProps {
   deleteBusy?: Record<string, boolean>;
   /** Optional — when omitted, the defer button is not rendered. */
   onDefer?: (target: DailyPlanDeferTarget) => void;
+  /** Optional — when omitted, the ref badge isn't clickable. Opens the entity's edit modal
+   * from the human-readable ref (TK-XXXX / ST-XXXXX) rather than needing a separate pencil
+   * icon — the ref itself doubles as the "open this" affordance on mobile. */
+  onEdit?: (item: DailyPlanTimelineItem) => void;
 }
 
 const normalizeStatusValue = (rawStatus: any, entityType: 'story' | 'task'): number => {
@@ -178,6 +182,7 @@ const DailyPlanList: React.FC<DailyPlanListProps> = ({
   onDelete,
   deleteBusy = {},
   onDefer,
+  onEdit,
 }) => {
   return (
     <ListGroup variant="flush">
@@ -198,7 +203,11 @@ const DailyPlanList: React.FC<DailyPlanListProps> = ({
           <ListGroup.Item
             key={item.id}
             className="d-flex align-items-center gap-2 py-2"
-            style={isEvent ? { fontSize: 14, background: '#f8fafc', opacity: 0.85 } : { fontSize: 14 }}
+            style={{
+              fontSize: 14,
+              flexWrap: 'wrap',
+              ...(isEvent ? { background: '#f8fafc', opacity: 0.85 } : null),
+            }}
           >
             {isChore && item.task ? (
               <Form.Check
@@ -214,7 +223,31 @@ const DailyPlanList: React.FC<DailyPlanListProps> = ({
             ) : (
               <span style={{ width: 18, flexShrink: 0 }} />
             )}
-            <div className="flex-grow-1" style={{ minWidth: 0 }}>
+            <div className="flex-grow-1" style={{ minWidth: 140, flexBasis: 140 }}>
+              {/* Ref renders on its own line above the title rather than beside it. minWidth
+                  guarantees this container real estate before the entity-controls cluster
+                  (badges + status select, ~200px+) — the row now wraps (flexWrap:'wrap' on
+                  ListGroup.Item) so controls drop to their own line instead of squeezing the
+                  title/ref down to zero width at phone viewports. */}
+              {!isEvent && entity && (entity as any).ref && (
+                onEdit ? (
+                  <button
+                    type="button"
+                    onClick={() => onEdit(item)}
+                    className="text-decoration-none d-block"
+                    style={{
+                      background: 'none', border: 'none', padding: 0,
+                      fontSize: 11, fontWeight: 700, color: 'var(--bs-primary)',
+                      cursor: 'pointer', lineHeight: 1.3,
+                    }}
+                    title={`Open ${(entity as any).ref}`}
+                  >
+                    {(entity as any).ref}
+                  </button>
+                ) : (
+                  <div className="text-muted" style={{ fontSize: 11, fontWeight: 700, lineHeight: 1.3 }}>{(entity as any).ref}</div>
+                )
+              )}
               <div className={isEvent ? 'text-truncate text-muted' : 'fw-semibold text-truncate'} style={{ lineHeight: 1.2 }}>{item.title}</div>
               {item.timeLabel && <div className="text-muted" style={{ fontSize: 11 }}>{item.timeLabel}</div>}
             </div>

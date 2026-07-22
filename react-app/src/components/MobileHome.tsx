@@ -140,17 +140,25 @@ const MobileHome: React.FC = () => {
   const [noteModal, setNoteModal] = useState<{ type: 'task'|'story'|'goal'; id: string; show: boolean } | null>(null);
   const [noteText, setNoteText] = useState('');
   const [savingNote, setSavingNote] = useState(false);
-  const [aiFocusOnly, setAiFocusOnly] = useState(true);
-  const [aiThreshold, setAiThreshold] = useState(90);
-  const [showCompleted, setShowCompleted] = useState(false);
-  const [tasksViewFilter, setTasksViewFilter] = useState<TaskViewFilter>('top3');
-  const [goalsViewFilter, setGoalsViewFilter] = useState<GoalsViewFilter>('active_sprint');
-  const [tasksViewType, setTasksViewType] = useState<'list' | 'detail'>(() => {
-    try { return (localStorage.getItem('mobile_tasks_view_type') as 'list' | 'detail') || 'list'; } catch { return 'list'; }
-  });
-  const [storiesViewType, setStoriesViewType] = useState<'list' | 'detail'>(() => {
-    try { return (localStorage.getItem('mobile_stories_view_type') as 'list' | 'detail') || 'list'; } catch { return 'list'; }
-  });
+  // Simplified mobile UI (2026-07-22): these were all user-adjustable filters on
+  // Goals/Stories/Tasks; the controls are gone, so each is now fixed at what was already its
+  // default value (tasksViewFilter is the one exception — see comment below). The underlying
+  // filtering logic that reads them is unchanged. Kept as useState (setters unused) rather
+  // than plain consts so TS doesn't narrow these to a single literal type and flag every
+  // comparison against the other union members as unreachable.
+  const [aiFocusOnly] = useState(true);
+  const [aiThreshold] = useState(90);
+  const [showCompleted] = useState(false);
+  // Was 'top3' (the old selector's default) — with the selector gone, defaulting to 'top3'
+  // permanently would mean the Tasks tab could never show anything else. 'all' matches what
+  // a plain, simplified task list should mean; Daily Plan already covers Top 3 specifically.
+  const [tasksViewFilter] = useState<TaskViewFilter>('all');
+  const [goalsViewFilter] = useState<GoalsViewFilter>('active_sprint');
+  // Hard-locked to 'list' — Tasks/Stories no longer expose a List/Detail toggle (simplified
+  // mobile UI, 2026-07-22), so this ignores any 'detail' value a returning user might still
+  // have in localStorage from before that toggle was removed.
+  const [tasksViewType] = useState<'list' | 'detail'>('list');
+  const [storiesViewType] = useState<'list' | 'detail'>('list');
   const [dailyPlanViewType, setDailyPlanViewType] = useState<'list' | 'detail'>(() => {
     try { return (localStorage.getItem('mobile_daily_plan_view_type') as 'list' | 'detail') || 'list'; } catch { return 'list'; }
   });
@@ -1317,7 +1325,13 @@ const MobileHome: React.FC = () => {
       )}
       {/* Tab navigation lives in the fixed bottom bar at the end of the component */}
 
-      {!COACH_TABS.includes(activeTab) && activeTab !== 'goals' && activeTab !== 'finance' && (
+      {/* Simplified mobile UI: the Top3/Chores/Focus-aligned filter pills, the AI-threshold/
+          show-completed filters, the "Tasks view" select, and the List/Detail toggle are all
+          removed from Goals/Stories/Tasks per Jim (2026-07-22) — those three tabs now always
+          render the plain list view with no filter controls. Daily Plan keeps everything
+          unchanged (it's the reference the simplified tabs are modelled on, not a candidate
+          for the same stripping). */}
+      {!COACH_TABS.includes(activeTab) && activeTab !== 'goals' && activeTab !== 'finance' && activeTab !== 'tasks' && activeTab !== 'stories' && (
         <>
           <div className="d-flex flex-wrap gap-2 mb-2">
             <Button
@@ -1351,64 +1365,11 @@ const MobileHome: React.FC = () => {
         </>
       )}
 
-      {(activeTab === 'tasks' || activeTab === 'stories' || activeTab === 'goals') && (
-        <div className="d-flex flex-wrap gap-2 mb-3 align-items-center">
-          <Form.Check
-            type="switch"
-            id="mobile-ai-focus"
-            label={`AI score ≥ ${aiThreshold}`}
-            checked={aiFocusOnly}
-            onChange={(e) => setAiFocusOnly(e.target.checked)}
-          />
-          <Form.Group className="d-flex align-items-center gap-1 mb-0" style={{ minWidth: 120 }}>
-            <Form.Label className="mb-0 small text-muted">AI threshold</Form.Label>
-            <Form.Control
-              type="number"
-              min={0}
-              max={100}
-              value={aiThreshold}
-              onChange={(e) => {
-                const val = Number(e.target.value);
-                if (Number.isNaN(val)) {
-                  setAiThreshold(0);
-                  return;
-                }
-                setAiThreshold(Math.min(100, Math.max(0, val)));
-              }}
-              size="sm"
-              style={{ width: 72 }}
-            />
-          </Form.Group>
-          <Form.Check
-            type="switch"
-            id="mobile-show-completed"
-            label="Show completed"
-            checked={showCompleted}
-            onChange={(e) => setShowCompleted(e.target.checked)}
-          />
-        </div>
-      )}
-
-      {(activeTab === 'tasks' || activeTab === 'stories' || activeTab === 'daily_plan') && (
+      {activeTab === 'daily_plan' && (
         <div className="d-flex align-items-center gap-1 mb-3 justify-content-end">
-          {activeTab === 'tasks' && (
-            <Form.Group className="d-flex align-items-center gap-1 mb-0 me-auto" style={{ minWidth: 170 }}>
-              <Form.Label className="mb-0 small text-muted">Tasks view</Form.Label>
-              <Form.Select size="sm" value={tasksViewFilter} onChange={(e) => setTasksViewFilter(e.target.value as TaskViewFilter)}>
-                <option value="top3">Top 3</option>
-                <option value="due_today">Due today</option>
-                <option value="overdue">Overdue</option>
-                <option value="all">All tasks</option>
-              </Form.Select>
-            </Form.Group>
-          )}
           {(() => {
-            const vt = activeTab === 'tasks' ? tasksViewType : activeTab === 'daily_plan' ? dailyPlanViewType : storiesViewType;
-            const setVt = (v: 'list' | 'detail') => {
-              if (activeTab === 'tasks') { setTasksViewType(v); try { localStorage.setItem('mobile_tasks_view_type', v); } catch {} }
-              else if (activeTab === 'daily_plan') { setDailyPlanViewType(v); try { localStorage.setItem('mobile_daily_plan_view_type', v); } catch {} }
-              else { setStoriesViewType(v); try { localStorage.setItem('mobile_stories_view_type', v); } catch {} }
-            };
+            const vt = dailyPlanViewType;
+            const setVt = (v: 'list' | 'detail') => { setDailyPlanViewType(v); try { localStorage.setItem('mobile_daily_plan_view_type', v); } catch {} };
             return (
               <>
                 <Button size="sm" variant={vt === 'list' ? 'secondary' : 'outline-secondary'} onClick={() => setVt('list')}>List</Button>
@@ -1800,6 +1761,7 @@ const MobileHome: React.FC = () => {
                       onDelete={(item) => void deleteDailyPlanItem(item)}
                       deleteBusy={dailyPlanDeleteBusy}
                       onDefer={(target) => setDeferTarget(target)}
+                      onEdit={(item) => { if (item.task) setEditingTask(item.task); else if (item.story) setEditingStory(item.story); }}
                     />
                   ) : (
                     /* DETAIL MODE: KanbanCardV2 for tasks/stories/chores, simple row for events */
@@ -1935,26 +1897,7 @@ const MobileHome: React.FC = () => {
                 </ListGroup>
               );
             })()
-          ) : (
-            <div className="pt-1">
-              {visibleTaskRows.map(task => {
-                const story = task.parentType === 'story' ? storiesById.get(task.parentId) : undefined;
-                const goal = story?.goalId ? goalsById.get(story.goalId) : undefined;
-                return (
-                  <div key={task.id} style={{ marginBottom: 8 }}>
-                    <KanbanCardV2
-                      item={task}
-                      type="task"
-                      goal={goal}
-                      story={story}
-                      showDescription={false}
-                      onEdit={() => setEditingTask(task)}
-                    />
-                  </div>
-                );
-              })}
-            </div>
-          )}
+          ) : null}
         </div>
       )}
 
@@ -2049,44 +1992,11 @@ const MobileHome: React.FC = () => {
               );
             })}
           </ListGroup>
-        ) : (
-          <div className="pt-1">
-            {visibleStoryRows.map(story => {
-              const goal = goalsById.get(story.goalId);
-              return (
-                <div key={story.id} style={{ marginBottom: 8 }}>
-                  <KanbanCardV2
-                    item={story}
-                    type="story"
-                    goal={goal}
-                    showDescription={false}
-                    onEdit={() => setEditingStory(story)}
-                  />
-                </div>
-              );
-            })}
-          </div>
-        )
+        ) : null
       )}
 
       {activeTab === 'goals' && (
         <div>
-          <div className="d-flex gap-2 mb-2">
-            <Button
-              size="sm"
-              variant={goalsViewFilter === 'active_sprint' ? 'primary' : 'outline-primary'}
-              onClick={() => setGoalsViewFilter('active_sprint')}
-            >
-              Active sprint goals
-            </Button>
-            <Button
-              size="sm"
-              variant={goalsViewFilter === 'year' ? 'primary' : 'outline-primary'}
-              onClick={() => setGoalsViewFilter('year')}
-            >
-              Goals this year
-            </Button>
-          </div>
           {filteredGoalsForMobile.length === 0 ? (
             <Card className="text-center p-4">
               <Card.Body>
