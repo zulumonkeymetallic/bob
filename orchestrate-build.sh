@@ -179,11 +179,36 @@ EOF
         log_info "Deploying Cloud Functions..."
         local functions_log
         functions_log="$(mktemp -t bob_functions_deploy)"
-        firebase deploy --only functions --force > "$functions_log" 2>&1
-        local functions_status=$?
+        local functions_status=0
+        local functions_attempt=1
+        local functions_max_attempts=3
+        while true; do
+            firebase deploy --only functions --force > "$functions_log" 2>&1
+            functions_status=$?
+            if [ $functions_status -eq 0 ]; then
+                break
+            fi
+            # "Quota exceeded for total allowable CPU per project per region" is a transient
+            # Cloud Run condition hit when a mass redeploy of this project's 200+ functions
+            # briefly spikes concurrent health-check instances past the region's CPU quota —
+            # confirmed live 2026-07-22, a same-second retry succeeded with no code changes.
+            # Real fix is a GCP quota increase (see orchestrate-build.sh comment below / ask
+            # Jim to file it); this retry just absorbs the transient case so a build doesn't
+            # fail outright for something that clears itself within a minute.
+            if grep -qi "quota exceeded" "$functions_log" && [ $functions_attempt -lt $functions_max_attempts ]; then
+                log_info "Cloud Functions deploy hit a transient quota error (attempt $functions_attempt/$functions_max_attempts) — waiting 60s and retrying..."
+                sleep 60
+                functions_attempt=$((functions_attempt + 1))
+                continue
+            fi
+            break
+        done
         grep -E "Deploy complete|Error|✔|✖" "$functions_log" | tail -20 >&2
         if [ $functions_status -ne 0 ]; then
             log_error "Cloud Functions deploy failed (exit $functions_status) — see $functions_log"
+            if grep -qi "quota exceeded" "$functions_log"; then
+                log_error "This looks like the Cloud Run CPU quota wall (region: europe-west2) — retries were exhausted. A permanent fix needs a GCP quota increase request (IAM & Admin > Quotas, filter 'Cloud Run Admin API' + 'CPU allocation, per region' for europe-west2) — only the project owner can submit this."
+            fi
             return 1
         fi
 
