@@ -8,6 +8,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSprint } from '../contexts/SprintContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSidebar } from '../contexts/SidebarContext';
+import { useDeviceInfo } from '../utils/deviceDetection';
 import { isStatus } from '../utils/statusHelpers';
 import { normalizePriorityValue } from '../utils/priorityUtils';
 import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
@@ -51,6 +52,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
 }) => {
   const navigate = useNavigate();
   const { showSidebar } = useSidebar();
+  const deviceInfo = useDeviceInfo();
   const { sprints } = useSprint();
   const { currentPersona } = usePersona();
   const [editedStory, setEditedStory] = useState({
@@ -590,7 +592,11 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
       <Modal.Header>
         <Modal.Title className="me-auto">Edit Story: {story?.ref}</Modal.Title>
         <div className="d-flex align-items-center gap-1">
-          {story && (
+          {/* Icon-only action row is desktop-only — on mobile these buttons get squeezed
+              below their padding+icon width by flex-shrink, which (combined with the
+              touch-friendly .btn-sm padding override) renders as empty bordered boxes with
+              the icon clipped to 0×0. Mobile gets a simplified form instead (see below). */}
+          {story && !deviceInfo.isMobile && (
             <div className="d-flex align-items-center gap-2">
               <Button variant="outline-secondary" size="sm" title="Activity stream" onClick={() => showSidebar(story, 'story')}>
                 <Activity size={14} />
@@ -639,13 +645,15 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
               </Button>
             </div>
           )}
-          <button
-            onClick={() => setIsFullscreen((v) => !v)}
-            title={isFullscreen ? 'Restore default size' : 'Maximise to full screen'}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: '4px 6px', borderRadius: 4, display: 'flex', alignItems: 'center' }}
-          >
-            {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-          </button>
+          {!deviceInfo.isMobile && (
+            <button
+              onClick={() => setIsFullscreen((v) => !v)}
+              title={isFullscreen ? 'Restore default size' : 'Maximise to full screen'}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: '4px 6px', borderRadius: 4, display: 'flex', alignItems: 'center' }}
+            >
+              {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+            </button>
+          )}
           <button onClick={onHide} className="btn-close" aria-label="Close" style={{ fontSize: '0.7rem' }} />
         </div>
       </Modal.Header>
@@ -662,6 +670,83 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
           </Alert>
         )}
 
+        {deviceInfo.isMobile ? (
+          <Form>
+            <Form.Group className="mb-3">
+              <Form.Label>Title</Form.Label>
+              <Form.Control
+                type="text"
+                value={editedStory.title}
+                onChange={(e) => handleInputChange('title', e.target.value)}
+                placeholder="Enter story title"
+              />
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Notes</Form.Label>
+              <Form.Control
+                as="textarea"
+                rows={3}
+                value={editedStory.description}
+                onChange={(e) => handleInputChange('description', e.target.value)}
+                placeholder="Enter story description"
+              />
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Status</Form.Label>
+              <Form.Select
+                value={editedStory.status}
+                onChange={(e) => handleInputChange('status', parseInt(e.target.value))}
+              >
+                <option value={0}>Backlog</option>
+                <option value={2}>In Progress</option>
+                <option value={4}>Done</option>
+              </Form.Select>
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Sprint</Form.Label>
+              <Form.Select
+                value={editedStory.sprintId}
+                onChange={(e) => handleInputChange('sprintId', e.target.value)}
+              >
+                <option value="">Backlog (No Sprint)</option>
+                {selectedSprint && isHiddenSprint(selectedSprint) && (
+                  <option key={selectedSprint.id} value={selectedSprint.id} disabled>
+                    {formatSprintLabel(selectedSprint, selectedSprintStatus || 'Inactive')}
+                  </option>
+                )}
+                {visibleSprints.map((sprint) => (
+                  <option key={sprint.id} value={sprint.id}>
+                    {formatSprintLabel(sprint)}
+                  </option>
+                ))}
+              </Form.Select>
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Linked Goal</Form.Label>
+              <Form.Control
+                list="edit-story-goal-options-mobile"
+                value={goalInput}
+                onChange={(e) => setGoalInput(e.target.value)}
+                onBlur={() => {
+                  const val = goalInput.trim();
+                  const match = leafGoalOptions.find((g) => {
+                    const displayPath = getGoalDisplayPath(g.id, goals);
+                    return displayPath === val || g.id === val || g.title === val;
+                  });
+                  setGoalInput(match ? getGoalDisplayPath(match.id, goals) : val);
+                  handleInputChange('goalId', match ? match.id : '');
+                }}
+                placeholder="Search leaf goals by title..."
+              />
+              <datalist id="edit-story-goal-options-mobile">
+                {leafGoalOptions.map(g => (
+                  <option key={g.id} value={getGoalDisplayPath(g.id, goals)} />
+                ))}
+              </datalist>
+            </Form.Group>
+          </Form>
+        ) : (
+        <>
         <Row className="g-3">
           <Col lg={8}>
             <Form>
@@ -1037,6 +1122,8 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
             </div>
           )}
         </div>
+        </>
+        )}
       </Modal.Body>
 
       <Modal.Footer>

@@ -10,6 +10,7 @@ import { Task, Sprint, Story, Goal } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSidebar } from '../contexts/SidebarContext';
+import { useDeviceInfo } from '../utils/deviceDetection';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { isStatus } from '../utils/statusHelpers';
 import { normalizePriorityValue } from '../utils/priorityUtils';
@@ -88,6 +89,7 @@ const formatSprintLabel = (sprint: Sprint, statusOverride?: string) => {
 const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpdated, container }) => {
   const navigate = useNavigate();
   const { showSidebar } = useSidebar();
+  const deviceInfo = useDeviceInfo();
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { sprints } = useSprint();
@@ -573,7 +575,11 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       <Modal.Header>
         <Modal.Title className="me-auto">{task ? 'Edit Task' : 'Add Task'}</Modal.Title>
         <div className="d-flex align-items-center gap-1">
-          {task && (
+          {/* Icon-only action row is desktop-only — on mobile these buttons get squeezed
+              below their padding+icon width by flex-shrink, which (combined with the
+              touch-friendly .btn-sm padding override) renders as empty bordered boxes with
+              the icon clipped to 0×0. Mobile gets a simplified footer instead (see below). */}
+          {task && !deviceInfo.isMobile && (
             <div className="d-flex align-items-center gap-2">
               <Button variant="outline-secondary" size="sm" title="Activity stream" onClick={() => showSidebar(task, 'task')}>
                 <Activity size={14} />
@@ -617,17 +623,99 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
               </Button>
             </div>
           )}
-          <button
-            onClick={() => setIsFullscreen((v) => !v)}
-            title={isFullscreen ? 'Restore default size' : 'Maximise to full screen'}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: '4px 6px', borderRadius: 4, display: 'flex', alignItems: 'center' }}
-          >
-            {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-          </button>
+          {!deviceInfo.isMobile && (
+            <button
+              onClick={() => setIsFullscreen((v) => !v)}
+              title={isFullscreen ? 'Restore default size' : 'Maximise to full screen'}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--muted)', padding: '4px 6px', borderRadius: 4, display: 'flex', alignItems: 'center' }}
+            >
+              {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+            </button>
+          )}
           <button onClick={onHide} className="btn-close" aria-label="Close" style={{ fontSize: '0.7rem' }} />
         </div>
       </Modal.Header>
       <Modal.Body>
+        {deviceInfo.isMobile ? (
+          <Form>
+            <Form.Group className="mb-3">
+              <Form.Label>Title</Form.Label>
+              <Form.Control
+                type="text"
+                value={form.title}
+                onChange={(e) => setForm({ ...form, title: e.target.value })}
+              />
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Notes</Form.Label>
+              <Form.Control
+                as="textarea"
+                rows={3}
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+              />
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Status</Form.Label>
+              <Form.Select
+                value={String(form.status)}
+                onChange={(e) => setForm({ ...form, status: Number(e.target.value) })}
+              >
+                <option value={0}>Backlog</option>
+                <option value={1}>In Progress</option>
+                <option value={2}>Done</option>
+                <option value={3}>Blocked</option>
+              </Form.Select>
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Sprint</Form.Label>
+              <Form.Select
+                value={form.sprintId || ''}
+                onChange={(e) => {
+                  const newSprintId = e.target.value;
+                  const sprint = sprints.find((s) => s.id === newSprintId);
+                  const sprintStart = sprint?.startDate ?? (sprint as any)?.start ?? null;
+                  let snapDate = form.dueDate;
+                  if (newSprintId && sprintStart) {
+                    const snapMs = typeof sprintStart === 'number' ? sprintStart
+                      : typeof sprintStart === 'string' ? Date.parse(sprintStart)
+                      : (sprintStart as any)?.seconds ? (sprintStart as any).seconds * 1000
+                      : null;
+                    if (snapMs) snapDate = new Date(snapMs).toISOString().slice(0, 10);
+                  }
+                  setForm({ ...form, sprintId: newSprintId, dueDate: snapDate });
+                }}
+              >
+                <option value="">Backlog (No Sprint)</option>
+                {selectedSprint && isHiddenSprint(selectedSprint) && (
+                  <option key={selectedSprint.id} value={selectedSprint.id} disabled>
+                    {formatSprintLabel(selectedSprint, selectedSprintStatus || 'Inactive')}
+                  </option>
+                )}
+                {visibleSprints.map((sprint) => (
+                  <option key={sprint.id} value={sprint.id}>
+                    {formatSprintLabel(sprint)}
+                  </option>
+                ))}
+              </Form.Select>
+            </Form.Group>
+            <Form.Group className="mb-3">
+              <Form.Label>Link to story</Form.Label>
+              <Form.Control
+                list="task-goal-options-mobile"
+                placeholder="Search story by title..."
+                value={storyInput}
+                onChange={(e) => setStoryInput(e.target.value)}
+                onBlur={(e) => resolveStorySelection(e.target.value)}
+              />
+              <datalist id="task-goal-options-mobile">
+                {stories.map((s) => (
+                  <option key={s.id} value={storyLabel(s)} />
+                ))}
+              </datalist>
+            </Form.Group>
+          </Form>
+        ) : (
         <Row className="g-3">
           <Col lg={8}>
             <Form>
@@ -1015,23 +1103,26 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
             </Col>
           )}
         </Row>
+        )}
       </Modal.Body>
       <Modal.Footer>
-        <Button
-          variant="outline-danger"
-          onClick={handleConvertToStory}
-          disabled={
-            converting
-            || deleting
-            || saving
-            || !task
-            || !!(task as any)?.convertedToStoryId
-            || !!(task as any)?.deleted
-            || !!form.storyId
-          }
-        >
-          {converting ? 'Converting...' : 'Convert to Story'}
-        </Button>
+        {!deviceInfo.isMobile && (
+          <Button
+            variant="outline-danger"
+            onClick={handleConvertToStory}
+            disabled={
+              converting
+              || deleting
+              || saving
+              || !task
+              || !!(task as any)?.convertedToStoryId
+              || !!(task as any)?.deleted
+              || !!form.storyId
+            }
+          >
+            {converting ? 'Converting...' : 'Convert to Story'}
+          </Button>
+        )}
         {task && (
           <Button variant="danger" onClick={handleDelete} disabled={saving || converting || deleting}>
             {deleting ? 'Deleting...' : 'Delete Task'}

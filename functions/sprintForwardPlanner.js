@@ -25,6 +25,10 @@ const WAKING_START_HOUR = 5;    // 05:00 — sleep ends
 const WAKING_END_HOUR   = 21;   // 21:00 — sleep begins
 const WAKING_MINS       = (WAKING_END_HOUR - WAKING_START_HOUR) * 60; // 960
 const SOURCE_TAG        = 'sprint_forward_plan';
+// Gaps shorter than this are treated as unusable dead space rather than a real slot —
+// without this floor, every few-minute gap between GCal/habit blocks became its own
+// tiny sprint-item chip on the calendar.
+const MIN_SLOT_MINS     = 15;
 const RECURRING_TYPES   = new Set(['chore', 'routine', 'habit']);
 // Must match calendarSync.js's GCAL_FUTURE_DAYS. This is the furthest out that a
 // real Google Calendar event or recurring instance is guaranteed to have been synced
@@ -58,13 +62,26 @@ function parsePriorityBonus(priority) {
   return 0;
 }
 
+// Matches isPinnedStory() in alignStoriesToGoalSprints.js — a story/task counts as
+// pinned via ANY of flag, a manual rank 1-5, or the AI Top-3-for-day flag. Kept in sync
+// so "is this pinned" reads the same answer everywhere in the planner stack; before this,
+// effectiveScore() only checked userPriorityFlag, so a rank-only item (flag left false)
+// scored as unpinned here while sorting as pinned below — a real item hit this exact split.
+function isPinnedItem(item) {
+  if (item.userPriorityFlag === true) return true;
+  const r = Number(item.userPriorityRank);
+  if (Number.isFinite(r) && r >= 1 && r <= 5) return true;
+  if (item.aiTop3ForDay === true) return true;
+  return false;
+}
+
 function effectiveScore(item) {
   const base      = Number(item.aiCriticalityScore || 0);
   const priBonus  = parsePriorityBonus(item.priority);
   const r         = Number(item.userPriorityRank || 0);
   const rankBonus = r >= 1 && r <= 5 ? (6 - r) * 100 : 0;
   // User-pinned items get a large floor bonus so they always beat unranked items
-  const pinBonus  = item.userPriorityFlag ? 1000 : 0;
+  const pinBonus  = isPinnedItem(item) ? 1000 : 0;
   return base + priBonus + rankBonus + pinBonus;
 }
 
@@ -152,7 +169,10 @@ async function buildFreeSlotMap(db, uid, fromMs, untilMs, zone) {
     }
     if (pos < wakingEnd) free.push({ startMs: pos, endMs: wakingEnd });
 
-    freeSlotMap.set(iso, free.filter(sl => sl.endMs > sl.startMs));
+    // Drop slivers below MIN_SLOT_MINS — an unfiltered gap list happily turns every
+    // 2–10 minute gap between GCal/habit blocks into its own tiny sprint-item chip,
+    // which is what reads as calendar clutter even though nothing technically overlaps.
+    freeSlotMap.set(iso, free.filter(sl => (sl.endMs - sl.startMs) >= MIN_SLOT_MINS * 60_000));
     cursor = cursor.plus({ days: 1 });
   }
 
@@ -286,65 +306,102 @@ async function runForUser(db, uid, options = {}) {
   }
 
   // ── 6. Allocate items into free slots ─────────────────────────────────────
+  // Day-major, not item-major: draining one item fully across every day before
+  // touching the next let whichever pinned/Top3 item sorted first (including exact
+  // rank ties — two stories sharing userPriorityRank=1 hit this in production on
+  // 2026-07-23) swallow 100% of a sparse day's free slots, leaving sibling Top3 items
+  // with zero presence that day despite being equally pinned. Pinned/Top3 items now
+  // round-robin through each day's capacity in bounded turns whenever more than one of
+  // them is still competing for that day, so the day's gaps are shared instead of
+  // claimed entirely by one item; the moment only one contender is left for a day it
+  // reverts to filling at full speed (no artificial fragmentation for the common case).
+  const ROUND_ROBIN_CHUNK_MINS = 45;
   const blocksToCreate = [];
+  const minsLeftById = new Map(items.map(item => [item.id, item._mins]));
+  const priorityItems = items.filter(isPinnedItem);
+  const regularItems  = items.filter(item => !isPinnedItem(item));
 
-  for (const item of items) {
-    let minsLeft = item._mins;
-    if (minsLeft <= 0) continue;
+  const allocateFromDay = (item, slots, iso, capMins) => {
+    let minsLeft = minsLeftById.get(item.id) || 0;
+    let capLeft  = capMins == null ? minsLeft : Math.min(minsLeft, capMins);
+    while (capLeft > 0 && minsLeft > 0 && slots.length > 0) {
+      const slot = slots[0];
+      const slotMins = (slot.endMs - slot.startMs) / 60_000;
+      if (slotMins <= 0) { slots.shift(); continue; }
 
-    for (const iso of workDays) {
-      const slots = daySlots.get(iso);
-      if (!slots || slots.length === 0) continue;
+      const allocated  = Math.min(minsLeft, capLeft, slotMins);
+      const blockStart = slot.startMs;
+      const blockEnd   = blockStart + allocated * 60_000;
 
-      // Pack into as many consecutive free slots as needed for this item on this day
-      while (minsLeft > 0 && slots.length > 0) {
-        const slot = slots[0];
-        const slotMins = (slot.endMs - slot.startMs) / 60_000;
-        if (slotMins <= 0) { slots.shift(); continue; }
+      slot.startMs += allocated * 60_000;
+      if (slot.startMs >= slot.endMs) slots.shift();
 
-        const allocated  = Math.min(minsLeft, slotMins);
-        const blockStart = slot.startMs;
-        const blockEnd   = blockStart + allocated * 60_000;
+      minsLeft -= allocated;
+      capLeft  -= allocated;
 
-        // Consume from slot
-        slot.startMs += allocated * 60_000;
-        if (slot.startMs >= slot.endMs) slots.shift();
-
-        minsLeft -= allocated;
-
-        const ptsAllocated = Math.round((allocated / MINS_PER_POINT) * 10) / 10;
-        blocksToCreate.push({
-          id: '',
-          ownerUid: uid,
-          ...(item._type === 'story' ? { storyId: item.id } : { taskId: item.id }),
-          entityType: item._type,
-          title: `${item.title || 'Untitled'} (${ptsAllocated}pt)`,
-          start:     blockStart,
-          end:       blockEnd,
-          startTime: blockStart,
-          endTime:   blockEnd,
-          startMs:   blockStart,
-          endMs:     blockEnd,
-          date: iso,
-          source: SOURCE_TAG,
-          status: 'planned',
-          aiGenerated: true,
-          persona: String(item.persona || 'personal'),
-          sprintId: item.sprintId || null,
-          score:    item._score,
-          userPriorityRank: item.userPriorityRank || null,
-          minsAllocated: allocated,
-          googleEventId: null,
-          synced: false,
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-      }
-
-      if (minsLeft <= 0) break;
+      const ptsAllocated = Math.round((allocated / MINS_PER_POINT) * 10) / 10;
+      blocksToCreate.push({
+        id: '',
+        ownerUid: uid,
+        ...(item._type === 'story' ? { storyId: item.id } : { taskId: item.id }),
+        entityType: item._type,
+        title: `${item.title || 'Untitled'} (${ptsAllocated}pt)`,
+        start:     blockStart,
+        end:       blockEnd,
+        startTime: blockStart,
+        endTime:   blockEnd,
+        startMs:   blockStart,
+        endMs:     blockEnd,
+        date: iso,
+        source: SOURCE_TAG,
+        status: 'planned',
+        aiGenerated: true,
+        persona: String(item.persona || 'personal'),
+        sprintId: item.sprintId || null,
+        score:    item._score,
+        userPriorityRank: item.userPriorityRank || null,
+        minsAllocated: allocated,
+        googleEventId: null,
+        synced: false,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
     }
-    // items that don't fit within the sprint are simply not given a block
+    minsLeftById.set(item.id, minsLeft);
+  };
+
+  for (const iso of workDays) {
+    const slots = daySlots.get(iso);
+    if (!slots || slots.length === 0) continue;
+
+    // Priority pass: fair-share this day's capacity among competing pinned/Top3 items.
+    while (slots.length > 0) {
+      const active = priorityItems.filter(item => (minsLeftById.get(item.id) || 0) > 0);
+      if (active.length === 0) break;
+      if (active.length === 1) {
+        allocateFromDay(active[0], slots, iso, null);
+        break;
+      }
+      let progressed = false;
+      for (const item of active) {
+        if (slots.length === 0) break;
+        const before = minsLeftById.get(item.id);
+        allocateFromDay(item, slots, iso, ROUND_ROBIN_CHUNK_MINS);
+        if (minsLeftById.get(item.id) !== before) progressed = true;
+      }
+      if (!progressed) break;
+    }
+
+    // Greedy pass: anything still unfilled today (leftover priority mins beyond their
+    // fair share, plus all regular/non-pinned items) fills the remaining gaps in
+    // existing score order.
+    for (const item of [...priorityItems, ...regularItems]) {
+      if (slots.length === 0) break;
+      if ((minsLeftById.get(item.id) || 0) <= 0) continue;
+      allocateFromDay(item, slots, iso, null);
+    }
   }
+  // items that don't fit within the sprint are simply not given a block
 
   // ── 7. Write blocks in batches ────────────────────────────────────────────
   let written = 0;
