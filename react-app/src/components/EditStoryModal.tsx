@@ -400,21 +400,26 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     const confirmed = window.confirm(`Delete story "${label}"? This cannot be undone.`);
     if (!confirmed) return;
 
-    setDeleting(true);
-    setError(null);
+    const storyId = story.id;
+    const storyOwnerUid = (story as any).ownerUid;
+    // Close immediately rather than waiting on the network round-trip — every list that
+    // shows this story is a live onSnapshot listener, so it drops the row the moment the
+    // delete lands regardless of whether this modal is still open to see it happen. This is
+    // what makes delete read as "immediate" instead of hanging on the confirm screen.
+    onHide();
     try {
-      // Claim ownership first to handle legacy docs without ownerUid
-      if (currentUser?.uid) {
-        await updateDoc(doc(db, 'stories', story.id), { ownerUid: currentUser.uid, updatedAt: serverTimestamp() });
+      // Claim ownership first, but only for the legacy case this exists for (a doc with
+      // no ownerUid at all) — every normal delete already owns the doc, so unconditionally
+      // awaiting this update first was adding a full extra Firestore round-trip before the
+      // delete could even start.
+      if (currentUser?.uid && !storyOwnerUid) {
+        await updateDoc(doc(db, 'stories', storyId), { ownerUid: currentUser.uid, updatedAt: serverTimestamp() });
       }
-      await deleteDoc(doc(db, 'stories', story.id));
+      await deleteDoc(doc(db, 'stories', storyId));
       onStoryUpdated?.();
-      onHide();
     } catch (err) {
       console.error('❌ EditStoryModal: Error deleting story:', err);
-      setError('Failed to delete story. Please try again.');
-    } finally {
-      setDeleting(false);
+      alert('Failed to delete story. Please try again.');
     }
   };
 

@@ -538,16 +538,17 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
     const confirmed = window.confirm(`Delete task "${label}"? This cannot be undone.`);
     if (!confirmed) return;
 
-    setDeleting(true);
+    const taskId = task.id;
+    // Close immediately rather than waiting on the network round-trip — every list that
+    // shows this task is a live onSnapshot listener, so it drops the row the moment the
+    // delete lands regardless of whether this modal is still open to see it happen.
+    onHide();
     try {
-      await deleteDoc(doc(db, 'tasks', task.id));
+      await deleteDoc(doc(db, 'tasks', taskId));
       onUpdated?.();
-      onHide();
     } catch (error) {
       console.error('Failed to delete task', error);
       alert('Failed to delete task. Please try again.');
-    } finally {
-      setDeleting(false);
     }
   };
 

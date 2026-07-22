@@ -22,6 +22,7 @@ import EditTaskModal from './EditTaskModal';
 import EditGoalModal from './EditGoalModal';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { useDetailLevel } from '../contexts/DetailLevelContext';
+import { useDeviceInfo } from '../utils/deviceDetection';
 import { useFocusGoals } from '../hooks/useFocusGoals';
 import { getActiveFocusLeafGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
 import {
@@ -78,12 +79,20 @@ const SprintKanbanPageV2: React.FC = () => {
     const [fullReplanLoading, setFullReplanLoading] = useState(false);
     const [replanFeedback, setReplanFeedback] = useState<string | null>(null);
     const { detailLevel, setDetailLevel } = useDetailLevel();
+    const deviceInfo = useDeviceInfo();
     const boardContainerRef = React.useRef<HTMLDivElement>(null);
     const activeFocusGoalIds = useMemo(() => getActiveFocusLeafGoalIds(activeFocusGoals), [activeFocusGoals]);
 
     useEffect(() => {
-        setDetailLevel('full');
-    }, [setDetailLevel]);
+        // Desktop keeps its own default (full detail — there's room for it). iPad/tablet
+        // and mobile fall through to DetailLevelContext's default ('minimal', always, no
+        // exceptions per Jim 2026-07-21) — this effect used to force 'full' unconditionally
+        // on every device, which is exactly what made iPad Kanban cards land at full detail
+        // instead of the easy-to-scan minimal view.
+        if (!deviceInfo.isMobile && !deviceInfo.isTablet) {
+            setDetailLevel('full');
+        }
+    }, [setDetailLevel, deviceInfo.isMobile, deviceInfo.isTablet]);
 
     const resolveTimestampMs = (value: any): number | null => {
         if (!value) return null;
