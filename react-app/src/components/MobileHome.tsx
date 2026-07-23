@@ -14,6 +14,7 @@ import { getBadgeVariant, getPriorityBadge, getStatusName } from '../utils/statu
 import { taskStatusText } from '../utils/storyCardFormatting';
 import { extractWeatherSummary, extractWeatherTemp, formatWeatherLine } from '../utils/weatherFormat';
 import { isRecurringDueOnDate, resolveRecurringDueMs, resolveTaskDueMs } from '../utils/recurringTaskDue';
+import { getChoreKind as getChoreKindShared } from '../utils/choreKind';
 import { Wand2, AlertCircle, RefreshCw, Sparkles, Clock3, Pencil, Home, CalendarDays, ListChecks, BookOpen, Target, CheckSquare, Wallet, Brain, type LucideIcon } from 'lucide-react';
 import EditTaskModal from './EditTaskModal';
 import EditStoryModal from './EditStoryModal';
@@ -269,18 +270,7 @@ const MobileHome: React.FC = () => {
     return null;
   }, []);
 
-  const getChoreKind = useCallback((task: Task): 'chore' | 'routine' | 'habit' | null => {
-    const raw = String((task as any)?.type || (task as any)?.task_type || '').trim().toLowerCase();
-    const normalized = raw === 'habitual' ? 'habit' : raw;
-    if (normalized === 'chore' || normalized === 'routine' || normalized === 'habit') return normalized;
-    if (normalized) return null;
-    const tags = Array.isArray((task as any)?.tags) ? (task as any).tags : [];
-    const tagKeys = tags.map((tag) => String(tag || '').toLowerCase().replace(/^#/, ''));
-    if (tagKeys.includes('chore')) return 'chore';
-    if (tagKeys.includes('routine')) return 'routine';
-    if (tagKeys.includes('habit') || tagKeys.includes('habitual')) return 'habit';
-    return null;
-  }, []);
+  const getChoreKind = useCallback((task: Task): 'chore' | 'routine' | 'habit' | null => getChoreKindShared(task), []);
 
   const formatDueLabel = useCallback((dueMs?: number | null) => {
     if (!dueMs) return 'today';

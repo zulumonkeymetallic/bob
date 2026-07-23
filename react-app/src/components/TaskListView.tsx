@@ -16,6 +16,7 @@ import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { useSprint } from '../contexts/SprintContext';
 import WorkSurfaceNav from './common/WorkSurfaceNav';
 import { getActiveFocusLeafGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
+import { getChoreKind as getChoreKindShared } from '../utils/choreKind';
 import { FocusGoal } from '../types';
 
 const TaskListView: React.FC = () => {
@@ -80,7 +81,12 @@ const TaskListView: React.FC = () => {
       setLoading(true);
 
       // Load all related data
-      // Use materialized index for open tasks to avoid downloading entire tasks collection
+      // Use materialized index for open tasks to avoid downloading entire tasks collection.
+      // Chores/habits/routines run on their own recurrence, not sprint membership — if a
+      // sprint is selected, this filters at the query level and would silently exclude any
+      // chore/habit (they normally have sprintId: null). So when a sprint is selected, a
+      // SECOND query below fetches chores/habits/routines unfiltered by sprint and merges
+      // them in. Confirmed by Jim, 2026-07-23.
       const tasksQuery = selectedSprintId
         ? query(
             collection(db, 'sprint_task_index'),
@@ -99,7 +105,20 @@ const TaskListView: React.FC = () => {
             orderBy('dueDate', 'asc'),
             limit(1000)
           );
-      
+
+      // Only needed when a sprint is selected — without one, tasksQuery above already
+      // covers every open task/chore/habit regardless of sprint.
+      const choresQuery = selectedSprintId
+        ? query(
+            collection(db, 'sprint_task_index'),
+            where('ownerUid', '==', currentUser.uid),
+            where('persona', '==', currentPersona),
+            where('isOpen', '==', true),
+            orderBy('dueDate', 'asc'),
+            limit(1000)
+          )
+        : null;
+
       const storiesQuery = query(
         collection(db, 'stories'),
         where('ownerUid', '==', currentUser.uid),
@@ -112,47 +131,67 @@ const TaskListView: React.FC = () => {
         where('persona', '==', currentPersona)
       );
       
+      const mapIndexDoc = (docSnap: any): Task => {
+        const x = docSnap.data() as any;
+        const t: any = {
+          id: docSnap.id,
+          title: x.title,
+          description: x.description || '',
+          status: x.status,
+          priority: x.priority ?? 2,
+          type: x.type || 'task',
+          repeatFrequency: x.repeatFrequency || null,
+          repeatInterval: x.repeatInterval ?? null,
+          daysOfWeek: Array.isArray(x.daysOfWeek) ? x.daysOfWeek : [],
+          lastDoneAt: x.lastDoneAt || null,
+          snoozedUntil: x.snoozedUntil || null,
+          aiCriticalityScore: x.aiCriticalityScore ?? null,
+          aiCriticalityReason: x.aiCriticalityReason || null,
+          effort: x.effort ?? 'M',
+          estimateMin: x.estimateMin ?? 0,
+          dueDate: x.dueDate || null,
+          parentType: x.parentType || 'story',
+          parentId: x.parentId || x.storyId || '',
+          storyId: x.storyId || null,
+          sprintId: x.sprintId && x.sprintId !== '__none__' ? x.sprintId : null,
+          persona: currentPersona,
+          ownerUid: currentUser.uid,
+          ref: x.ref || `TASK-${String(docSnap.id).slice(-4).toUpperCase()}`,
+          updatedAt: x.updatedAt || null,
+          deviceUpdatedAt: x.deviceUpdatedAt || null,
+          serverUpdatedAt: x.serverUpdatedAt || null,
+          macSyncedAt: x.macSyncedAt || null,
+          syncState: x.syncState || null,
+          goalId: x.goalId || null,
+          theme: x.theme ?? null,
+        };
+        return t as Task;
+      };
+
+      // Sprint-filtered tasks and (when a sprint is selected) sprint-agnostic chores/habits
+      // are two independent live subscriptions merged together — see choresQuery comment above.
+      let sprintFilteredTasks: Task[] = [];
+      let choreTasks: Task[] = [];
+      const publishMergedTasks = () => {
+        if (!choresQuery) { setTasks(sprintFilteredTasks); return; }
+        const chores = choreTasks.filter((t) => getChoreKindShared(t) !== null);
+        const seen = new Set(sprintFilteredTasks.map((t) => t.id));
+        setTasks([...sprintFilteredTasks, ...chores.filter((t) => !seen.has(t.id))]);
+      };
+
       // Subscribe to real-time updates
       const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
-        const tasksData = snapshot.docs.map(docSnap => {
-          const x = docSnap.data() as any;
-          const t: any = {
-            id: docSnap.id,
-            title: x.title,
-            description: x.description || '',
-            status: x.status,
-            priority: x.priority ?? 2,
-            type: x.type || 'task',
-            repeatFrequency: x.repeatFrequency || null,
-            repeatInterval: x.repeatInterval ?? null,
-            daysOfWeek: Array.isArray(x.daysOfWeek) ? x.daysOfWeek : [],
-            lastDoneAt: x.lastDoneAt || null,
-            snoozedUntil: x.snoozedUntil || null,
-            aiCriticalityScore: x.aiCriticalityScore ?? null,
-            aiCriticalityReason: x.aiCriticalityReason || null,
-            effort: x.effort ?? 'M',
-            estimateMin: x.estimateMin ?? 0,
-            dueDate: x.dueDate || null,
-            parentType: x.parentType || 'story',
-            parentId: x.parentId || x.storyId || '',
-            storyId: x.storyId || null,
-            sprintId: x.sprintId && x.sprintId !== '__none__' ? x.sprintId : null,
-            persona: currentPersona,
-            ownerUid: currentUser.uid,
-            ref: x.ref || `TASK-${String(docSnap.id).slice(-4).toUpperCase()}`,
-            updatedAt: x.updatedAt || null,
-            deviceUpdatedAt: x.deviceUpdatedAt || null,
-            serverUpdatedAt: x.serverUpdatedAt || null,
-            macSyncedAt: x.macSyncedAt || null,
-            syncState: x.syncState || null,
-            goalId: x.goalId || null,
-            theme: x.theme ?? null,
-          };
-          return t as Task;
-        });
-        setTasks(tasksData);
+        sprintFilteredTasks = snapshot.docs.map(mapIndexDoc);
+        publishMergedTasks();
       });
-      
+
+      const unsubscribeChores = choresQuery
+        ? onSnapshot(choresQuery, (snapshot) => {
+            choreTasks = snapshot.docs.map(mapIndexDoc);
+            publishMergedTasks();
+          })
+        : () => {};
+
       const unsubscribeStories = onSnapshot(storiesQuery, (snapshot) => {
         const storiesData = snapshot.docs.map(doc => {
           const data = doc.data();
@@ -185,6 +224,7 @@ const TaskListView: React.FC = () => {
 
       return () => {
         unsubscribeTasks();
+        unsubscribeChores();
         unsubscribeStories();
         unsubscribeGoals();
       };
@@ -259,8 +299,12 @@ const TaskListView: React.FC = () => {
   // `filteredTasks`, which already had Done tasks filtered out by the default "not_done"
   // status filter — so "Done" always read 0 regardless of the real count. Confirmed by Jim,
   // 2026-07-23.
+  // Chores/habits/routines are exempt from sprint filtering everywhere — they run on their
+  // own recurrence, not sprint membership. Confirmed by Jim, 2026-07-23.
+  const isSprintExempt = (task: Task): boolean => getChoreKindShared(task) !== null;
+
   const scopedTasks = tasks.filter(task => {
-    if (selectedSprintId && task.sprintId !== selectedSprintId) return false;
+    if (selectedSprintId && task.sprintId !== selectedSprintId && !isSprintExempt(task)) return false;
     if (task.persona) {
       const persona = typeof task.persona === 'string' ? task.persona.toLowerCase() : String(task.persona).toLowerCase();
       if (persona && persona !== currentPersona) return false;
@@ -268,7 +312,7 @@ const TaskListView: React.FC = () => {
     return true;
   });
   const filteredTasks = tasks.filter(task => {
-    if (selectedSprintId && task.sprintId !== selectedSprintId) return false;
+    if (selectedSprintId && task.sprintId !== selectedSprintId && !isSprintExempt(task)) return false;
     if (task.persona) {
       const persona = typeof task.persona === 'string' ? task.persona.toLowerCase() : String(task.persona).toLowerCase();
       if (persona && persona !== currentPersona) return false;

@@ -16,6 +16,7 @@ import PageHeader from './common/PageHeader';
 import { SkeletonStatCard } from './common/SkeletonLoader';
 import EmptyState from './common/EmptyState';
 import { colors } from '../utils/colors';
+import { getChoreKind } from '../utils/choreKind';
 
 const TasksManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -124,7 +125,9 @@ const TasksManagement: React.FC = () => {
   const filteredTasks = tasks.filter(task => {
     if (searchTerm && !task.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     if (filterStatus !== 'all' && (task.status !== undefined ? task.status : 0).toString() !== filterStatus) return false;
-    if (filterSprint !== 'all' && task.sprintId !== filterSprint) return false;
+    // Chores/habits/routines are exempt from sprint filtering — they run on their own
+    // recurrence, not sprint membership. Confirmed by Jim, 2026-07-23.
+    if (filterSprint !== 'all' && task.sprintId !== filterSprint && getChoreKind(task) === null) return false;
     const rawType = String((task as any)?.type || (task as any)?.task_type || 'task').toLowerCase();
     const normalizedType = rawType === 'habitual' ? 'habit' : rawType;
     if (filterType !== 'all' && normalizedType !== filterType) return false;
