@@ -21,6 +21,7 @@ import {
   formatFullReplanSummary,
   normalizePlannerCallableError,
 } from '../utils/plannerOrchestration';
+import PlanActionBar from './planner/PlanActionBar';
 
 // Draggable Block Wrapper
 const DraggableBlock = ({ block, children }: { block: any, children: React.ReactNode }) => {
@@ -460,6 +461,10 @@ const Calendar: React.FC = () => {
 
   return (
     <Container fluid className="mt-4">
+      {/* Calendar had no way back to Overview/Kanban/Roadmap/Coach without the browser back
+          button — every other full work-surface page (Goals/Stories/Tasks/Kanban/Overview)
+          already has PlanActionBar. Per Jim, 2026-07-23. */}
+      <PlanActionBar className="mb-3" />
       <div className="d-flex justify-content-between align-items-center mb-4">
         <h2>Rolling Calendar</h2>
         <div>
