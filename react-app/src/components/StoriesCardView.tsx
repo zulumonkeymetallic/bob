@@ -185,7 +185,7 @@ const StoriesCardView: React.FC<StoriesCardViewProps> = ({
         ))}
       </div>
 
-      <div className="goals-card-grid goals-card-grid--grid" ref={gridRef}>
+      <div className="goals-card-grid goals-card-grid--grid goals-card-grid--compact" ref={gridRef}>
         {stories.map((story) => {
           const parentGoal = getGoalForStory(story.goalId);
           const latestActivity = latestActivities[story.id];

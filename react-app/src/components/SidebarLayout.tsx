@@ -524,10 +524,12 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
 
       {/* Mobile Header — shown whenever the app has routed to the phone-style experience
           (deviceInfo.isMobile covers both true phones and iPad portrait), not gated by a
-          static CSS breakpoint that missed iPad. The full-nav "Menu" hamburger inside it is
-          iPad-only: on a phone the bottom tab bar is the only nav surface (Jim wants it
-          kept simple there), but iPad still needs a way to reach pages the tab bar doesn't
-          cover (Journals, Backlog, Sprints, Calendar, Travel, Settings). */}
+          static CSS breakpoint that missed iPad. The full-nav "Menu" hamburger inside it now
+          shows on phone too (per Jim, 2026-07-23) — it reaches pages the bottom tab bar
+          doesn't cover (Journals, Backlog, Sprints, Calendar, Travel, Settings, and — per the
+          same request — Goals, moved here to make room in the tab bar for a new Checklist
+          tab). Previously phone-only had the bottom bar as its sole nav surface; kept simple
+          on purpose, but that made those pages unreachable on phone at all. */}
       {deviceInfo.isMobile && (
       <div className="fixed-top" style={{
         background: currentPersona === 'work' ? '#d3d3d3' : 'var(--panel)',
@@ -537,19 +539,17 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         <Navbar className="px-3" style={{
           background: 'transparent'
         }}>
-          {deviceInfo.isIPad ? (
-            <Button
-              variant="outline-dark"
-              size="sm"
-              onClick={() => setShowSidebar(true)}
-              style={{
-                color: '#000',
-                borderColor: '#000'
-              }}
-            >
-              Menu
-            </Button>
-          ) : <div />}
+          <Button
+            variant="outline-dark"
+            size="sm"
+            onClick={() => setShowSidebar(true)}
+            style={{
+              color: '#000',
+              borderColor: '#000'
+            }}
+          >
+            Menu
+          </Button>
           {/* Brand text hidden on phone specifically — it was eating the row's width right next
               to the notification bell for no real benefit on a screen this narrow. iPad (which
               also renders this header) keeps the full wordmark since it has the room. */}

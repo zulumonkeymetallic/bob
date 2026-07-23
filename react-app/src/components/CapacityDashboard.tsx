@@ -44,32 +44,52 @@ const CapacityDashboard: React.FC = () => {
         }
     }, [contextSelectedSprintId, sprints, selectedSprintId]);
 
-    // Fetch capacity data when sprint changes
+    // Fetch capacity data when sprint changes, then keep it fresh — this calls a Cloud
+    // Function (server-side aggregation, not a live Firestore listener), so unlike
+    // CompactSprintMetrics' top-nav badge it can't stay live on its own. Previously this
+    // only ran once per sprint selection, so the number went stale the moment you left the
+    // screen and stayed stale even while sitting on it — confirmed by Jim 2026-07-23.
+    // Re-fetch on an interval and whenever the tab/screen regains focus, silently (no
+    // loading spinner) so it doesn't flicker on every refresh.
     useEffect(() => {
         if (!selectedSprintId) return;
 
-        const fetchData = async () => {
-            setLoading(true);
-            setError(null);
+        let cancelled = false;
+
+        const fetchData = async (silent: boolean) => {
+            if (!silent) { setLoading(true); setError(null); }
             try {
+                let result;
                 if (selectedSprintId === NEXT_WEEK_ID) {
                     const calculateCapacity = httpsCallable(functions, 'calculateNextWeekCapacity');
-                    const result = await calculateCapacity({ days: 7 });
-                    setData(result.data);
-                    return;
+                    result = await calculateCapacity({ days: 7 });
+                } else {
+                    const calculateCapacity = httpsCallable(functions, 'calculateSprintCapacity');
+                    result = await calculateCapacity({ sprintId: selectedSprintId });
                 }
-                const calculateCapacity = httpsCallable(functions, 'calculateSprintCapacity');
-                const result = await calculateCapacity({ sprintId: selectedSprintId });
-                setData(result.data);
+                if (!cancelled) setData(result.data);
             } catch (err: any) {
                 console.error("Failed to fetch capacity:", err);
-                setError(err.message || "Failed to load capacity data.");
+                if (!cancelled && !silent) setError(err.message || "Failed to load capacity data.");
             } finally {
-                setLoading(false);
+                if (!cancelled && !silent) setLoading(false);
             }
         };
 
-        fetchData();
+        fetchData(false);
+
+        const intervalId = window.setInterval(() => fetchData(true), 60_000);
+        const onFocus = () => fetchData(true);
+        const onVisibilityChange = () => { if (document.visibilityState === 'visible') fetchData(true); };
+        window.addEventListener('focus', onFocus);
+        document.addEventListener('visibilitychange', onVisibilityChange);
+
+        return () => {
+            cancelled = true;
+            window.clearInterval(intervalId);
+            window.removeEventListener('focus', onFocus);
+            document.removeEventListener('visibilitychange', onVisibilityChange);
+        };
     }, [selectedSprintId]);
 
     if (!selectedSprintId && sprints.length === 0) {

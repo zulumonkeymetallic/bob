@@ -14,6 +14,8 @@ import { isStatus, isTheme } from '../utils/statusHelpers';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { useSprint } from '../contexts/SprintContext';
 import WorkSurfaceNav from './common/WorkSurfaceNav';
+import { getActiveFocusLeafGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
+import { FocusGoal } from '../types';
 
 const TaskListView: React.FC = () => {
   const { currentUser } = useAuth();
@@ -28,6 +30,9 @@ const TaskListView: React.FC = () => {
   const [filterDataQuality, setFilterDataQuality] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [dueFilter, setDueFilter] = useState<'all' | 'today'>('all');
+  const [top3Only, setTop3Only] = useState(false);
+  const [focusOnly, setFocusOnly] = useState(false);
+  const [focusGoals, setFocusGoals] = useState<FocusGoal[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'list' | 'cards'>('list');
   const [showAddTaskModal, setShowAddTaskModal] = useState(false);
@@ -46,6 +51,24 @@ const TaskListView: React.FC = () => {
       return { ...s, startDate, endDate, createdAt, updatedAt } as Sprint;
     });
   }, [rawSprints]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) { setFocusGoals([]); return; }
+    const focusQuery = query(
+      collection(db, 'focusGoals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('isActive', '==', true)
+    );
+    const unsub = onSnapshot(
+      focusQuery,
+      (snapshot) => setFocusGoals(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })) as FocusGoal[]),
+      () => setFocusGoals([])
+    );
+    return () => unsub();
+  }, [currentUser, currentPersona]);
+
+  const activeFocusGoalIds = useMemo(() => getActiveFocusLeafGoalIds(focusGoals), [focusGoals]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -240,6 +263,14 @@ const TaskListView: React.FC = () => {
     const normalizedType = rawType === 'habitual' ? 'habit' : rawType;
     if (filterType !== 'all' && normalizedType !== filterType) return false;
     if (dueFilter === 'today' && !isDueToday(task)) return false;
+    if (top3Only && (task as any).aiTop3ForDay !== true) return false;
+    if (focusOnly) {
+      if (activeFocusGoalIds.size === 0) return false;
+      const storyId = String((task as any).storyId || (task as any).parentId || '').trim();
+      const parentStory = storyId ? stories.find((s) => s.id === storyId) : null;
+      const goalId = String((task as any).goalId || parentStory?.goalId || '').trim();
+      if (!goalId || !isGoalInHierarchySet(goalId, goals, activeFocusGoalIds)) return false;
+    }
     if (searchTerm && !task.title.toLowerCase().includes(searchTerm.toLowerCase())) return false;
     if (filterDataQuality !== 'all') {
       const storyId = String((task as any).storyId || (task as any).parentId || '').trim();
@@ -492,6 +523,31 @@ const TaskListView: React.FC = () => {
               </Col>
             </Row>
             <Row style={{ marginTop: '6px' }}>
+              <Col md={3}>
+                <Form.Group className="d-flex align-items-center" style={{ height: '100%' }}>
+                  <Form.Check
+                    type="switch"
+                    id="filter-top3"
+                    label={<span style={{ fontSize: '11px' }}>Top 3 Only</span>}
+                    checked={top3Only}
+                    onChange={(e) => setTop3Only(e.target.checked)}
+                  />
+                </Form.Group>
+              </Col>
+              <Col md={3}>
+                <Form.Group className="d-flex align-items-center" style={{ height: '100%' }}>
+                  <Form.Check
+                    type="switch"
+                    id="filter-focus"
+                    label={<span style={{ fontSize: '11px' }}>{`Focus only${activeFocusGoalIds.size > 0 ? ` (${activeFocusGoalIds.size})` : ''}`}</span>}
+                    checked={focusOnly}
+                    disabled={activeFocusGoalIds.size === 0}
+                    onChange={(e) => setFocusOnly(e.target.checked)}
+                  />
+                </Form.Group>
+              </Col>
+            </Row>
+            <Row style={{ marginTop: '6px' }}>
               <Col>
                 <Button
                   size="sm"
@@ -504,6 +560,8 @@ const TaskListView: React.FC = () => {
                     setFilterDataQuality('all');
                     setSearchTerm('');
                     setDueFilter('all');
+                    setTop3Only(false);
+                    setFocusOnly(false);
                   }}
                   style={{ borderColor: 'var(--line)' }}
                 >

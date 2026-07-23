@@ -80,6 +80,25 @@ const SprintKanbanPageV2: React.FC = () => {
     const [replanFeedback, setReplanFeedback] = useState<string | null>(null);
     const { detailLevel, setDetailLevel } = useDetailLevel();
     const deviceInfo = useDeviceInfo();
+    // Filter/metrics chrome (theme+goal pickers, all the switches, due/sort/detail selects,
+    // and the sprint metrics card) collapses by default on iPad — per Jim 2026-07-23, the
+    // same filtering already exists on the Modern*Table list pages, so the board itself
+    // should get the real estate here instead. Desktop keeps it open by default since screen
+    // space isn't the constraint there. Persisted so the choice sticks across visits.
+    const [showFilterChrome, setShowFilterChrome] = useState(() => {
+        try {
+            const stored = localStorage.getItem('kanban_show_filter_chrome');
+            if (stored !== null) return stored === 'true';
+        } catch { /* noop */ }
+        return !deviceInfo.isIPad;
+    });
+    const toggleFilterChrome = () => {
+        setShowFilterChrome((prev) => {
+            const next = !prev;
+            try { localStorage.setItem('kanban_show_filter_chrome', String(next)); } catch { /* noop */ }
+            return next;
+        });
+    };
     const boardContainerRef = React.useRef<HTMLDivElement>(null);
     const activeFocusGoalIds = useMemo(() => getActiveFocusLeafGoalIds(activeFocusGoals), [activeFocusGoals]);
 
@@ -368,23 +387,36 @@ const SprintKanbanPageV2: React.FC = () => {
     };
 
     return (
-        <Container fluid style={{ padding: '24px', backgroundColor: 'var(--bg)', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        <Container fluid style={{ padding: deviceInfo.isIPad ? '12px' : '24px', backgroundColor: 'var(--bg)', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
             {/* Header */}
-            <Row className="mb-4 flex-shrink-0">
+            <Row className={showFilterChrome ? 'mb-4 flex-shrink-0' : 'mb-2 flex-shrink-0'}>
                 <Col>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'relative', zIndex: 5 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                        <h2 style={{ margin: 0, fontSize: '28px', fontWeight: '700', color: 'var(--text)' }}>
+                        <h2 style={{ margin: 0, fontSize: deviceInfo.isIPad ? '18px' : '28px', fontWeight: '700', color: 'var(--text)' }}>
                             Sprint Kanban
                         </h2>
 
                         <Badge bg="primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
                             {currentPersona.charAt(0).toUpperCase() + currentPersona.slice(1)} Persona
                         </Badge>
+
+                        <Button
+                            variant={showFilterChrome ? 'secondary' : 'outline-secondary'}
+                            size="sm"
+                            onClick={toggleFilterChrome}
+                            title={showFilterChrome ? 'Hide filters (same filtering is on the Stories/Tasks list pages)' : 'Show filters'}
+                        >
+                            {showFilterChrome ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
+                            <span className="ms-1">Filters</span>
+                        </Button>
                     </div>
 
-                    {/* Right-side controls */}
+                    {/* Right-side controls: view mode + fullscreen always visible; everything
+                        else (filters, sort, detail level) collapses with showFilterChrome. */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                        {showFilterChrome && (
+                        <>
                         <Button
                             variant="outline-secondary"
                                 size="sm"
@@ -511,6 +543,8 @@ const SprintKanbanPageV2: React.FC = () => {
                                         <option value="minimal">Detail: Minimal</option>
                                     </Form.Select>
                                 </Form.Group>
+                        </>
+                        )}
 
                             <div style={{ display: 'flex', border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden' }}>
                                 <Button
@@ -599,8 +633,9 @@ const SprintKanbanPageV2: React.FC = () => {
                 </Row>
             )}
 
-            {/* Sprint Metrics */}
-            {currentSprint && (
+            {/* Sprint Metrics — collapses with the filter chrome; same numbers are visible
+                on CapacityDashboard/CompactSprintMetrics without costing board real estate here. */}
+            {currentSprint && showFilterChrome && (
                 <Row className="mb-4 flex-shrink-0">
                     <Col>
                         <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
@@ -675,7 +710,7 @@ const SprintKanbanPageV2: React.FC = () => {
             <Row style={{ flex: 1, minHeight: 0 }} ref={boardContainerRef as any}>
                 <Col style={{ height: '100%' }}>
                     <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', height: '100%', borderRadius: isFullscreen ? 0 : undefined }}>
-                        <Card.Body style={{ padding: '24px', height: '100%', overflow: 'auto', backgroundColor: isFullscreen ? 'var(--bg)' : undefined }}>
+                        <Card.Body style={{ padding: deviceInfo.isIPad ? '10px' : '24px', height: '100%', overflow: 'auto', backgroundColor: isFullscreen ? 'var(--bg)' : undefined }}>
                             {viewMode === 'board' ? (
                                 <KanbanBoardV2
                                     sprintId={filterSprintId}

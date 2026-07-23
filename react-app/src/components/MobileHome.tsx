@@ -58,7 +58,10 @@ type MobileSharedFilters = {
   chores: boolean;
   focusAligned: boolean;
 };
-const MOBILE_TAB_ORDER: TabKey[] = ['overview', 'coach', 'daily_plan', 'tasks', 'stories', 'goals', 'chores', 'finance'];
+// Goals moved to the hamburger menu (per Jim 2026-07-23) to make room in the bottom bar —
+// 'goals' stays a valid TabKey (so ?tab=goals deep links and the mobile goals view still
+// work if reached another way), it's just no longer one of the bottom icons.
+const MOBILE_TAB_ORDER: TabKey[] = ['overview', 'coach', 'daily_plan', 'tasks', 'stories', 'chores', 'finance'];
 const MOBILE_TAB_LABELS: Record<TabKey, string> = {
   overview: 'Today',
   coach: 'Coach',
@@ -66,7 +69,7 @@ const MOBILE_TAB_LABELS: Record<TabKey, string> = {
   tasks: 'Tasks',
   stories: 'Stories',
   goals: 'Goals',
-  chores: 'Chores',
+  chores: 'Checklist',
   finance: 'Finance',
 };
 // Lucide icon components for the bottom tab bar
@@ -1009,6 +1012,15 @@ const MobileHome: React.FC = () => {
     [choresDueToday, matchesTaskSharedFilters],
   );
 
+  // Daily Checklist = chores/habits/routines (visibleChoreRows) + regular due-today tasks
+  // that aren't already one of those kinds — per Jim 2026-07-23, one combined checklist
+  // rather than chores/habits living apart from today's plain tasks.
+  const dailyChecklistRows = useMemo(() => {
+    const choreIds = new Set(visibleChoreRows.map((t) => t.id));
+    const extraTasks = tasksDueTodayForMobile.filter((t) => !choreIds.has(t.id) && !getChoreKind(t));
+    return [...visibleChoreRows, ...extraTasks.filter(matchesTaskSharedFilters)];
+  }, [visibleChoreRows, tasksDueTodayForMobile, getChoreKind, matchesTaskSharedFilters]);
+
   const filteredGoalsForMobile = useMemo(() => {
     const currentYear = new Date().getFullYear();
     if (goalsViewFilter === 'year') {
@@ -1062,20 +1074,23 @@ const MobileHome: React.FC = () => {
       { key: 'evening' as const, label: 'Evening' },
     ] as const;
     const grouped = { morning: [] as Task[], afternoon: [] as Task[], evening: [] as Task[] };
-    visibleChoreRows.forEach((task) => {
-      const bucket = bucketFromTime(toChoreMs(task), (task as any).timeOfDay);
+    dailyChecklistRows.forEach((task) => {
+      const bucket = bucketFromTime(toChoreMs(task) ?? getTaskDueMs(task), (task as any).timeOfDay);
       grouped[bucket].push(task);
     });
     const hasGroups = CHORE_BUCKETS.some((b) => grouped[b.key].length > 0);
 
     const renderChoreItem = (task: Task) => {
-      const kind = getChoreKind(task) || 'chore';
-      const badgeVariant = kind === 'routine' ? 'success' : kind === 'habit' ? 'secondary' : 'primary';
-      const badgeLabel = kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : 'Chore';
-      const dueMs = toChoreMs(task);
+      const kind = getChoreKind(task); // null for a plain task
+      const badgeVariant = kind === 'routine' ? 'success' : kind === 'habit' ? 'secondary' : kind === 'chore' ? 'primary' : 'info';
+      const badgeLabel = kind === 'routine' ? 'Routine' : kind === 'habit' ? 'Habit' : kind === 'chore' ? 'Chore' : 'Task';
+      const dueMs = toChoreMs(task) ?? getTaskDueMs(task);
       const dueLabel = formatDueLabel(dueMs);
       const isOverdue = !!dueMs && dueMs < todayStartMs;
       const busy = !!choreCompletionBusy[task.id];
+      const onComplete = kind
+        ? () => handleCompleteChoreTask(task)
+        : () => updateTaskField(task, { status: 2 });
       const aiScore = getTaskAiScore(task);
       const manualPriority = getManualPriorityLabel(task) || null;
       const top3 = isTaskInTop3(task);
@@ -1086,7 +1101,7 @@ const MobileHome: React.FC = () => {
             type="checkbox"
             checked={busy}
             disabled={busy}
-            onChange={() => handleCompleteChoreTask(task)}
+            onChange={onComplete}
             aria-label={`Complete ${task.title}`}
             style={{ flexShrink: 0 }}
           />
@@ -1120,15 +1135,15 @@ const MobileHome: React.FC = () => {
       <Card className="mb-3" style={{ background: '#f0fdf4' }}>
         <Card.Header className="py-2 d-flex align-items-center justify-content-between" style={{ background: 'transparent', border: 'none' }}>
           <div>
-            <strong>Chores &amp; Habits</strong>
-            <Badge bg="secondary" pill className="ms-2">{visibleChoreRows.length}</Badge>
+            <strong>Daily Checklist</strong>
+            <Badge bg="secondary" pill className="ms-2">{dailyChecklistRows.length}</Badge>
           </div>
         </Card.Header>
         <Card.Body className="pt-0">
           {choresLoading ? (
-            <div className="text-muted small">Loading chores…</div>
-          ) : visibleChoreRows.length === 0 ? (
-            <div className="text-muted small">No chores, habits, or routines due today.</div>
+            <div className="text-muted small">Loading checklist…</div>
+          ) : dailyChecklistRows.length === 0 ? (
+            <div className="text-muted small">Nothing due today — chores, habits, routines, or tasks.</div>
           ) : hasGroups ? (
             <>
               {CHORE_BUCKETS.map((b) => {
@@ -1148,7 +1163,7 @@ const MobileHome: React.FC = () => {
             </>
           ) : (
             <ListGroup variant="flush">
-              {visibleChoreRows.map(renderChoreItem)}
+              {dailyChecklistRows.map(renderChoreItem)}
             </ListGroup>
           )}
         </Card.Body>

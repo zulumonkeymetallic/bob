@@ -26,6 +26,8 @@ import { SkeletonStatCard } from './common/SkeletonLoader';
 import EmptyState from './common/EmptyState';
 import { colors } from '../utils/colors';
 import { findSprintForDate } from '../utils/taskSprintHelpers';
+import { getActiveFocusLeafGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
+import { FocusGoal } from '../types';
 
 const StoriesManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -51,6 +53,9 @@ const StoriesManagement: React.FC = () => {
   const [activeSprintId, setActiveSprintId] = useState<string | null>(null);
   const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true); // default on
   const [goalSearch, setGoalSearch] = useState('');
+  const [top3Only, setTop3Only] = useState(false);
+  const [focusOnly, setFocusOnly] = useState(false);
+  const [focusGoals, setFocusGoals] = useState<FocusGoal[]>([]);
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -61,6 +66,24 @@ const StoriesManagement: React.FC = () => {
       setFilterStatus('1'); // Status 1 = In Progress for stories
     }
   }, [searchParams]);
+
+  useEffect(() => {
+    if (!currentUser?.uid) { setFocusGoals([]); return; }
+    const focusQuery = query(
+      collection(db, 'focusGoals'),
+      where('ownerUid', '==', currentUser.uid),
+      where('persona', '==', currentPersona),
+      where('isActive', '==', true)
+    );
+    const unsub = onSnapshot(
+      focusQuery,
+      (snapshot) => setFocusGoals(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })) as FocusGoal[]),
+      () => setFocusGoals([])
+    );
+    return () => unsub();
+  }, [currentUser, currentPersona]);
+
+  const activeFocusGoalIds = React.useMemo(() => getActiveFocusLeafGoalIds(focusGoals), [focusGoals]);
 
   useEffect(() => {
     const state = ((location as unknown) as { state?: { themeId?: string } | null }).state ?? null;
@@ -369,6 +392,12 @@ const StoriesManagement: React.FC = () => {
     if (filterStatus === 'not_done' && isStatus(story.status, 'done')) return false;
     else if (filterStatus !== 'all' && filterStatus !== 'not_done' && !isStatus(story.status, filterStatus)) return false;
     if (filterTheme !== 'all' && String(story.theme ?? '') !== filterTheme) return false;
+    if (top3Only && (story as any).aiTop3ForDay !== true) return false;
+    if (focusOnly) {
+      if (activeFocusGoalIds.size === 0) return false;
+      const goalId = String(story.goalId || '').trim();
+      if (!goalId || !isGoalInHierarchySet(goalId, goals, activeFocusGoalIds)) return false;
+    }
     // Match search term against title + goal title
     const goal = goals.find(g => g.id === story.goalId);
     const goalText = goal?.title?.toLowerCase() || '';
@@ -577,6 +606,31 @@ const StoriesManagement: React.FC = () => {
               </Col>
             </Row>
             <Row style={{ marginTop: '6px' }}>
+              <Col md={4}>
+                <Form.Group className="d-flex align-items-center" style={{ height: '100%' }}>
+                  <Form.Check
+                    type="switch"
+                    id="filter-story-top3"
+                    label={<span style={{ fontSize: '11px' }}>Top 3 Only</span>}
+                    checked={top3Only}
+                    onChange={(e) => setTop3Only(e.target.checked)}
+                  />
+                </Form.Group>
+              </Col>
+              <Col md={4}>
+                <Form.Group className="d-flex align-items-center" style={{ height: '100%' }}>
+                  <Form.Check
+                    type="switch"
+                    id="filter-story-focus"
+                    label={<span style={{ fontSize: '11px' }}>{`Focus only${activeFocusGoalIds.size > 0 ? ` (${activeFocusGoalIds.size})` : ''}`}</span>}
+                    checked={focusOnly}
+                    disabled={activeFocusGoalIds.size === 0}
+                    onChange={(e) => setFocusOnly(e.target.checked)}
+                  />
+                </Form.Group>
+              </Col>
+            </Row>
+            <Row style={{ marginTop: '6px' }}>
               <Col>
                 {filterTheme !== 'all' && (
                   <div className="mb-2">
@@ -596,6 +650,8 @@ const StoriesManagement: React.FC = () => {
                     setSearchTerm('');
                     setFilterTheme('all');
                     setGoalSearch('');
+                    setTop3Only(false);
+                    setFocusOnly(false);
                   }}
                   style={{ borderColor: themeVars.border as string }}
                 >

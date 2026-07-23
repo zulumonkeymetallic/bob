@@ -16,6 +16,12 @@
   gap: 24px;
 }
 
+/* Tighter card-to-card spacing than --grid, without touching goal cards which share
+   --grid's default. Applied alongside --grid (e.g. StoriesCardView) to override its gap. */
+.goals-card-grid--compact {
+  gap: 10px;
+}
+
 @media (max-width: 1600px) {
   .goals-card-grid--grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
