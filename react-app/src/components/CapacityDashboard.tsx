@@ -3,6 +3,7 @@ import { Card, Row, Col, ProgressBar, Alert, Spinner, Form, Badge } from 'react-
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../firebase';
 import { useSprint } from '../contexts/SprintContext';
+import WorkSurfaceNav from './common/WorkSurfaceNav';
 import { Bar } from 'react-chartjs-2';
 import {
     Chart as ChartJS,
@@ -147,6 +148,8 @@ const CapacityDashboard: React.FC = () => {
         <div className="p-4">
             <div className="d-flex justify-content-between align-items-center mb-4">
                 <h2>{isCalendarMode ? 'Next Week Capacity' : 'Sprint Capacity'}</h2>
+                <div className="d-flex align-items-center gap-2">
+                <WorkSurfaceNav inline />
                 <Form.Select
                     style={{ width: '250px' }}
                     value={selectedSprintId}
@@ -159,6 +162,7 @@ const CapacityDashboard: React.FC = () => {
                         </option>
                     ))}
                 </Form.Select>
+                </div>
             </div>
 
             {loading && <div className="text-center"><Spinner animation="border" /></div>}

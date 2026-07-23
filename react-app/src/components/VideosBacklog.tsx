@@ -8,6 +8,7 @@ import { Goal, Sprint } from '../types';
 import { findSprintForDate } from '../utils/taskSprintHelpers';
 import { generateRef } from '../utils/referenceGenerator';
 import { planningSprints } from '../utils/sprintFilter';
+import WorkSurfaceNav from './common/WorkSurfaceNav';
 
 interface YouTubeItem {
   id: string;
@@ -336,6 +337,7 @@ const VideosBacklog: React.FC = () => {
           <div className="text-muted small">Watch-later queue only — history entries live in the YouTube History dashboard.</div>
         </div>
         <div className="d-flex flex-wrap gap-2 align-items-center">
+          <WorkSurfaceNav inline />
           <Form.Control size="sm" placeholder="Search videos" value={search} onChange={(e) => setSearch(e.target.value)} style={{ width: 220 }} />
           <Form.Select size="sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as any)} style={{ width: 180 }}>
             <option value="all">All</option>

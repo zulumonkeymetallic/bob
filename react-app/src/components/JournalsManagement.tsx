@@ -11,6 +11,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import type { Goal, JournalEntry, Story, Task } from '../types';
 import EmptyState from './common/EmptyState';
 import PageHeader from './common/PageHeader';
+import WorkSurfaceNav from './common/WorkSurfaceNav';
 import EditTaskModal from './EditTaskModal';
 import EditStoryModal from './EditStoryModal';
 
@@ -459,16 +460,19 @@ const JournalsManagement: React.FC = () => {
         ]}
         badge={{ label: `${currentPersona.charAt(0).toUpperCase() + currentPersona.slice(1)} Persona`, variant: 'primary' }}
         actions={
-          selectedJournal?.docUrl ? (
-            <Button
-              variant="outline-primary"
-              href={selectedJournal.docUrl}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Open Google Doc
-            </Button>
-          ) : undefined
+          <>
+            <WorkSurfaceNav inline />
+            {selectedJournal?.docUrl && (
+              <Button
+                variant="outline-primary"
+                href={selectedJournal.docUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open Google Doc
+              </Button>
+            )}
+          </>
         }
       />
 

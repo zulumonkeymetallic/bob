@@ -4,6 +4,7 @@ import { CalendarClock, CheckCircle2 } from 'lucide-react';
 import DeferralRecommendationBanner from './DeferralRecommendationBanner';
 import PlannerCapacityBanner from './planner/PlannerCapacityBanner';
 import { useDeferralCandidates } from '../hooks/useDeferralCandidates';
+import WorkSurfaceNav from './common/WorkSurfaceNav';
 
 const DeferralSuggestionsPage: React.FC = () => {
   const { candidates, overCapacityMoves, scheduleWarnings, loading, currentSprint } = useDeferralCandidates();
@@ -13,11 +14,14 @@ const DeferralSuggestionsPage: React.FC = () => {
     <Container fluid style={{ padding: '24px', backgroundColor: 'var(--bg)', minHeight: '100%' }}>
       <Row className="mb-4">
         <Col>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <CalendarClock size={22} />
-            <h2 style={{ margin: 0, fontSize: '28px', fontWeight: 700, color: 'var(--text)' }}>
-              Deferral suggestions
-            </h2>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <CalendarClock size={22} />
+              <h2 style={{ margin: 0, fontSize: '28px', fontWeight: 700, color: 'var(--text)' }}>
+                Deferral suggestions
+              </h2>
+            </div>
+            <WorkSurfaceNav inline />
           </div>
           <p className="text-muted mb-0 mt-1">
             Stories and tasks in the current sprint that aren't a top-3, manually pinned, or focus-goal priority —

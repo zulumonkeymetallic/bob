@@ -5,6 +5,7 @@ import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tool
 import { format, subMonths, startOfDay, eachDayOfInterval } from 'date-fns';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
+import WorkSurfaceNav from './common/WorkSurfaceNav';
 
 interface YouTubeHistoryItem {
   id: string;
@@ -137,6 +138,8 @@ const YouTubeHistoryDashboard: React.FC = () => {
           <h4 className="mb-0">YouTube History</h4>
           <div className="text-muted small">Watch history over the last {rangeMonths} month{rangeMonths > 1 ? 's' : ''}.</div>
         </div>
+        <div className="d-flex align-items-center gap-2">
+        <WorkSurfaceNav inline />
         <ButtonGroup size="sm">
           {rangeOptions.map((option) => (
             <Button
@@ -148,6 +151,7 @@ const YouTubeHistoryDashboard: React.FC = () => {
             </Button>
           ))}
         </ButtonGroup>
+        </div>
       </div>
 
       {error && <Alert variant="danger">{error}</Alert>}
