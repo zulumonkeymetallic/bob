@@ -224,8 +224,32 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
 
     const saveItem = async (id: string, collection_: 'stories' | 'tasks', updates: Record<string, any>) => {
         addSaving(id);
-        try { await updateDoc(doc(db, collection_, id), { ...updates, updatedAt: serverTimestamp() }); }
-        finally { rmSaving(id); }
+        try {
+            await updateDoc(doc(db, collection_, id), { ...updates, updatedAt: serverTimestamp() });
+        } catch (err: any) {
+            // Legacy guardrail: docs with a missing/mismatched ownerUid can fail Firestore's
+            // update rule even though the null-owner fallback usually covers it (e.g. a real
+            // mismatched, non-null owner from an old writer). Retry once after claiming
+            // ownership — same pattern handleDelete already uses in this file — before giving
+            // up and surfacing the failure. Previously this swallowed silently (no .catch on
+            // any call site), so an inline status/field edit could fail and just revert with
+            // zero feedback. Confirmed by Jim, 2026-07-23: marking a task Done on the Kanban
+            // table view "doesn't change" — this was a silent write failure, not a rendering bug.
+            if (currentUser?.uid) {
+                try {
+                    await updateDoc(doc(db, collection_, id), { ...updates, ownerUid: currentUser.uid, updatedAt: serverTimestamp() });
+                    return;
+                } catch (retryErr: any) {
+                    console.error(`[SprintTriageTable] save ${collection_}/${id} failed`, retryErr);
+                    alert(`Failed to save change: ${retryErr?.message || 'permission denied'}`);
+                    return;
+                }
+            }
+            console.error(`[SprintTriageTable] save ${collection_}/${id} failed`, err);
+            alert(`Failed to save change: ${err?.message || 'permission denied'}`);
+        } finally {
+            rmSaving(id);
+        }
     };
 
     const commitEdit = (item: Story | Task, type: RowType, valueOverride?: string) => {
@@ -314,7 +338,12 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
             if (av > bv) return sortDir === 'asc' ? 1 : -1;
             return 0;
         });
-    }, [sprintStories, sprintTasks, sortKey, sortDir]);
+        // hideDone must be a dependency: it's read inside the filter above, but wasn't listed
+        // here, so toggling "Showing active only" (or a status edit that flips a row across the
+        // hide/show boundary, e.g. marking a task Done) never recomputed this memo — the row just
+        // silently stayed as it was. Root cause of "marking a task Done on Kanban doesn't change
+        // anything." Confirmed by Jim, 2026-07-23.
+    }, [sprintStories, sprintTasks, sortKey, sortDir, hideDone]);
 
     // Render helpers
     const SortIcon = ({ col }: { col: SortKey }) =>
