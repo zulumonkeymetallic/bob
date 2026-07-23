@@ -31,6 +31,7 @@ import ModernSprintsTable from '../ModernSprintsTable';
 import SprintKanbanPageV2 from '../SprintKanbanPageV2';
 import SprintCloseDialog from './SprintCloseDialog';
 import SprintHistoryTable from './SprintHistoryTable';
+import WorkSurfaceNav from '../common/WorkSurfaceNav';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, BarChart, Bar } from 'recharts';
 
 // BOB v3.5.6 - Sprint Management with Database Integration
@@ -381,7 +382,10 @@ const SprintManagementView = () => {
         <Col>
           <div className="d-flex justify-content-between align-items-center">
             <h2>Sprint Management</h2>
-            <div className="d-flex gap-2">
+            <div className="d-flex gap-2 align-items-center">
+              {/* Lightweight quick-jump nav, consistent placement with Goals/Stories/Tasks.
+                  Per Jim, 2026-07-23. */}
+              <WorkSurfaceNav inline />
               <Button
                 variant="outline-secondary"
                 size="sm"
