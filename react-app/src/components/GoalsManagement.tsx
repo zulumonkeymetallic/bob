@@ -690,11 +690,6 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
       boxSizing: 'border-box',
     }}>
       <div style={{ maxWidth: '100%', margin: '0', display: 'flex', flexDirection: 'column', gap: '10px', height: embedded ? '100%' : 'calc(100vh - 32px)' }}>
-        {/* Lightweight WorkSurfaceNav here, not the full PlanActionBar — per Jim, 2026-07-23:
-            the full action bar (with Plan-level dropdown, Weekly Capacity, Sprint Wizard) is
-            reserved for Overview/Calendar/Kanban/Planners; Goals/Stories/Tasks get the
-            simpler quick-jump row. */}
-        {!embedded && <WorkSurfaceNav />}
         {/* Header */}
         <div style={{
           display: 'flex',
@@ -711,6 +706,10 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
             </p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            {/* Lightweight WorkSurfaceNav moved onto this row, to the left of the
+                collapse/List/Cards/Add buttons — was its own row above, wasting vertical
+                space. Per Jim, 2026-07-23. */}
+            {!embedded && <WorkSurfaceNav inline />}
             <Button
               size="sm"
               variant="outline-secondary"

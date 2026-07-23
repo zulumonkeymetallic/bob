@@ -367,15 +367,12 @@ const TaskListView: React.FC = () => {
       width: '100%'
     }}>
       <div style={{ maxWidth: '100%', margin: '0' }}>
-        {/* Lightweight WorkSurfaceNav — the full PlanActionBar is reserved for Overview/
-            Calendar/Kanban/Planners. Per Jim, 2026-07-23. */}
-        <WorkSurfaceNav />
         {/* Header */}
         <div style={{
-          display: 'flex', 
-          justifyContent: 'space-between', 
-          alignItems: 'center', 
-          marginBottom: '24px' 
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: '24px'
         }}>
           <div>
             <h2 style={{ margin: '0 0 4px 0', fontSize: '20px', fontWeight: '700' }}>
@@ -385,10 +382,13 @@ const TaskListView: React.FC = () => {
               Manage all your tasks with modern table interface
             </p>
           </div>
-          {/* List/Cards toggle + Switch to Kanban sit to the left of the primary Add task
-              button, which stays rightmost as the primary CTA — consistent with
-              Goals/Stories. Per Jim, 2026-07-23. */}
+          {/* Lightweight WorkSurfaceNav moved onto this row, to the left of List/Cards/
+              Switch-to-Kanban/Add — was its own row above, wasting vertical space. List/Cards
+              toggle + Switch to Kanban sit to the left of the primary Add task button, which
+              stays rightmost as the primary CTA — consistent with Goals/Stories.
+              Per Jim, 2026-07-23. */}
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <WorkSurfaceNav inline />
             <Button
               size="sm"
               variant={viewMode === 'list' ? 'primary' : 'outline-secondary'}

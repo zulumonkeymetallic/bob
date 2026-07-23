@@ -14,12 +14,18 @@ const LINKS = [
   { label: 'Coach', path: '/coach', icon: Brain },
 ] as const;
 
+interface WorkSurfaceNavProps {
+  /** Set when embedded inline in a header row (e.g. Goals/Stories/Tasks) instead of its own
+   * row — drops the marginBottom that only makes sense when it's on its own line. */
+  inline?: boolean;
+}
+
 /**
  * Quick-jump row for full desktop work-surface pages (Stories, Tasks, Goals, etc.) that
  * otherwise have no way back to the other surfaces short of the browser back button.
  * Deliberately not rendered on Dashboard (already has header nav) or Mobile (bottom tab bar).
  */
-const WorkSurfaceNav: React.FC = () => {
+const WorkSurfaceNav: React.FC<WorkSurfaceNavProps> = ({ inline = false }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const currentPath = location.pathname + location.search;
@@ -31,7 +37,7 @@ const WorkSurfaceNav: React.FC = () => {
         alignItems: 'center',
         gap: 6,
         flexWrap: 'wrap',
-        marginBottom: 12,
+        marginBottom: inline ? 0 : 12,
       }}
     >
       {LINKS.map(({ label, path, icon: Icon }) => {

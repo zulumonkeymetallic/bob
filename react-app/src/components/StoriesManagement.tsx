@@ -440,9 +440,6 @@ const StoriesManagement: React.FC = () => {
       width: '100%'
     }}>
       <div style={{ maxWidth: '100%', margin: '0' }}>
-        {/* Lightweight WorkSurfaceNav — the full PlanActionBar is reserved for Overview/
-            Calendar/Kanban/Planners. Per Jim, 2026-07-23. */}
-        <WorkSurfaceNav />
         <PageHeader
           title="Stories"
           breadcrumbs={[
@@ -451,6 +448,10 @@ const StoriesManagement: React.FC = () => {
           ]}
           actions={
             <>
+              {/* Lightweight WorkSurfaceNav moved onto this row, to the left of the
+                  Import/List/Cards/Add buttons — was its own row above, wasting vertical
+                  space. Per Jim, 2026-07-23. */}
+              <WorkSurfaceNav inline />
               {/* Import + View Mode Toggle sit to the left of the primary Add Story button,
                   which stays rightmost as the primary CTA — consistent with Goals/Tasks.
                   Per Jim, 2026-07-23. */}
