@@ -21,7 +21,7 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useSprint } from '../contexts/SprintContext';
 import StatCard from './common/StatCard';
 import PageHeader from './common/PageHeader';
-import PlanActionBar from './planner/PlanActionBar';
+import WorkSurfaceNav from './common/WorkSurfaceNav';
 import { SkeletonStatCard } from './common/SkeletonLoader';
 import EmptyState from './common/EmptyState';
 import { colors } from '../utils/colors';
@@ -440,9 +440,9 @@ const StoriesManagement: React.FC = () => {
       width: '100%'
     }}>
       <div style={{ maxWidth: '100%', margin: '0' }}>
-        {/* PlanActionBar (not WorkSurfaceNav) for consistency with Overview/Calendar/Kanban/
-            Goals — same action bar surface everywhere. Per Jim, 2026-07-23. */}
-        <PlanActionBar className="mb-3" />
+        {/* Lightweight WorkSurfaceNav — the full PlanActionBar is reserved for Overview/
+            Calendar/Kanban/Planners. Per Jim, 2026-07-23. */}
+        <WorkSurfaceNav />
         <PageHeader
           title="Stories"
           breadcrumbs={[

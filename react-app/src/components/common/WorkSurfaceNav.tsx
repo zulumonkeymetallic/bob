@@ -1,12 +1,16 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { LayoutGrid, Calendar as CalendarIcon, Columns, Route, Brain } from 'lucide-react';
+import { LayoutGrid, Calendar as CalendarIcon, Columns, Route, Brain, Map as MapIcon } from 'lucide-react';
 
 const LINKS = [
   { label: 'Overview', path: '/dashboard', icon: LayoutGrid },
   { label: 'Calendar', path: '/calendar', icon: CalendarIcon },
   { label: 'Kanban', path: '/sprints/kanban', icon: Columns },
   { label: 'Roadmap', path: '/planner?level=gantt', icon: Route },
+  // Goal Roadmap view (the same destination as PlanActionBar's "Roadmap" button) —
+  // distinct from the "Roadmap" link above, which points at the Gantt chart instead.
+  // Per Jim, 2026-07-23.
+  { label: 'Plan', path: '/canvas?layout=roadmap', icon: MapIcon },
   { label: 'Coach', path: '/coach', icon: Brain },
 ] as const;
 

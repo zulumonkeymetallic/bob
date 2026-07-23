@@ -14,7 +14,7 @@ import EditTaskModal from './EditTaskModal';
 import { isStatus, isTheme } from '../utils/statusHelpers';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { useSprint } from '../contexts/SprintContext';
-import PlanActionBar from './planner/PlanActionBar';
+import WorkSurfaceNav from './common/WorkSurfaceNav';
 import { getActiveFocusLeafGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
 import { getChoreKind as getChoreKindShared } from '../utils/choreKind';
 import { FocusGoal } from '../types';
@@ -367,9 +367,9 @@ const TaskListView: React.FC = () => {
       width: '100%'
     }}>
       <div style={{ maxWidth: '100%', margin: '0' }}>
-        {/* PlanActionBar (not WorkSurfaceNav) for consistency with Overview/Calendar/Kanban/
-            Goals/Stories — same action bar surface everywhere. Per Jim, 2026-07-23. */}
-        <PlanActionBar className="mb-3" />
+        {/* Lightweight WorkSurfaceNav — the full PlanActionBar is reserved for Overview/
+            Calendar/Kanban/Planners. Per Jim, 2026-07-23. */}
+        <WorkSurfaceNav />
         {/* Header */}
         <div style={{
           display: 'flex', 

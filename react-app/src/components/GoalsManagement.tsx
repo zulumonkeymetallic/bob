@@ -23,7 +23,7 @@ import { useSidebar } from '../contexts/SidebarContext';
 import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import { computeWindowExpectedProgress, evaluateGoalTargetStatus } from '../utils/goalKpiStatus';
 import { goalNeedsLinkedPot } from '../utils/goalCost';
-import PlanActionBar from './planner/PlanActionBar';
+import WorkSurfaceNav from './common/WorkSurfaceNav';
 
 interface GoalsManagementProps {
   /** When true, fills its container's height instead of assuming the full viewport — for
@@ -690,10 +690,11 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
       boxSizing: 'border-box',
     }}>
       <div style={{ maxWidth: '100%', margin: '0', display: 'flex', flexDirection: 'column', gap: '10px', height: embedded ? '100%' : 'calc(100vh - 32px)' }}>
-        {/* WorkSurfaceNav removed here — PlanActionBar already covers the same Overview/
-            Calendar/Kanban/Roadmap/Coach quick-jump links (plus Plan-level switching and the
-            Sprint Wizard), so both stacked was a genuine duplicate. Per Jim, 2026-07-23. */}
-        {!embedded && <PlanActionBar />}
+        {/* Lightweight WorkSurfaceNav here, not the full PlanActionBar — per Jim, 2026-07-23:
+            the full action bar (with Plan-level dropdown, Weekly Capacity, Sprint Wizard) is
+            reserved for Overview/Calendar/Kanban/Planners; Goals/Stories/Tasks get the
+            simpler quick-jump row. */}
+        {!embedded && <WorkSurfaceNav />}
         {/* Header */}
         <div style={{
           display: 'flex',
