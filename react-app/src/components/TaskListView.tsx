@@ -366,7 +366,7 @@ const TaskListView: React.FC = () => {
 
         {/* Filters */}
         <Card style={{ marginBottom: '12px', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-          <Card.Body style={{ padding: '8px' }}>
+          <Card.Body style={{ padding: '6px' }}>
             <Row>
               <Col md={3}>
                 <Form.Group>
@@ -475,7 +475,7 @@ const TaskListView: React.FC = () => {
               </Col>
             </Row>
             {/* Toggles + Clear Filters merged onto one line — was three separate Rows. */}
-            <Row style={{ marginTop: '6px' }}>
+            <Row style={{ marginTop: '4px' }}>
               <Col className="d-flex align-items-center flex-wrap" style={{ gap: '4px 20px' }}>
                 <Form.Check
                   type="switch"

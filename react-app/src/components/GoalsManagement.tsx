@@ -18,7 +18,6 @@ import YearMultiSelect from './shared/YearMultiSelect';
 import { isStatus } from '../utils/statusHelpers';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import ConfirmDialog from './ConfirmDialog';
-import WorkSurfaceNav from './common/WorkSurfaceNav';
 import { arrayMove } from '@dnd-kit/sortable';
 import { useSidebar } from '../contexts/SidebarContext';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
@@ -686,8 +685,10 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
       boxSizing: 'border-box',
     }}>
       <div style={{ maxWidth: '100%', margin: '0', display: 'flex', flexDirection: 'column', gap: '10px', height: embedded ? '100%' : 'calc(100vh - 32px)' }}>
-        {!embedded && <WorkSurfaceNav />}
-        <PlanActionBar />
+        {/* WorkSurfaceNav removed here — PlanActionBar already covers the same Overview/
+            Calendar/Kanban/Roadmap/Coach quick-jump links (plus Plan-level switching and the
+            Sprint Wizard), so both stacked was a genuine duplicate. Per Jim, 2026-07-23. */}
+        {!embedded && <PlanActionBar />}
         {/* Header */}
         <div style={{
           display: 'flex',
@@ -712,6 +713,10 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
             >
               {isCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
             </Button>
+            {/* Add Goal to the left of the List/Cards toggle — per Jim, 2026-07-23. */}
+            <Button variant="primary" onClick={() => setShowAddGoal(true)}>
+              Add Goal
+            </Button>
             {/* View Mode Toggle */}
             <div style={{ display: 'flex', border: '1px solid var(--notion-border)', borderRadius: 6, overflow: 'hidden' }}>
               <Button
@@ -733,9 +738,6 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
                 Cards
               </Button>
             </div>
-            <Button variant="primary" onClick={() => setShowAddGoal(true)}>
-              Add Goal
-            </Button>
           </div>
         </div>
 
@@ -757,7 +759,7 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
 
         {/* Filters */}
         <Card style={{ marginBottom: '8px', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
-          <Card.Body style={{ padding: '8px', color: 'var(--notion-text)' }}>
+          <Card.Body style={{ padding: '6px', color: 'var(--notion-text)' }}>
             <Row className="g-2 align-items-end">
               <Col md={3}>
                 <Form.Group>

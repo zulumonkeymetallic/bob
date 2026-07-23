@@ -440,6 +440,23 @@ const StoriesManagement: React.FC = () => {
           ]}
           actions={
             <>
+              {/* Import/Add Story to the left of the List/Cards toggle — per Jim, 2026-07-23. */}
+              <Button
+                variant="outline-secondary"
+                onClick={() => setShowImportModal(true)}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+              >
+                <Upload size={16} />
+                Import
+              </Button>
+              <Button
+                variant="primary"
+                onClick={() => setShowAddStoryModal(true)}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+              >
+                <Plus size={16} />
+                Add Story
+              </Button>
               {/* View Mode Toggle */}
               <div style={{ display: 'flex', border: `1px solid ${themeVars.border}`, borderRadius: '6px', overflow: 'hidden' }}>
                 <Button
@@ -472,24 +489,6 @@ const StoriesManagement: React.FC = () => {
                   Cards
                 </Button>
               </div>
-
-              {/* Removed duplicate metrics pills to avoid double-render with header */}
-              <Button
-                variant="outline-secondary"
-                onClick={() => setShowImportModal(true)}
-                style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-              >
-                <Upload size={16} />
-                Import
-              </Button>
-              <Button
-                variant="primary"
-                onClick={() => setShowAddStoryModal(true)}
-                style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-              >
-                <Plus size={16} />
-                Add Story
-              </Button>
             </>
           }
         />
@@ -514,7 +513,7 @@ const StoriesManagement: React.FC = () => {
 
         {/* Filters */}
         <Card style={{ marginBottom: '12px', border: 'none', boxShadow: 'var(--glass-shadow, 0 2px 4px var(--glass-shadow-color))' }}>
-          <Card.Body style={{ padding: '8px' }}>
+          <Card.Body style={{ padding: '6px' }}>
             <Row>
               <Col md={4}>
                 <Form.Group>
@@ -565,7 +564,7 @@ const StoriesManagement: React.FC = () => {
               </Col>
             </Row>
             {/* Toggles + Clear Filters merged onto one line — was two separate Rows. */}
-            <Row style={{ marginTop: '6px' }}>
+            <Row style={{ marginTop: '4px' }}>
               <Col className="d-flex align-items-center flex-wrap" style={{ gap: '4px 20px' }}>
                 <Form.Check
                   type="switch"
