@@ -708,7 +708,15 @@ async function schedulePlannerItemMutation({
 
   const effectiveDurationMinutes = inferDurationMinutes(normalizedType, entity, primaryBlock, durationMinutes);
   const windowStartMs = startOfDayMs(targetMs);
-  const windowEndMs = windowStartMs + (DEFAULT_SEARCH_DAYS * 24 * 60 * 60 * 1000) - 1;
+  const normalizedSearchDays = Math.max(1, Math.min(Number(searchDays || DEFAULT_SEARCH_DAYS), 84));
+  // Must cover the full search range chooseSplitPlacements/choosePlacement will actually
+  // scan, not just DEFAULT_SEARCH_DAYS (14) — a fixed 14-day load window regardless of the
+  // real search range left every day beyond day 14 with zero known busy intervals, so
+  // Work (Main Gig) and every other calendar commitment on those days was invisible to the
+  // placer. Confirmed live 2026-07-23: two blocks landed directly on top of Work (Main Gig)
+  // 18 days out. searchDays can also exceed normalizedSearchDays' 84-day cap via
+  // maxTargetDateMs (a bucket window can start beyond that), so pad generously.
+  const windowEndMs = windowStartMs + (Math.max(normalizedSearchDays, 90) * 24 * 60 * 60 * 1000) - 1;
   const allBlocks = await loadCalendarBlocksForWindow(db, userId, windowStartMs, windowEndMs);
   const excludedBlockIds = new Set(relatedBlocks.map((block) => block.id).filter(Boolean));
   const persona = String(entity.persona || 'personal').toLowerCase() === 'work' ? 'work' : 'personal';
@@ -716,7 +724,6 @@ async function schedulePlannerItemMutation({
   const themePlanSnap = await db.collection('theme_allocations').doc(userId).get().catch(() => null);
   const themePlan = normalizeThemeAllocationPlan(themePlanSnap && themePlanSnap.exists ? (themePlanSnap.data() || {}) : {});
   const { pickSlots } = buildPickSlots(themePlan);
-  const normalizedSearchDays = Math.max(1, Math.min(Number(searchDays || DEFAULT_SEARCH_DAYS), 84));
   const forcedStartMs = Number(exactTargetStartMs);
   const forcedEndMs = Number(exactTargetEndMs);
   const forcedDurationMs = Math.max(MIN_BLOCK_MS, Math.round(effectiveDurationMinutes) * 60 * 1000);
