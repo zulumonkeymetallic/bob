@@ -494,64 +494,23 @@ const StoriesManagement: React.FC = () => {
           }
         />
 
-        {/* Dashboard Cards */}
-        <Row className="mb-2">
-          {loading ? (
-            <>
-              <Col lg={3} md={6} className="mb-3">
-                <SkeletonStatCard compact />
-              </Col>
-              <Col lg={3} md={6} className="mb-3">
-                <SkeletonStatCard compact />
-              </Col>
-              <Col lg={3} md={6} className="mb-3">
-                <SkeletonStatCard compact />
-              </Col>
-              <Col lg={3} md={6} className="mb-3">
-                <SkeletonStatCard compact />
-              </Col>
-            </>
-          ) : (
-            <>
-              <Col lg={3} md={6} className="mb-3">
-                <StatCard
-                  label="Total Stories"
-                  value={storyCounts.total}
-                  icon={BookOpen}
-                  iconColor={colors.brand.primary}
-                  compact
-                />
-              </Col>
-              <Col lg={3} md={6} className="mb-3">
-                <StatCard
-                  label="Backlog"
-                  value={storyCounts.backlog}
-                  icon={Inbox}
-                  iconColor={colors.neutral[500]}
-                  compact
-                />
-              </Col>
-              <Col lg={3} md={6} className="mb-3">
-                <StatCard
-                  label="Active"
-                  value={storyCounts.active}
-                  icon={TrendingUp}
-                  iconColor={colors.info.primary}
-                  compact
-                />
-              </Col>
-              <Col lg={3} md={6} className="mb-3">
-                <StatCard
-                  label="Done"
-                  value={storyCounts.done}
-                  icon={CheckCircle}
-                  iconColor={colors.success.primary}
-                  compact
-                />
-              </Col>
-            </>
-          )}
-        </Row>
+        {/* Stat strip — was 4 full-height StatCards (each with its own icon, padding, mb-3
+            margin) stacked above the filters; collapsed to one slim inline row so filters
+            start immediately below the page header instead of a few hundred px down.
+            Per Jim, 2026-07-23: "a lot of wasted space". */}
+        {loading ? (
+          <div className="mb-2 d-flex gap-2"><SkeletonStatCard compact /></div>
+        ) : (
+          <div
+            className="mb-2 d-flex align-items-center flex-wrap"
+            style={{ gap: '6px 16px', fontSize: '13px', padding: '6px 10px', border: '1px solid var(--line)', borderRadius: 8, background: 'var(--card)' }}
+          >
+            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><BookOpen size={13} color={colors.brand.primary} /><strong>{storyCounts.total}</strong> Total</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Inbox size={13} color={colors.neutral[500]} /><strong>{storyCounts.backlog}</strong> Backlog</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><TrendingUp size={13} color={colors.info.primary} /><strong>{storyCounts.active}</strong> Active</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><CheckCircle size={13} color={colors.success.primary} /><strong>{storyCounts.done}</strong> Done</span>
+          </div>
+        )}
 
         {/* Filters */}
         <Card style={{ marginBottom: '12px', border: 'none', boxShadow: 'var(--glass-shadow, 0 2px 4px var(--glass-shadow-color))' }}>
@@ -605,42 +564,31 @@ const StoriesManagement: React.FC = () => {
                 </Form.Group>
               </Col>
             </Row>
+            {/* Toggles + Clear Filters merged onto one line — was two separate Rows. */}
             <Row style={{ marginTop: '6px' }}>
-              <Col md={4}>
-                <Form.Group className="d-flex align-items-center" style={{ height: '100%' }}>
-                  <Form.Check
-                    type="switch"
-                    id="filter-story-top3"
-                    label={<span style={{ fontSize: '11px' }}>Top 3 Only</span>}
-                    checked={top3Only}
-                    onChange={(e) => setTop3Only(e.target.checked)}
-                  />
-                </Form.Group>
-              </Col>
-              <Col md={4}>
-                <Form.Group className="d-flex align-items-center" style={{ height: '100%' }}>
-                  <Form.Check
-                    type="switch"
-                    id="filter-story-focus"
-                    label={<span style={{ fontSize: '11px' }}>{`Focus only${activeFocusGoalIds.size > 0 ? ` (${activeFocusGoalIds.size})` : ''}`}</span>}
-                    checked={focusOnly}
-                    disabled={activeFocusGoalIds.size === 0}
-                    onChange={(e) => setFocusOnly(e.target.checked)}
-                  />
-                </Form.Group>
-              </Col>
-            </Row>
-            <Row style={{ marginTop: '6px' }}>
-              <Col>
+              <Col className="d-flex align-items-center flex-wrap" style={{ gap: '4px 20px' }}>
+                <Form.Check
+                  type="switch"
+                  id="filter-story-top3"
+                  label={<span style={{ fontSize: '11px' }}>Top 3 Only</span>}
+                  checked={top3Only}
+                  onChange={(e) => setTop3Only(e.target.checked)}
+                />
+                <Form.Check
+                  type="switch"
+                  id="filter-story-focus"
+                  label={<span style={{ fontSize: '11px' }}>{`Focus only${activeFocusGoalIds.size > 0 ? ` (${activeFocusGoalIds.size})` : ''}`}</span>}
+                  checked={focusOnly}
+                  disabled={activeFocusGoalIds.size === 0}
+                  onChange={(e) => setFocusOnly(e.target.checked)}
+                />
                 {filterTheme !== 'all' && (
-                  <div className="mb-2">
-                    <Badge bg="info" text="dark" className="me-2">
-                      Theme filter active
-                    </Badge>
+                  <>
+                    <Badge bg="info" text="dark">Theme filter active</Badge>
                     <Button size="sm" variant="outline-info" onClick={() => setFilterTheme('all')}>
                       Clear theme filter
                     </Button>
-                  </div>
+                  </>
                 )}
                 <Button
                   size="sm"
@@ -653,7 +601,7 @@ const StoriesManagement: React.FC = () => {
                     setTop3Only(false);
                     setFocusOnly(false);
                   }}
-                  style={{ borderColor: themeVars.border as string }}
+                  style={{ borderColor: themeVars.border as string, marginLeft: 'auto' }}
                 >
                   Clear Filters
                 </Button>

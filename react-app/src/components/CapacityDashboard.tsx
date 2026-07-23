@@ -48,9 +48,10 @@ const CapacityDashboard: React.FC = () => {
     // Function (server-side aggregation, not a live Firestore listener), so unlike
     // CompactSprintMetrics' top-nav badge it can't stay live on its own. Previously this
     // only ran once per sprint selection, so the number went stale the moment you left the
-    // screen and stayed stale even while sitting on it — confirmed by Jim 2026-07-23.
-    // Re-fetch on an interval and whenever the tab/screen regains focus, silently (no
-    // loading spinner) so it doesn't flicker on every refresh.
+    // screen. Re-fetch when the tab/screen regains focus (not a blind interval — per Jim
+    // 2026-07-23, polling every 60s regardless of whether anyone's looking is wasteful; the
+    // underlying calculation itself is already fresh-computed from live calendar_blocks data
+    // on every call, so there's nothing to gain from polling while the screen is backgrounded).
     useEffect(() => {
         if (!selectedSprintId) return;
 
@@ -78,7 +79,6 @@ const CapacityDashboard: React.FC = () => {
 
         fetchData(false);
 
-        const intervalId = window.setInterval(() => fetchData(true), 60_000);
         const onFocus = () => fetchData(true);
         const onVisibilityChange = () => { if (document.visibilityState === 'visible') fetchData(true); };
         window.addEventListener('focus', onFocus);
@@ -86,7 +86,6 @@ const CapacityDashboard: React.FC = () => {
 
         return () => {
             cancelled = true;
-            window.clearInterval(intervalId);
             window.removeEventListener('focus', onFocus);
             document.removeEventListener('visibilitychange', onVisibilityChange);
         };

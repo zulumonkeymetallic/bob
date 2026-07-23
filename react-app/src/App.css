@@ -41,6 +41,20 @@
   --notion-accent: #5fa8d3;
 }
 
+/* Bootstrap tooltips (e.g. the top-toolbar sprint metric badges' hover cards) were
+   inheriting this app's body text color instead of Bootstrap's own white-on-dark tooltip
+   colors, so in light mode they rendered as dark text on a dark background — unreadable.
+   Force the intended contrast regardless of theme. Confirmed by Jim, 2026-07-23. */
+.tooltip-inner {
+  color: #fff !important;
+  background-color: #000 !important;
+}
+.tooltip .tooltip-arrow::before,
+.bs-tooltip-top .tooltip-arrow::before { border-top-color: #000 !important; }
+.bs-tooltip-bottom .tooltip-arrow::before { border-bottom-color: #000 !important; }
+.bs-tooltip-start .tooltip-arrow::before { border-left-color: #000 !important; }
+.bs-tooltip-end .tooltip-arrow::before { border-right-color: #000 !important; }
+
 body {
   background: var(--notion-bg);
   color: var(--notion-text);

@@ -24,7 +24,8 @@ const TaskListView: React.FC = () => {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [filterStatus, setFilterStatus] = useState<string>('all');
+  // Default to hiding Done tasks — per Jim, 2026-07-23, matching StoriesManagement's default.
+  const [filterStatus, setFilterStatus] = useState<string>('not_done');
   const [filterTheme, setFilterTheme] = useState<string>('all');
   const [filterType, setFilterType] = useState<string>('all');
   const [filterDataQuality, setFilterDataQuality] = useState<string>('all');
@@ -257,7 +258,8 @@ const TaskListView: React.FC = () => {
       const persona = typeof task.persona === 'string' ? task.persona.toLowerCase() : String(task.persona).toLowerCase();
       if (persona && persona !== currentPersona) return false;
     }
-    if (filterStatus !== 'all' && !isStatus(task.status, filterStatus)) return false;
+    if (filterStatus === 'not_done' && isStatus(task.status, 'done')) return false;
+    else if (filterStatus !== 'all' && filterStatus !== 'not_done' && !isStatus(task.status, filterStatus)) return false;
     if (filterTheme !== 'all' && !isTheme(task.theme, filterTheme)) return false;
     const rawType = String((task as any)?.type || (task as any)?.task_type || 'task').toLowerCase();
     const normalizedType = rawType === 'habitual' ? 'habit' : rawType;
@@ -350,57 +352,17 @@ const TaskListView: React.FC = () => {
           </div>
         </div>
 
-        {/* Dashboard Cards */}
-        <Row className="mb-2">
-          <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '10px' }}>
-                <h3 style={{ margin: '0 0 2px 0', fontSize: '22px', fontWeight: '700', color: 'var(--text)' }}>
-                  {taskCounts.total}
-                </h3>
-                <p style={{ margin: 0, color: 'var(--muted)', fontSize: '11px', fontWeight: '500' }}>
-                  Total Tasks
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
-          <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '10px' }}>
-                <h3 style={{ margin: '0 0 2px 0', fontSize: '22px', fontWeight: '700', color: 'var(--orange)' }}>
-                  {taskCounts.planned}
-                </h3>
-                <p style={{ margin: 0, color: 'var(--muted)', fontSize: '11px', fontWeight: '500' }}>
-                  Planned
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
-          <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '10px' }}>
-                <h3 style={{ margin: '0 0 2px 0', fontSize: '22px', fontWeight: '700', color: 'var(--brand)' }}>
-                  {taskCounts.inProgress}
-                </h3>
-                <p style={{ margin: 0, color: 'var(--muted)', fontSize: '11px', fontWeight: '500' }}>
-                  In Progress
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
-          <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '10px' }}>
-                <h3 style={{ margin: '0 0 2px 0', fontSize: '22px', fontWeight: '700', color: 'var(--green)' }}>
-                  {taskCounts.done}
-                </h3>
-                <p style={{ margin: 0, color: 'var(--muted)', fontSize: '11px', fontWeight: '500' }}>
-                  Done
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
-        </Row>
+        {/* Stat strip — was 4 full-height cards stacked above the filters; collapsed to one
+            slim inline row, matching StoriesManagement. Per Jim, 2026-07-23. */}
+        <div
+          className="mb-2 d-flex align-items-center flex-wrap"
+          style={{ gap: '6px 16px', fontSize: '13px', padding: '6px 10px', border: '1px solid var(--line)', borderRadius: 8, background: 'var(--card)' }}
+        >
+          <span><strong style={{ color: 'var(--text)' }}>{taskCounts.total}</strong> Total</span>
+          <span><strong style={{ color: 'var(--orange)' }}>{taskCounts.planned}</strong> Planned</span>
+          <span><strong style={{ color: 'var(--brand)' }}>{taskCounts.inProgress}</strong> In Progress</span>
+          <span><strong style={{ color: 'var(--green)' }}>{taskCounts.done}</strong> Done</span>
+        </div>
 
         {/* Filters */}
         <Card style={{ marginBottom: '12px', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
@@ -430,6 +392,7 @@ const TaskListView: React.FC = () => {
                     onChange={(e) => setFilterStatus(e.target.value)}
                     style={{ border: '1px solid var(--line)' }}
                   >
+                    <option value="not_done">Open (hide Done)</option>
                     <option value="all">All Status</option>
                     <option value="planned">Planned</option>
                     <option value="in_progress">In Progress</option>
@@ -510,45 +473,32 @@ const TaskListView: React.FC = () => {
                   </Form.Select>
                 </Form.Group>
               </Col>
-              <Col md={3}>
-                <Form.Group className="d-flex align-items-center" style={{ height: '100%' }}>
-                  <Form.Check
-                    type="switch"
-                    id="filter-due-today"
-                    label={<span style={{ fontSize: '11px' }}>Only Due Today</span>}
-                    checked={dueFilter === 'today'}
-                    onChange={(e) => setDueFilter(e.target.checked ? 'today' : 'all')}
-                  />
-                </Form.Group>
-              </Col>
             </Row>
+            {/* Toggles + Clear Filters merged onto one line — was three separate Rows. */}
             <Row style={{ marginTop: '6px' }}>
-              <Col md={3}>
-                <Form.Group className="d-flex align-items-center" style={{ height: '100%' }}>
-                  <Form.Check
-                    type="switch"
-                    id="filter-top3"
-                    label={<span style={{ fontSize: '11px' }}>Top 3 Only</span>}
-                    checked={top3Only}
-                    onChange={(e) => setTop3Only(e.target.checked)}
-                  />
-                </Form.Group>
-              </Col>
-              <Col md={3}>
-                <Form.Group className="d-flex align-items-center" style={{ height: '100%' }}>
-                  <Form.Check
-                    type="switch"
-                    id="filter-focus"
-                    label={<span style={{ fontSize: '11px' }}>{`Focus only${activeFocusGoalIds.size > 0 ? ` (${activeFocusGoalIds.size})` : ''}`}</span>}
-                    checked={focusOnly}
-                    disabled={activeFocusGoalIds.size === 0}
-                    onChange={(e) => setFocusOnly(e.target.checked)}
-                  />
-                </Form.Group>
-              </Col>
-            </Row>
-            <Row style={{ marginTop: '6px' }}>
-              <Col>
+              <Col className="d-flex align-items-center flex-wrap" style={{ gap: '4px 20px' }}>
+                <Form.Check
+                  type="switch"
+                  id="filter-due-today"
+                  label={<span style={{ fontSize: '11px' }}>Only Due Today</span>}
+                  checked={dueFilter === 'today'}
+                  onChange={(e) => setDueFilter(e.target.checked ? 'today' : 'all')}
+                />
+                <Form.Check
+                  type="switch"
+                  id="filter-top3"
+                  label={<span style={{ fontSize: '11px' }}>Top 3 Only</span>}
+                  checked={top3Only}
+                  onChange={(e) => setTop3Only(e.target.checked)}
+                />
+                <Form.Check
+                  type="switch"
+                  id="filter-focus"
+                  label={<span style={{ fontSize: '11px' }}>{`Focus only${activeFocusGoalIds.size > 0 ? ` (${activeFocusGoalIds.size})` : ''}`}</span>}
+                  checked={focusOnly}
+                  disabled={activeFocusGoalIds.size === 0}
+                  onChange={(e) => setFocusOnly(e.target.checked)}
+                />
                 <Button
                   size="sm"
                   variant="outline-secondary"
@@ -563,7 +513,7 @@ const TaskListView: React.FC = () => {
                     setTop3Only(false);
                     setFocusOnly(false);
                   }}
-                  style={{ borderColor: 'var(--line)' }}
+                  style={{ borderColor: 'var(--line)', marginLeft: 'auto' }}
                 >
                   Clear Filters
                 </Button>

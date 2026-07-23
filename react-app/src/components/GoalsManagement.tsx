@@ -739,83 +739,21 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
           </div>
         </div>
 
-        {/* Dashboard Cards */}
-        <Row className="mb-1">
-          <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '6px' }}>
-                <h3 style={{ margin: '0 0 2px 0', fontSize: '18px', fontWeight: '700', color: 'var(--notion-text)' }}>
-                  {goalCounts.total}
-                </h3>
-                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '11px', fontWeight: '500' }}>
-                  Total Goals
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
-          <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '6px' }}>
-                <h3 style={{ margin: '0 0 2px 0', fontSize: '18px', fontWeight: '700', color: 'var(--notion-text)' }}>
-                  {goalCounts.active}
-                </h3>
-                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '11px', fontWeight: '500' }}>
-                  Active
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
-          <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '6px' }}>
-                <h3 style={{ margin: '0 0 2px 0', fontSize: '18px', fontWeight: '700', color: 'var(--notion-text)' }}>
-                  {goalCounts.done}
-                </h3>
-                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '11px', fontWeight: '500' }}>
-                  Done
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
-          <Col lg={3} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '6px' }}>
-                <h3 style={{ margin: '0 0 2px 0', fontSize: '18px', fontWeight: '700', color: 'var(--notion-text)' }}>
-                  {goalCounts.paused}
-                </h3>
-                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '11px', fontWeight: '500' }}>
-                  Paused
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
-        </Row>
-        <Row className="mb-1">
-          <Col lg={6} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '6px' }}>
-                <h3 style={{ margin: '0 0 2px 0', fontSize: '18px', fontWeight: '700', color: 'var(--notion-text)' }}>
-                  {formatMoney(savingsMetrics.totalEstimated)}
-                </h3>
-                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '11px', fontWeight: '500' }}>
-                  Total Estimated Cost (Filtered)
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
-          <Col lg={6} md={6} className="mb-3">
-            <Card style={{ height: '100%', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
-              <Card.Body style={{ textAlign: 'center', padding: '6px' }}>
-                <h3 style={{ margin: '0 0 2px 0', fontSize: '18px', fontWeight: '700', color: 'var(--notion-text)' }}>
-                  {formatMoney(savingsMetrics.totalSavedPence / 100)}
-                </h3>
-                <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '11px', fontWeight: '500' }}>
-                  Total Saved (Linked Pots{`${savingsMetrics.linkedPotCount ? ` • ${savingsMetrics.linkedPotCount}` : ''}`})
-                </p>
-              </Card.Body>
-            </Card>
-          </Col>
-        </Row>
+        {/* Stat strip — was 6 full-height cards across two Rows (4 counts + cost/saved);
+            collapsed to one slim inline row so filters start immediately below the page
+            header. Per Jim, 2026-07-23: "a lot of wasted space" / "get total estimated cost
+            and total saved to appear on the same row as the other cards". */}
+        <div
+          className="mb-2 d-flex align-items-center flex-wrap"
+          style={{ gap: '6px 16px', fontSize: '13px', padding: '6px 10px', border: '1px solid var(--notion-border)', borderRadius: 8, background: 'var(--notion-bg)', color: 'var(--notion-text)' }}
+        >
+          <span><strong>{goalCounts.total}</strong> Total</span>
+          <span><strong>{goalCounts.active}</strong> Active</span>
+          <span><strong>{goalCounts.done}</strong> Done</span>
+          <span><strong>{goalCounts.paused}</strong> Paused</span>
+          <span><strong>{formatMoney(savingsMetrics.totalEstimated)}</strong> Est. Cost (filtered)</span>
+          <span><strong>{formatMoney(savingsMetrics.totalSavedPence / 100)}</strong> Saved{savingsMetrics.linkedPotCount ? ` (${savingsMetrics.linkedPotCount} pots)` : ''}</span>
+        </div>
 
         {/* Filters */}
         <Card style={{ marginBottom: '8px', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
