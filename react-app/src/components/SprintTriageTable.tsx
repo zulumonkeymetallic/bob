@@ -227,6 +227,16 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
         try {
             await updateDoc(doc(db, collection_, id), { ...updates, updatedAt: serverTimestamp() });
         } catch (err: any) {
+            // The row's own doc was already deleted but a stale sprint_task_index/materialized
+            // entry kept it visible here (orphaned index row — see onTaskWritten's delete-cleanup
+            // in functions/index.js, which doesn't always run for pre-existing legacy orphans).
+            // Not worth alarming Jim over with a popup; the live listener will drop the row once
+            // the index self-heals. Confirmed live 2026-07-23: TK-OO1ZBB's index row pointed at a
+            // tasks/{id} doc that no longer exists, throwing not-found on every inline edit.
+            if (err?.code === 'not-found') {
+                console.warn(`[SprintTriageTable] save ${collection_}/${id} skipped — doc no longer exists (stale index row)`);
+                return;
+            }
             // Legacy guardrail: docs with a missing/mismatched ownerUid can fail Firestore's
             // update rule even though the null-owner fallback usually covers it (e.g. a real
             // mismatched, non-null owner from an old writer). Retry once after claiming
@@ -306,6 +316,8 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
             }
             await deleteDoc(doc(db, col, id));
         } catch (err: any) {
+            // Already gone (e.g. a stale index row pointing at a deleted doc) — nothing to do.
+            if (err?.code === 'not-found') return;
             console.error(`[SprintTriageTable] delete ${type} failed`, err);
             alert(`Failed to delete ${type}: ${err?.message || 'permission denied'}`);
         }
@@ -660,11 +672,17 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
                                             {rowType === 'story' ? 'Story' : ((item as any).type || 'Task')}
                                         </span>
                                     </td>
-                                    {/* Ref */}
+                                    {/* Ref — opens the same edit modal as the row's Edit action,
+                                        rather than navigating to a separate page. Confirmed by
+                                        Jim, 2026-07-23: clicking the ref should stay on this page. */}
                                     <td style={{ ...TD, fontFamily: 'monospace', fontSize: 12 }}>
-                                        <a href={`${BASE_URL}/${rowType === 'story' ? 'stories' : 'tasks'}/${item.id}`} target="_blank" rel="noreferrer" style={{ color: themeVars.brand as string, textDecoration: 'none' }}>
+                                        <button
+                                            type="button"
+                                            onClick={() => rowType === 'story' ? onEditStory(item as Story) : onEditTask(item as Task)}
+                                            style={{ background: 'none', border: 'none', padding: 0, color: themeVars.brand as string, textDecoration: 'none', cursor: 'pointer', font: 'inherit' }}
+                                        >
                                             {itemRef(item, rowType)}
-                                        </a>
+                                        </button>
                                     </td>
                                     {/* Title */}
                                     <td style={{ ...TD, maxWidth: 240, fontWeight: 500 }}>
