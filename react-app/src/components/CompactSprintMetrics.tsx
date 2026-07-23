@@ -1,13 +1,24 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Badge, OverlayTrigger, Tooltip } from 'react-bootstrap';
-import { Clock, Target, CheckCircle, AlertTriangle, TrendingUp, BookOpen } from 'lucide-react';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { Clock, Target, CheckCircle, AlertTriangle, TrendingUp, BookOpen, HeartPulse, PiggyBank } from 'lucide-react';
+import { collection, doc, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSprint } from '../contexts/SprintContext';
 import { Sprint, Story, Task, Goal } from '../types';
+import type { CoachDaily } from '../types/CoachTypes';
 import { buildCapacityMap, sumCapacityRange } from '../utils/dayCapacityUtils';
+
+function todayStr(): string {
+  return new Date().toISOString().split('T')[0];
+}
+
+const READINESS_COLOR: Record<string, string> = {
+  green: 'success',
+  amber: 'warning',
+  red: 'danger',
+};
 
 interface CompactSprintMetricsProps {
   selectedSprintId?: string;
@@ -156,6 +167,33 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
 
     return () => unsubscribe();
   }, [currentUser, currentPersona]);
+
+  // HRV readiness — mirrors FitnessStripWidget/CoachVerdictBanner's coach_daily/{uid}_{today} read.
+  const [coachData, setCoachData] = useState<CoachDaily | null>(null);
+  useEffect(() => {
+    if (!currentUser) { setCoachData(null); return; }
+    const docRef = doc(db, 'coach_daily', `${currentUser.uid}_${todayStr()}`);
+    const unsubscribe = onSnapshot(docRef, (snap) => {
+      setCoachData(snap.exists() ? (snap.data() as CoachDaily) : null);
+    }, () => setCoachData(null));
+    return () => unsubscribe();
+  }, [currentUser]);
+
+  // Monzo pots — mirrors GoalsManagement's savings-progress read, keyed by pot id.
+  const [pots, setPots] = useState<Record<string, { name: string; balance: number }>>({});
+  useEffect(() => {
+    if (!currentUser) { setPots({}); return; }
+    const potQuery = query(collection(db, 'monzo_pots'), where('ownerUid', '==', currentUser.uid));
+    const unsubscribe = onSnapshot(potQuery, (snapshot) => {
+      const next: Record<string, { name: string; balance: number }> = {};
+      snapshot.forEach((d) => {
+        const x = d.data() as any;
+        next[d.id] = { name: x.name || '', balance: Number(x.balance || 0) };
+      });
+      setPots(next);
+    }, () => setPots({}));
+    return () => unsubscribe();
+  }, [currentUser]);
 
   const [capacity, setCapacity] = useState<{ total: number; used: number; remaining: number } | null>(null);
 
@@ -333,6 +371,44 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
     };
   }, [sprint, stories, tasks, goals, selectedSprintId, resolvedSprintId, capacity]);
 
+  // Overall savings progress: estimated cost vs linked-pot balance across every goal that
+  // has one, same fields/matching logic as GoalsManagement's per-page savings strip.
+  const savingsMetrics = useMemo(() => {
+    let totalEstimated = 0;
+    let totalSavedPence = 0;
+    const seenPotIds = new Set<string>();
+
+    goals.forEach((goal) => {
+      const est = Number((goal as any).estimatedCost || 0);
+      totalEstimated += Number.isFinite(est) ? est : 0;
+
+      const rawPotId = (goal as any).linkedPotId || (goal as any).potId;
+      if (!rawPotId) return;
+      const raw = String(rawPotId);
+      const candidates = [raw];
+      if (currentUser?.uid && raw.startsWith(`${currentUser.uid}_`)) {
+        candidates.push(raw.replace(`${currentUser.uid}_`, ''));
+      }
+      const potId = candidates.find((id) => pots[id]);
+      if (!potId || seenPotIds.has(potId)) return;
+      seenPotIds.add(potId);
+      const balance = Number(pots[potId]?.balance || 0);
+      totalSavedPence += Number.isFinite(balance) ? balance : 0;
+    });
+
+    const totalSaved = totalSavedPence / 100;
+    const savingsProgress = totalEstimated > 0 ? Math.round((totalSaved / totalEstimated) * 100) : 0;
+    return { totalEstimated, totalSaved, savingsProgress, linkedPotCount: seenPotIds.size };
+  }, [goals, pots, currentUser?.uid]);
+
+  const formatMoney = (v: number) => v.toLocaleString('en-GB', { style: 'currency', currency: 'GBP' });
+
+  const readinessPct = coachData ? Math.round((coachData.readinessScore ?? 0) * 100) : null;
+  const readinessVariant = coachData?.readinessLabel ? (READINESS_COLOR[coachData.readinessLabel] || 'secondary') : 'secondary';
+  const readinessText = coachData?.readinessLabel
+    ? `${readinessPct}%`
+    : '—';
+
   if (loading) return null;
 
   if (!metrics) {
@@ -410,6 +486,47 @@ const CompactSprintMetrics: React.FC<CompactSprintMetricsProps> = ({
         >
           <BookOpen size={14} className="me-1" />
           {Math.round((overallStoryCompletion + goalCompletion) / 2)}%
+        </Badge>
+      </OverlayTrigger>
+
+      {/* HRV Readiness */}
+      <OverlayTrigger
+        placement="bottom"
+        overlay={
+          <Tooltip>
+            {coachData
+              ? (
+                <>
+                  <div>Readiness: {readinessPct}% ({coachData.readinessLabel})</div>
+                  <div>HRV today: {coachData.hrvToday != null ? `${Math.round(coachData.hrvToday)}ms` : '—'}</div>
+                  <div>HRV 7d avg: {coachData.hrv7dAvg != null ? `${Math.round(coachData.hrv7dAvg)}ms` : '—'}</div>
+                </>
+              )
+              : 'No readiness data logged for today'}
+          </Tooltip>
+        }
+      >
+        <Badge bg={readinessVariant} className="d-flex align-items-center">
+          <HeartPulse size={14} className="me-1" />
+          {readinessText}
+        </Badge>
+      </OverlayTrigger>
+
+      {/* Savings Goal Progress */}
+      <OverlayTrigger
+        placement="bottom"
+        overlay={
+          <Tooltip>
+            <div>Savings: {formatMoney(savingsMetrics.totalSaved)} / {formatMoney(savingsMetrics.totalEstimated)}</div>
+            <div className="mt-1 text-muted">
+              {savingsMetrics.linkedPotCount} goal{savingsMetrics.linkedPotCount === 1 ? '' : 's'} linked to a Monzo pot, across all goals with an estimated cost.
+            </div>
+          </Tooltip>
+        }
+      >
+        <Badge bg={getProgressVariant(savingsMetrics.savingsProgress)} className="d-flex align-items-center">
+          <PiggyBank size={14} className="me-1" />
+          {savingsMetrics.savingsProgress}%
         </Badge>
       </OverlayTrigger>
 
