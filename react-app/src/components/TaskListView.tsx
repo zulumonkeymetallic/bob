@@ -254,6 +254,17 @@ const TaskListView: React.FC = () => {
 
   const handleTaskDelete = async (taskId: string) => {
     try {
+      // Legacy guardrail: tasks with a missing/mismatched ownerUid (e.g. written by
+      // Mac sync) fail Firestore's isOwner()-only delete rule outright. Claim ownership
+      // via an update first (allowed for null/mismatched owners), then delete — same
+      // two-step pattern as App.tsx's handleGlobalSidebarDelete. Confirmed by Jim,
+      // 2026-07-23: bin icon on the Tasks table was throwing permission-denied.
+      if (currentUser?.uid) {
+        await updateDoc(doc(db, 'tasks', taskId), {
+          ownerUid: currentUser.uid,
+          updatedAt: serverTimestamp()
+        });
+      }
       await deleteDoc(doc(db, 'tasks', taskId));
     } catch (error) {
       console.error('Error deleting task:', error);

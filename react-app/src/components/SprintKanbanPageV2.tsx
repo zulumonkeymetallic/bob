@@ -7,7 +7,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import { Story, Task, Goal } from '../types';
 import KanbanBoardV2 from './KanbanBoardV2';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Maximize2, Minimize2, RefreshCw, Sparkles, LayoutList, Columns2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Maximize2, Minimize2, RefreshCw, Sparkles, LayoutList, Columns2, Plus, SlidersHorizontal } from 'lucide-react';
 import SprintTriageTable from './SprintTriageTable';
 import { displayRefForEntity } from '../utils/referenceGenerator';
 import { useSprint } from '../contexts/SprintContext';
@@ -18,6 +18,7 @@ import SprintSelector from './SprintSelector';
 import ThemeMultiSelect from './shared/ThemeMultiSelect';
 import GoalMultiSelect from './shared/GoalMultiSelect';
 import EditStoryModal from './EditStoryModal';
+import AddStoryModal from './AddStoryModal';
 import EditTaskModal from './EditTaskModal';
 import EditGoalModal from './EditGoalModal';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
@@ -66,6 +67,7 @@ const SprintKanbanPageV2: React.FC = () => {
     const [editStory, setEditStory] = useState<Story | null>(null);
     const [editTask, setEditTask] = useState<Task | null>(null);
     const [editGoal, setEditGoal] = useState<Goal | null>(null);
+    const [showAddStory, setShowAddStory] = useState(false);
     const [dueFilter, setDueFilter] = useState<'all' | 'today' | 'overdue' | 'top3' | 'critical'>('all');
     const [showFocusOnly, setShowFocusOnly] = useState(false);
     const [showCompletedItems, setShowCompletedItems] = useState(true);
@@ -388,35 +390,118 @@ const SprintKanbanPageV2: React.FC = () => {
 
     return (
         <Container fluid style={{ padding: deviceInfo.isIPad ? '12px' : '24px', backgroundColor: 'var(--bg)', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            {/* Header */}
-            <Row className={showFilterChrome ? 'mb-4 flex-shrink-0' : 'mb-2 flex-shrink-0'}>
+            {/* Header — title, sprint context, primary actions and a slim always-on metrics
+                strip all share one row so the board gets the vertical space back. Detailed
+                filters (theme/goal pickers, switches, sort/detail) stay behind the Filters
+                toggle below, same collapse mechanism as before. Confirmed by Jim, 2026-07-23:
+                the old 4-row header (title / sprint+actions / big stat cards / filters) ate
+                too much space before the board even started. */}
+            <Row className="mb-2 flex-shrink-0">
                 <Col>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'relative', zIndex: 5 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                        <h2 style={{ margin: 0, fontSize: deviceInfo.isIPad ? '18px' : '28px', fontWeight: '700', color: 'var(--text)' }}>
-                            Sprint Kanban
-                        </h2>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px', position: 'relative', zIndex: 5 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                            <h2 style={{ margin: 0, fontSize: deviceInfo.isIPad ? '16px' : '20px', fontWeight: '700', color: 'var(--text)' }}>
+                                Sprint Kanban
+                            </h2>
+                            {currentSprint && (
+                                <span className="text-muted small d-flex align-items-center gap-1">
+                                    {currentSprint.name || currentSprint.id}
+                                    {currentSprint.id && (
+                                        <span className="badge bg-light text-dark">
+                                            {displayRefForEntity('sprint', currentSprint.id)}
+                                        </span>
+                                    )}
+                                </span>
+                            )}
+                            {currentSprint && (
+                                <div className="d-flex align-items-center gap-1 small text-muted">
+                                    <Badge bg="success" style={{ fontSize: '11px' }}>{metrics.completedStories}/{metrics.totalStories} stories · {metrics.storyProgress}%</Badge>
+                                    <Badge bg="primary" style={{ fontSize: '11px' }}>{metrics.completedTasks}/{metrics.totalTasks} tasks · {metrics.taskProgress}%</Badge>
+                                    <Badge bg="secondary" style={{ fontSize: '11px' }}>{metrics.completedPoints.toLocaleString()}/{metrics.totalPoints.toLocaleString()} pts · {metrics.pointsProgress}%</Badge>
+                                    <Badge bg="light" text="dark" style={{ fontSize: '11px' }}>{Math.ceil((currentSprint.endDate - currentSprint.startDate) / (1000 * 60 * 60 * 24))}d</Badge>
+                                </div>
+                            )}
+                        </div>
 
-                        <Badge bg="primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
-                            {currentPersona.charAt(0).toUpperCase() + currentPersona.slice(1)} Persona
-                        </Badge>
-
-                        <Button
-                            variant={showFilterChrome ? 'secondary' : 'outline-secondary'}
-                            size="sm"
-                            onClick={toggleFilterChrome}
-                            title={showFilterChrome ? 'Hide filters (same filtering is on the Stories/Tasks list pages)' : 'Show filters'}
-                        >
-                            {showFilterChrome ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
-                            <span className="ms-1">Filters</span>
-                        </Button>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                            <PlanActionBar />
+                            <Button
+                                variant="outline-secondary"
+                                size="sm"
+                                onClick={handleDeltaReplan}
+                                disabled={replanLoading || fullReplanLoading}
+                                title="Delta replan: quickly rebalance existing calendar blocks using current priorities."
+                            >
+                                {replanLoading ? <Spinner size="sm" animation="border" /> : <RefreshCw size={14} />}
+                                <span className="d-none d-xl-inline ms-1">Delta replan</span>
+                            </Button>
+                            <Button
+                                variant="outline-secondary"
+                                size="sm"
+                                onClick={handleFullReplan}
+                                disabled={fullReplanLoading || replanLoading}
+                                title="Full replan: runs full nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
+                            >
+                                {fullReplanLoading ? <Spinner size="sm" animation="border" /> : <Sparkles size={14} />}
+                                <span className="d-none d-xl-inline ms-1">Full replan</span>
+                            </Button>
+                            <span style={{ width: 1, height: 20, background: 'var(--bs-border-color)' }} />
+                            <Button
+                                variant={showFilterChrome ? 'secondary' : 'outline-secondary'}
+                                size="sm"
+                                onClick={toggleFilterChrome}
+                                title={showFilterChrome ? 'Hide filters (same filtering is on the Stories/Tasks list pages)' : 'Show filters'}
+                            >
+                                <SlidersHorizontal size={14} />
+                                <span className="ms-1">Filters</span>
+                            </Button>
+                            <div style={{ display: 'flex', border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden' }}>
+                                <Button
+                                    variant={viewMode === 'board' ? 'secondary' : 'outline-secondary'}
+                                    size="sm"
+                                    onClick={() => { setViewMode('board'); try { localStorage.setItem('kanban_view_mode', 'board'); } catch {} }}
+                                    title="Board view"
+                                    style={{ borderRadius: 0, border: 'none', padding: '4px 10px' }}
+                                >
+                                    <Columns2 size={15} />
+                                </Button>
+                                <Button
+                                    variant={viewMode === 'table' ? 'secondary' : 'outline-secondary'}
+                                    size="sm"
+                                    onClick={() => { setViewMode('table'); try { localStorage.setItem('kanban_view_mode', 'table'); } catch {} }}
+                                    title="Triage table view"
+                                    style={{ borderRadius: 0, border: 'none', padding: '4px 10px' }}
+                                >
+                                    <LayoutList size={15} />
+                                </Button>
+                            </div>
+                            <Button
+                                variant="outline-secondary"
+                                size="sm"
+                                onClick={toggleFullscreen}
+                                title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+                                style={{ padding: '6px 12px' }}
+                            >
+                                {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+                            </Button>
+                            <Button
+                                variant="primary"
+                                size="sm"
+                                onClick={() => setShowAddStory(true)}
+                            >
+                                <Plus size={14} className="me-1" />
+                                Add Story
+                            </Button>
+                        </div>
                     </div>
 
-                    {/* Right-side controls: view mode + fullscreen always visible; everything
-                        else (filters, sort, detail level) collapses with showFilterChrome. */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                        {showFilterChrome && (
-                        <>
+                    {/* Filter chrome — theme/goal pickers, switches, due/sort/detail selects.
+                        Collapsed by default on iPad, persisted everywhere. */}
+                    {showFilterChrome && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '10px' }}>
+                            <Badge bg="primary" style={{ fontSize: '11px' }}>
+                                {currentPersona.charAt(0).toUpperCase() + currentPersona.slice(1)}
+                            </Badge>
                         <Button
                             variant="outline-secondary"
                                 size="sm"
@@ -543,165 +628,15 @@ const SprintKanbanPageV2: React.FC = () => {
                                         <option value="minimal">Detail: Minimal</option>
                                     </Form.Select>
                                 </Form.Group>
-                        </>
-                        )}
-
-                            <div style={{ display: 'flex', border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden' }}>
-                                <Button
-                                    variant={viewMode === 'board' ? 'secondary' : 'outline-secondary'}
-                                    size="sm"
-                                    onClick={() => { setViewMode('board'); try { localStorage.setItem('kanban_view_mode', 'board'); } catch {} }}
-                                    title="Board view"
-                                    style={{ borderRadius: 0, border: 'none', padding: '4px 10px' }}
-                                >
-                                    <Columns2 size={15} />
-                                </Button>
-                                <Button
-                                    variant={viewMode === 'table' ? 'secondary' : 'outline-secondary'}
-                                    size="sm"
-                                    onClick={() => { setViewMode('table'); try { localStorage.setItem('kanban_view_mode', 'table'); } catch {} }}
-                                    title="Triage table view"
-                                    style={{ borderRadius: 0, border: 'none', padding: '4px 10px' }}
-                                >
-                                    <LayoutList size={15} />
-                                </Button>
-                            </div>
-
-                            <Button
-                                variant="outline-secondary"
-                                size="sm"
-                                onClick={toggleFullscreen}
-                                title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
-                                style={{ padding: '6px 12px' }}
-                            >
-                                {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-                            </Button>
-                        </div>
                     </div>
+                    )}
                 </Col>
             </Row>
 
-            {/* Selected sprint helper + navigation + replanning actions */}
-            {currentSprint && (
-                <Row className="mb-3 flex-shrink-0">
-                    <Col>
-                        <div className="d-flex align-items-center justify-content-between p-2 border rounded" style={{ background: 'var(--notion-hover)' }}>
-                            <div>
-                                <strong>Selected sprint:</strong> {currentSprint.name || currentSprint.id}
-                                {currentSprint.id && (
-                                    <span className="ms-2">
-                                        <span className="badge bg-light text-dark">
-                                            {displayRefForEntity('sprint', currentSprint.id)}
-                                        </span>
-                                    </span>
-                                )}
-                            </div>
-                            <div className="d-flex align-items-center gap-1">
-                                <PlanActionBar />
-                                {/* Thin separator */}
-                                <span style={{ width: 1, height: 20, background: 'var(--bs-border-color)', marginLeft: 4, marginRight: 4, flexShrink: 0 }} />
-                                <Button
-                                    variant="outline-secondary"
-                                    size="sm"
-                                    onClick={handleDeltaReplan}
-                                    disabled={replanLoading || fullReplanLoading}
-                                    title="Delta replan: quickly rebalance existing calendar blocks using current priorities."
-                                >
-                                    {replanLoading ? <Spinner size="sm" animation="border" /> : <RefreshCw size={14} />}
-                                    <span className="d-none d-xl-inline ms-1">Delta replan</span>
-                                </Button>
-                                <Button
-                                    variant="outline-secondary"
-                                    size="sm"
-                                    onClick={handleFullReplan}
-                                    disabled={fullReplanLoading || replanLoading}
-                                    title="Full replan: runs full nightly orchestration (pointing, conversions, priority scoring, and calendar planning)."
-                                >
-                                    {fullReplanLoading ? <Spinner size="sm" animation="border" /> : <Sparkles size={14} />}
-                                    <span className="d-none d-xl-inline ms-1">Full replan</span>
-                                </Button>
-                            </div>
-                        </div>
-                    </Col>
-                </Row>
-            )}
             {replanFeedback && (
-                <Row className="mb-3 flex-shrink-0">
+                <Row className="mb-2 flex-shrink-0">
                     <Col>
                         <div className="text-muted small">{replanFeedback}</div>
-                    </Col>
-                </Row>
-            )}
-
-            {/* Sprint Metrics — collapses with the filter chrome; same numbers are visible
-                on CapacityDashboard/CompactSprintMetrics without costing board real estate here. */}
-            {currentSprint && showFilterChrome && (
-                <Row className="mb-4 flex-shrink-0">
-                    <Col>
-                        <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)' }}>
-                            <Card.Body>
-                                <Row>
-                                    <Col md={3}>
-                                            <div style={{ textAlign: 'center' }}>
-                                                <div style={{ fontSize: '24px', fontWeight: '700', color: 'var(--green)' }}>
-                                                {metrics.completedStories}/{metrics.totalStories}
-                                            </div>
-                                            <div style={{ fontSize: '12px', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                                                Stories Done
-                                            </div>
-                                            <div style={{ marginTop: '4px' }}>
-                                                <Badge bg="success" style={{ fontSize: '11px' }}>
-                                                    {metrics.storyProgress}%
-                                                </Badge>
-                                            </div>
-                                        </div>
-                                    </Col>
-                                    <Col md={3}>
-                                                <div style={{ textAlign: 'center' }}>
-                                                <div style={{ fontSize: '24px', fontWeight: '700', color: 'var(--brand)' }}>
-                                                {metrics.completedTasks}/{metrics.totalTasks}
-                                            </div>
-                                            <div style={{ fontSize: '12px', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                                                Tasks Completed
-                                            </div>
-                                            <div style={{ marginTop: '4px' }}>
-                                                <Badge bg="primary" style={{ fontSize: '11px' }}>
-                                                    {metrics.taskProgress}%
-                                                </Badge>
-                                            </div>
-                                        </div>
-                                    </Col>
-                                    <Col md={3}>
-                                                <div style={{ textAlign: 'center' }}>
-                                                <div style={{ fontSize: '24px', fontWeight: '700', color: 'var(--purple)' }}>
-                                                {metrics.completedPoints.toLocaleString()}/{metrics.totalPoints.toLocaleString()}
-                                            </div>
-                                            <div style={{ fontSize: '12px', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                                                Story Points
-                                            </div>
-                                            <div style={{ marginTop: '4px' }}>
-                                                <Badge bg="secondary" style={{ fontSize: '11px' }}>
-                                                    {metrics.pointsProgress}%
-                                                </Badge>
-                                            </div>
-                                        </div>
-                                    </Col>
-                                    <Col md={3}>
-                                        <div style={{ textAlign: 'center' }}>
-                                            <div style={{ fontSize: '20px', fontWeight: '700', color: 'var(--text)' }}>
-                                                {currentSprint.name}
-                                            </div>
-                                            <div style={{ fontSize: '12px', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                                                Sprint Duration
-                                            </div>
-                                            <div style={{ marginTop: '4px', fontSize: '11px', color: 'var(--muted)' }}>
-                                                {Math.ceil((currentSprint.endDate - currentSprint.startDate) / (1000 * 60 * 60 * 24))} days
-                                            </div>
-                                        </div>
-                                    </Col>
-                                </Row>
-                            </Card.Body>
-                        </Card>
                     </Col>
                 </Row>
             )}
@@ -747,6 +682,11 @@ const SprintKanbanPageV2: React.FC = () => {
                     </Card>
                 </Col>
             </Row>
+
+            <AddStoryModal
+                show={showAddStory}
+                onClose={() => setShowAddStory(false)}
+            />
 
             <EditStoryModal
                 show={!!editStory}
