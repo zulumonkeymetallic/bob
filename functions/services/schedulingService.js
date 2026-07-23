@@ -7,6 +7,19 @@ const DEFAULT_ZONE = 'Europe/London';
 const MIN_BLOCK_MS = 15 * 60 * 1000;
 const DEFAULT_SEARCH_DAYS = 14;
 
+// Number(null) === 0 and Number.isFinite(0) === true, so the once-common
+// `Number.isFinite(Number(x)) ? Number(x) : null` pattern silently turns an
+// absent/null value into 0 instead of staying null — for maxTargetDateMs that
+// made chooseSplitPlacements's day-search loop break after checking day zero
+// on every call, every time (the overwhelming majority, since maxTargetDateMs
+// is normally unset). Confirmed live 2026-07-23: this was why runCalendarPlannerJob
+// had produced ~0 output for months regardless of any other eligibility logic.
+function toFiniteMsOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
 const THEME_RULES = [
   { match: ['growth'], slots: [{ days: [1, 2, 3, 4, 5], start: 7, end: 9, label: 'Growth AM' }, { days: [1, 2, 3, 4, 5], start: 17, end: 19, label: 'Growth PM' }] },
   { match: ['finance', 'wealth'], slots: [{ days: [1, 2, 3, 4, 5], start: 18, end: 21, label: 'Wealth weekday evening' }, { days: [6, 7], start: 9, end: 12, label: 'Wealth weekend AM' }, { days: [6, 7], start: 13, end: 17, label: 'Wealth weekend PM' }] },
@@ -30,7 +43,7 @@ const FREE_SLOT_SLOTS = [
 
 function getManualPriorityRank(entity) {
   const explicit = Number(entity?.userPriorityRank);
-  if (explicit === 1 || explicit === 2 || explicit === 3) return explicit;
+  if (explicit >= 1 && explicit <= 5) return explicit;
   return entity?.userPriorityFlag === true ? 1 : null;
 }
 
@@ -652,8 +665,8 @@ async function schedulePlannerItemMutation({
     searchDays: searchDays || null,
     maxTargetDateMs: maxTargetDateMs || null,
     allowSplit: allowSplit === true,
-    exactTargetStartMs: Number.isFinite(Number(exactTargetStartMs)) ? Number(exactTargetStartMs) : null,
-    exactTargetEndMs: Number.isFinite(Number(exactTargetEndMs)) ? Number(exactTargetEndMs) : null,
+    exactTargetStartMs: toFiniteMsOrNull(exactTargetStartMs),
+    exactTargetEndMs: toFiniteMsOrNull(exactTargetEndMs),
   };
   const normalizedType = String(itemType || '').trim().toLowerCase();
   if (normalizedType !== 'task' && normalizedType !== 'story') {
@@ -743,7 +756,7 @@ async function schedulePlannerItemMutation({
         themeLabel,
         zone,
         searchDays: normalizedSearchDays,
-        maxTargetDateMs: Number.isFinite(Number(maxTargetDateMs)) ? Number(maxTargetDateMs) : null,
+        maxTargetDateMs: toFiniteMsOrNull(maxTargetDateMs),
         constraintMode: resolvedConstraintMode,
         minBlockMs: isTopPriorityEntity ? topItemMinBlockMs : MIN_BLOCK_MS,
       })
@@ -757,7 +770,7 @@ async function schedulePlannerItemMutation({
           themeLabel,
           zone,
           searchDays: normalizedSearchDays,
-          maxTargetDateMs: Number.isFinite(Number(maxTargetDateMs)) ? Number(maxTargetDateMs) : null,
+          maxTargetDateMs: toFiniteMsOrNull(maxTargetDateMs),
           constraintMode: resolvedConstraintMode,
         });
         return single ? [single] : [];
@@ -785,7 +798,7 @@ async function schedulePlannerItemMutation({
       themeLabel,
       zone,
       searchDays: normalizedSearchDays,
-      maxTargetDateMs: Number.isFinite(Number(maxTargetDateMs)) ? Number(maxTargetDateMs) : null,
+      maxTargetDateMs: toFiniteMsOrNull(maxTargetDateMs),
       constraintMode: 'free_slot',
       minBlockMs: topItemMinBlockMs,
     });
