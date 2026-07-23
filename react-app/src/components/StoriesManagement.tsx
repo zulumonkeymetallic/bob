@@ -387,6 +387,15 @@ const StoriesManagement: React.FC = () => {
   const resolvedSprintId = applyActiveSprintFilter
     ? (selectedSprintIdContext === '' ? null : (selectedSprintIdContext || activeSprintId))
     : null;
+  // Sprint-scoped but otherwise unfiltered — used for the stat strip counts, so "Done"
+  // reflects reality even while the status filter (default: hide Done) is narrowing what's
+  // actually visible in the table below. Previously the counts were computed from
+  // `orderedFilteredStories`, which already had Done stories filtered out by the default
+  // "not_done" status filter — so "Done" always read 0 regardless of the real count.
+  // Confirmed by Jim, 2026-07-23.
+  const sprintScopedStories = stories.filter(story => (
+    !(applyActiveSprintFilter && resolvedSprintId && story.sprintId !== resolvedSprintId)
+  ));
   const filteredStories = stories.filter(story => {
     if (applyActiveSprintFilter && resolvedSprintId && story.sprintId !== resolvedSprintId) return false;
     if (filterStatus === 'not_done' && isStatus(story.status, 'done')) return false;
@@ -417,10 +426,10 @@ const StoriesManagement: React.FC = () => {
 
   // Get counts for dashboard cards
   const storyCounts = {
-    total: orderedFilteredStories.length,
-    backlog: orderedFilteredStories.filter(s => isStatus(s.status, 'backlog')).length,
-    active: orderedFilteredStories.filter(s => isStatus(s.status, 'active')).length,
-    done: orderedFilteredStories.filter(s => isStatus(s.status, 'done')).length
+    total: sprintScopedStories.length,
+    backlog: sprintScopedStories.filter(s => isStatus(s.status, 'backlog')).length,
+    active: sprintScopedStories.filter(s => isStatus(s.status, 'active')).length,
+    done: sprintScopedStories.filter(s => isStatus(s.status, 'done')).length
   };
 
   return (
@@ -433,14 +442,16 @@ const StoriesManagement: React.FC = () => {
       <div style={{ maxWidth: '100%', margin: '0' }}>
         <WorkSurfaceNav />
         <PageHeader
-          title="Stories Management"
+          title="Stories"
           breadcrumbs={[
             { label: 'Home', href: '/' },
             { label: 'Stories' }
           ]}
           actions={
             <>
-              {/* Import/Add Story to the left of the List/Cards toggle — per Jim, 2026-07-23. */}
+              {/* Import + View Mode Toggle sit to the left of the primary Add Story button,
+                  which stays rightmost as the primary CTA — consistent with Goals/Tasks.
+                  Per Jim, 2026-07-23. */}
               <Button
                 variant="outline-secondary"
                 onClick={() => setShowImportModal(true)}
@@ -449,15 +460,6 @@ const StoriesManagement: React.FC = () => {
                 <Upload size={16} />
                 Import
               </Button>
-              <Button
-                variant="primary"
-                onClick={() => setShowAddStoryModal(true)}
-                style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-              >
-                <Plus size={16} />
-                Add Story
-              </Button>
-              {/* View Mode Toggle */}
               <div style={{ display: 'flex', border: `1px solid ${themeVars.border}`, borderRadius: '6px', overflow: 'hidden' }}>
                 <Button
                   variant={viewMode === 'list' ? 'primary' : 'outline-secondary'}
@@ -489,6 +491,14 @@ const StoriesManagement: React.FC = () => {
                   Cards
                 </Button>
               </div>
+              <Button
+                variant="primary"
+                onClick={() => setShowAddStoryModal(true)}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+              >
+                <Plus size={16} />
+                Add Story
+              </Button>
             </>
           }
         />

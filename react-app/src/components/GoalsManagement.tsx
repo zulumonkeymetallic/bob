@@ -20,7 +20,7 @@ import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import ConfirmDialog from './ConfirmDialog';
 import { arrayMove } from '@dnd-kit/sortable';
 import { useSidebar } from '../contexts/SidebarContext';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import { computeWindowExpectedProgress, evaluateGoalTargetStatus } from '../utils/goalKpiStatus';
 import { goalNeedsLinkedPot } from '../utils/goalCost';
 import PlanActionBar from './planner/PlanActionBar';
@@ -475,11 +475,16 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
   const orderedFilteredGoals = [...filteredGoals].sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
 
   // Get counts for dashboard cards
+  // Raw `goals` (all persona goals), not `orderedFilteredGoals` — that list has already had
+  // the sprint-scope filter (which excludes status===2/Complete goals outright) and every
+  // other active filter (status/theme/year/search/focus) applied, so "Done" read 0 whenever
+  // those filters happened to exclude every completed goal, not the true count. Confirmed
+  // by Jim, 2026-07-23.
   const goalCounts = {
-    total: orderedFilteredGoals.length,
-    active: orderedFilteredGoals.filter(g => g.status === 1).length, // Work in Progress
-    done: orderedFilteredGoals.filter(g => g.status === 2).length, // Complete
-    paused: orderedFilteredGoals.filter(g => g.status === 3).length // Blocked
+    total: goals.length,
+    active: goals.filter(g => g.status === 1).length, // Work in Progress
+    done: goals.filter(g => g.status === 2).length, // Complete
+    paused: goals.filter(g => g.status === 3).length // Blocked
   };
 
   const formatMoney = (v: number) => v.toLocaleString('en-GB', { style: 'currency', currency: 'GBP' });
@@ -697,10 +702,10 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
           marginBottom: '8px'
         }}>
           <div>
-            <h2 style={{ margin: '0 0 4px 0', fontSize: '24px', fontWeight: '600' }}>
-              Goals Management
+            <h2 style={{ margin: '0 0 4px 0', fontSize: '20px', fontWeight: '700' }}>
+              Goals
             </h2>
-            <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '14px' }}>
+            <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '13px' }}>
               Manage your life goals across different themes
             </p>
           </div>
@@ -713,11 +718,8 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
             >
               {isCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
             </Button>
-            {/* Add Goal to the left of the List/Cards toggle — per Jim, 2026-07-23. */}
-            <Button variant="primary" onClick={() => setShowAddGoal(true)}>
-              Add Goal
-            </Button>
-            {/* View Mode Toggle */}
+            {/* View Mode Toggle — sits to the left of the primary Add button, which stays
+                rightmost as the primary CTA. Per Jim, 2026-07-23. */}
             <div style={{ display: 'flex', border: '1px solid var(--notion-border)', borderRadius: 6, overflow: 'hidden' }}>
               <Button
                 size="sm"
@@ -738,6 +740,10 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
                 Cards
               </Button>
             </div>
+            <Button variant="primary" onClick={() => setShowAddGoal(true)} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Plus size={16} />
+              Add Goal
+            </Button>
           </div>
         </div>
 

@@ -10,8 +10,10 @@ export const typography = {
     },
 
     // Headings
+    // Reduced from 32px — page titles (Stories/Goals/Tasks etc, via PageHeader) were taking
+    // disproportionate vertical space relative to their information value. Per Jim, 2026-07-23.
     h1: {
-        fontSize: '32px',
+        fontSize: '20px',
         lineHeight: '1.2',
         fontWeight: '700',
         letterSpacing: '-0.5px',

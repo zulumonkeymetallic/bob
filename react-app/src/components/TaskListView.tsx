@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Container, Card, Row, Col, Button, Form, InputGroup } from 'react-bootstrap';
+import { Plus } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { useSidebar } from '../contexts/SidebarContext';
@@ -252,6 +253,20 @@ const TaskListView: React.FC = () => {
     return dateValue >= start && dateValue <= end;
   };
 
+  // Sprint/persona-scoped but otherwise unfiltered — used for the stat strip counts, so
+  // "Done" reflects reality even while the status filter (default: hide Done) is narrowing
+  // what's actually visible in the table below. Previously the counts were computed from
+  // `filteredTasks`, which already had Done tasks filtered out by the default "not_done"
+  // status filter — so "Done" always read 0 regardless of the real count. Confirmed by Jim,
+  // 2026-07-23.
+  const scopedTasks = tasks.filter(task => {
+    if (selectedSprintId && task.sprintId !== selectedSprintId) return false;
+    if (task.persona) {
+      const persona = typeof task.persona === 'string' ? task.persona.toLowerCase() : String(task.persona).toLowerCase();
+      if (persona && persona !== currentPersona) return false;
+    }
+    return true;
+  });
   const filteredTasks = tasks.filter(task => {
     if (selectedSprintId && task.sprintId !== selectedSprintId) return false;
     if (task.persona) {
@@ -294,10 +309,10 @@ const TaskListView: React.FC = () => {
 
   // Get counts for dashboard cards
   const taskCounts = {
-    total: filteredTasks.length,
-    planned: filteredTasks.filter(t => isStatus(t.status, 'planned')).length,
-    inProgress: filteredTasks.filter(t => isStatus(t.status, 'in_progress')).length,
-    done: filteredTasks.filter(t => isStatus(t.status, 'done')).length
+    total: scopedTasks.length,
+    planned: scopedTasks.filter(t => isStatus(t.status, 'planned')).length,
+    inProgress: scopedTasks.filter(t => isStatus(t.status, 'in_progress')).length,
+    done: scopedTasks.filter(t => isStatus(t.status, 'done')).length
   };
 
   return (
@@ -317,21 +332,17 @@ const TaskListView: React.FC = () => {
           marginBottom: '24px' 
         }}>
           <div>
-            <h2 style={{ margin: '0 0 8px 0', fontSize: '28px', fontWeight: '600' }}>
-              Task List View
+            <h2 style={{ margin: '0 0 4px 0', fontSize: '20px', fontWeight: '700' }}>
+              Tasks
             </h2>
-            <p style={{ margin: 0, color: 'var(--muted)', fontSize: '16px' }}>
+            <p style={{ margin: 0, color: 'var(--muted)', fontSize: '13px' }}>
               Manage all your tasks with modern table interface
             </p>
           </div>
+          {/* List/Cards toggle + Switch to Kanban sit to the left of the primary Add task
+              button, which stays rightmost as the primary CTA — consistent with
+              Goals/Stories. Per Jim, 2026-07-23. */}
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <Button
-              size="sm"
-              variant="primary"
-              onClick={() => setShowAddTaskModal(true)}
-            >
-              Add task
-            </Button>
             <Button
               size="sm"
               variant={viewMode === 'list' ? 'primary' : 'outline-secondary'}
@@ -348,6 +359,15 @@ const TaskListView: React.FC = () => {
             </Button>
             <Button variant="outline-primary" href="#" disabled>
               Switch to Kanban
+            </Button>
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => setShowAddTaskModal(true)}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              <Plus size={16} />
+              Add Task
             </Button>
           </div>
         </div>
