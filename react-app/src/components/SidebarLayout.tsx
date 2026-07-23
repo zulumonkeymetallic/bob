@@ -3,7 +3,7 @@ import { Container, Nav, Navbar, Button, Offcanvas } from 'react-bootstrap';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import {
   BookOpen, BookText, Brain, Calendar, CalendarDays, CheckSquare, ChevronLeft,
-  ChevronRight, ClipboardList, Globe, Heart, LayoutDashboard, Network,
+  ChevronRight, ClipboardList, Globe, LayoutDashboard, Network,
   PiggyBank, ScrollText, Settings, Target, LucideIcon,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -115,7 +115,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Metrics', path: '/metrics', icon: 'tachometer-alt' },
       ]
     },
-    // Coach
+    // Coach — Health folded in here (was its own top-level group) per Jim, 2026-07-23.
     {
       label: 'Coach',
       icon: 'brain',
@@ -123,14 +123,6 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       items: [
         { label: 'AI Coach', path: '/coach', icon: 'brain' },
         { label: 'Finance Coach', path: '/coach/finance', icon: 'chart-line' },
-      ]
-    },
-    // Health
-    {
-      label: 'Health',
-      icon: 'heartbeat',
-      lucideIcon: Heart,
-      items: [
         { label: 'Health Hub', path: '/health', icon: 'heartbeat' },
         { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
         { label: 'Running Heatmap', path: '/running/heatmap', icon: 'map-marked-alt' },

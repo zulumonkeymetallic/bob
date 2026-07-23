@@ -214,7 +214,7 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
     const goalProgress = (goalId: string) => {
         const s = sprintStories.filter(s => (s as any).goalId === goalId);
         if (!s.length) return null;
-        const done = s.filter(s => Number((s as any).status) === 2).length;
+        const done = s.filter(s => isDone(Number((s as any).status), 'story')).length;
         return { done, total: s.length, pct: Math.round(done / s.length * 100) };
     };
 
@@ -228,23 +228,24 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
         finally { rmSaving(id); }
     };
 
-    const commitEdit = (item: Story | Task, type: RowType) => {
+    const commitEdit = (item: Story | Task, type: RowType, valueOverride?: string) => {
         if (!editCell) return;
         const col = type === 'story' ? 'stories' : 'tasks';
         const { field } = editCell;
+        const val = valueOverride ?? editVal;
         let updates: Record<string, any> = {};
-        if (field === 'title') updates.title = editVal.trim();
-        else if (field === 'description') updates.description = editVal.trim();
-        else if (field === 'status') updates.status = Number(editVal);
-        else if (field === 'dueDate') updates.dueDate = parseDateMs(editVal);
-        else if (field === 'sprintId') updates.sprintId = editVal || null;
+        if (field === 'title') updates.title = val.trim();
+        else if (field === 'description') updates.description = val.trim();
+        else if (field === 'status') updates.status = Number(val);
+        else if (field === 'dueDate') updates.dueDate = parseDateMs(val);
+        else if (field === 'sprintId') updates.sprintId = val || null;
         else if (field === 'goalId') {
             // resolve typed title back to an id
-            const match = goals.find(g => g.id === editVal || g.title === editVal);
-            updates.goalId = match ? match.id : (editVal || null);
+            const match = goals.find(g => g.id === val || g.title === val);
+            updates.goalId = match ? match.id : (val || null);
         } else if (field === 'parentId') {
-            const match = sprintStories.find(s => s.id === editVal || s.title === editVal);
-            updates.parentId = match ? match.id : (editVal || null);
+            const match = sprintStories.find(s => s.id === val || s.title === val);
+            updates.parentId = match ? match.id : (val || null);
         } else return;
         if (Object.keys(updates).length) saveItem(item.id, col as any, updates);
         setEditCell(null); setEditVal('');
@@ -368,8 +369,8 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
             return (
                 <select autoFocus className="form-select form-select-sm" value={editVal}
                     style={{ fontSize: 12, padding: '2px 6px' }}
-                    onChange={e => setEditVal(e.target.value)}
-                    onBlur={() => commitEdit(item, type)}
+                    onChange={e => { setEditVal(e.target.value); commitEdit(item, type, e.target.value); }}
+                    onBlur={() => cancelEdit()}
                     onKeyDown={e => { if (e.key === 'Escape') cancelEdit(); }}
                 >
                     {statuses.map(s => <option key={s} value={s}>{labels[s]}</option>)}

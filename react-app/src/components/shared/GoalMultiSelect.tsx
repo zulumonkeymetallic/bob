@@ -67,7 +67,9 @@ const GoalMultiSelect: React.FC<GoalMultiSelectProps> = ({
       >
         {label}
       </Dropdown.Toggle>
-      <Dropdown.Menu style={{ maxHeight: 400, overflowY: 'auto', minWidth: 260, padding: '4px 0' }}>
+      {/* Explicit z-index below the notifications panel/GlobalSidebar (1000-1045) — see
+          YearMultiSelect.tsx for the same fix and why it's needed. */}
+      <Dropdown.Menu style={{ maxHeight: 400, overflowY: 'auto', minWidth: 260, padding: '4px 0', zIndex: 900 }}>
         {/* Search */}
         <div className="px-3 pb-2 pt-1 sticky-top bg-white border-bottom">
           <input

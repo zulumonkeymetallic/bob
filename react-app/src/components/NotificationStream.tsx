@@ -12,7 +12,7 @@
  * when something is actually active.
  */
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Bell } from 'lucide-react';
+import { Bell, Pin, PinOff, X } from 'lucide-react';
 import DeferralCandidatesBanner from './DeferralCandidatesBanner';
 import CheckInBanner from './checkins/CheckInBanner';
 import { CoachVerdictBanner } from './coach/CoachVerdictBanner';
@@ -22,6 +22,7 @@ import GlobalGoalFocusBanner from './GlobalGoalFocusBanner';
 import GlobalFitnessKpiBanner from './GlobalFitnessKpiBanner';
 import GlobalHealthProgressBanner from './GlobalHealthProgressBanner';
 import GlobalIntegrationStatus from './GlobalIntegrationStatus';
+import { useSidebar } from '../contexts/SidebarContext';
 
 interface StreamSectionProps {
   id: string;
@@ -68,6 +69,13 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [visibleMap, setVisibleMap] = useState<Record<string, boolean>>({});
   const [open, setOpen] = useState(false);
+  // Pinned = the panel becomes a persistent right-docked sidebar instead of a transient
+  // dropdown (doesn't close on outside click), similar to GlobalSidebar's Activity Stream
+  // panel. Per Jim, 2026-07-23.
+  const [pinned, setPinned] = useState(() => {
+    try { return localStorage.getItem('notifications_pinned') === '1'; } catch { return false; }
+  });
+  const { isVisible: activityStreamVisible } = useSidebar();
 
   const handleVisibilityChange = useCallback((id: string, visible: boolean) => {
     setVisibleMap((prev) => (prev[id] === visible ? prev : { ...prev, [id]: visible }));
@@ -77,12 +85,26 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
   const hasContent = activeCount > 0;
   const prominent = activeCount > 1;
 
+  // Both this panel and GlobalSidebar's Activity Stream dock to the right edge, so pinning
+  // this one open while the Activity Stream is also open would overlap it. Collapse to a
+  // slim bar in exactly that situation — reverts automatically once the Activity Stream
+  // closes, since this is a pure derivation, not separate state to keep in sync.
+  const collapsedToBar = pinned && open && activityStreamVisible;
+
+  const togglePinned = () => {
+    setPinned((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('notifications_pinned', next ? '1' : '0'); } catch { /* noop */ }
+      return next;
+    });
+  };
+
   useEffect(() => {
     if (!hasContent) setOpen(false);
   }, [hasContent]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || pinned) return;
     const handleClick = (e: MouseEvent) => {
       if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) setOpen(false);
     };
@@ -95,17 +117,18 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
       document.removeEventListener('mousedown', handleClick);
       document.removeEventListener('keydown', handleKey);
     };
-  }, [open]);
+  }, [open, pinned]);
 
   return (
     <div ref={wrapperRef} style={{ position: 'relative', display: hasContent ? 'block' : 'none' }}>
-      {open && (
+      {open && !pinned && (
         // The dropdown itself is a small, bounded panel with nothing behind it - the rest of
         // the page (including other header/card buttons that happen to sit near it, like the
         // Today's Plan card's Plan/Delta replan/Full replan row) stays fully visible AND
         // clickable, which reads as "showing through" even though there's no z-index conflict.
         // A transparent backdrop below the panel (but above the page) fixes both the visual
-        // confusion and the accidental-click-through.
+        // confusion and the accidental-click-through. Not shown when pinned — a pinned panel
+        // is meant to stay open regardless of outside clicks, closed only via its own X.
         <div
           onClick={() => setOpen(false)}
           style={{ position: 'fixed', inset: 0, zIndex: 1040, background: 'transparent' }}
@@ -146,37 +169,62 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
         </span>
       </button>
 
+      {/* Collapsed-to-a-bar state: pinned + open, but the Activity Stream sidebar is also
+          open and would otherwise overlap it. A slim strip rather than fully hiding it, so
+          it's clear notifications are still there and will reappear once the Activity
+          Stream closes. */}
+      {collapsedToBar && (
+        <div
+          style={{
+            position: 'fixed', top: 56, right: 0, bottom: 0, width: 10,
+            background: prominent ? 'var(--brand, #5f77dc)' : 'var(--muted, #9ca3af)',
+            zIndex: 999, // just below GlobalSidebar (1000) — it owns the right edge right now
+            cursor: 'default',
+          }}
+          title={`${activeCount} notification${activeCount === 1 ? '' : 's'} — collapsed while Activity Stream is open`}
+        />
+      )}
+
       <div
         style={{
-          display: open ? 'block' : 'none',
-          position: 'absolute', top: '100%', right: 0, marginTop: 6,
-          width: 'min(92vw, 360px)',
-          maxHeight: 520,
+          display: open && !collapsedToBar ? 'block' : 'none',
+          ...(pinned
+            ? { position: 'fixed', top: 56, right: 0, bottom: 0, marginTop: 0, borderRadius: 0, borderTop: 'none', borderRight: 'none', borderBottom: 'none' }
+            : { position: 'absolute', top: '100%', right: 0, marginTop: 6, borderRadius: 10 }),
+          width: pinned ? 340 : 'min(92vw, 360px)',
+          maxHeight: pinned ? undefined : 520,
           overflowY: 'auto',
           background: 'var(--panel, #fff)',
           border: '1px solid var(--border, #e5e7eb)',
-          borderRadius: 10,
           padding: 8,
           zIndex: 1045,
         }}
       >
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 4, marginBottom: 4 }}>
+          <button
+            onClick={togglePinned}
+            title={pinned ? 'Unpin' : 'Pin to right side'}
+            style={{ background: 'transparent', border: 'none', color: 'var(--muted, #9ca3af)', cursor: 'pointer', padding: 4, display: 'flex' }}
+          >
+            {pinned ? <PinOff size={14} /> : <Pin size={14} />}
+          </button>
+          <button
+            onClick={() => setOpen(false)}
+            title="Close"
+            style={{ background: 'transparent', border: 'none', color: 'var(--muted, #9ca3af)', cursor: 'pointer', padding: 4, display: 'flex' }}
+          >
+            <X size={14} />
+          </button>
+        </div>
         <StreamSection id="deferral" onVisibilityChange={handleVisibilityChange}>
           <DeferralCandidatesBanner />
         </StreamSection>
         <StreamSection id="checkin" onVisibilityChange={handleVisibilityChange}>
           <CheckInBanner />
         </StreamSection>
+        {/* Health/fitness grouped directly under AI Coach — per Jim, 2026-07-23. */}
         <StreamSection id="coach" onVisibilityChange={handleVisibilityChange}>
           <CoachVerdictBanner compact />
-        </StreamSection>
-        <StreamSection id="sprintClosure" onVisibilityChange={handleVisibilityChange}>
-          <SprintClosureBanner />
-        </StreamSection>
-        <StreamSection id="plannedSprint" onVisibilityChange={handleVisibilityChange}>
-          <PlannedSprintBanner />
-        </StreamSection>
-        <StreamSection id="focusGoals" onVisibilityChange={handleVisibilityChange}>
-          <GlobalGoalFocusBanner />
         </StreamSection>
         {isLargeScreen && (
           <StreamSection id="fitness" onVisibilityChange={handleVisibilityChange}>
@@ -188,6 +236,15 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
             <GlobalHealthProgressBanner />
           </StreamSection>
         )}
+        <StreamSection id="sprintClosure" onVisibilityChange={handleVisibilityChange}>
+          <SprintClosureBanner />
+        </StreamSection>
+        <StreamSection id="plannedSprint" onVisibilityChange={handleVisibilityChange}>
+          <PlannedSprintBanner />
+        </StreamSection>
+        <StreamSection id="focusGoals" onVisibilityChange={handleVisibilityChange}>
+          <GlobalGoalFocusBanner />
+        </StreamSection>
         {isLargeScreen && (
           <StreamSection id="integration" onVisibilityChange={handleVisibilityChange}>
             <GlobalIntegrationStatus />

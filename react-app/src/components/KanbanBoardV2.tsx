@@ -326,13 +326,22 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
                         return;
                     }
 
-                    // Map column status to actual status value
+                    // Map column status to actual status value. Canonical numeric mapping
+                    // (matches statusHelpers.ts's isStatus(), SprintTriageTable's STORY_STATUS/
+                    // TASK_STATUS labels, and nightlyOrchestration.js's isStoryDoneStatus):
+                    // stories: 0=Backlog, 1=In Progress, 2=Review, 4=Done.
+                    // tasks:   0=Backlog, 1=In Progress, 2=Done.
+                    // This used to write 2 for a story dropped on "in-progress" — the board's own
+                    // column grouping (getStoryColumn) treats both 1 and 2 as "in-progress" so it
+                    // looked fine here, but every other surface (Stories list, triage table) reads
+                    // 2 as "Review", not "In Progress" — so a card dragged here showed a different
+                    // status label everywhere else. Confirmed by Jim, 2026-07-23.
                     let actualStatus: string | number = newStatus;
 
                     // If the item uses numeric status, map it
                     if (typeof (item as any).status === 'number') {
                         if (newStatus === 'backlog') actualStatus = 0;
-                        else if (newStatus === 'in-progress') actualStatus = type === 'story' ? 2 : 1;
+                        else if (newStatus === 'in-progress') actualStatus = 1;
                         else if (newStatus === 'done') actualStatus = type === 'story' ? 4 : 2;
                     } else {
                         // String status

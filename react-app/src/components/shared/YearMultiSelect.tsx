@@ -58,7 +58,11 @@ export const YearMultiSelect: React.FC<YearMultiSelectProps> = ({
       >
         {label}
       </Dropdown.Toggle>
-      <Dropdown.Menu style={{ maxHeight: 360, overflowY: 'auto', minWidth: 180, padding: '4px 0' }}>
+      {/* Explicit z-index below the notifications panel (1040/1045) and GlobalSidebar (1000) —
+          without it this menu was rendering on top of both, since Bootstrap's own dropdown
+          z-index (1000) can tie or race with panels elsewhere in the app. Confirmed by Jim,
+          2026-07-23 (Goals page year selector showing over the notifications dropdown). */}
+      <Dropdown.Menu style={{ maxHeight: 360, overflowY: 'auto', minWidth: 180, padding: '4px 0', zIndex: 900 }}>
         {/* All years */}
         <label
           className="d-flex align-items-center gap-2 px-3 py-1"

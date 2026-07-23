@@ -167,14 +167,19 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         }
     })();
 
+    // Canonical numeric mapping — matches statusHelpers.ts's isStatus(), SprintTriageTable's
+    // STORY_STATUS/TASK_STATUS, and KanbanBoardV2's drag-drop write: stories 0=Backlog,
+    // 1=In Progress, 2=Review, 4=Done; tasks 0=Backlog, 1=In Progress, 2=Done, 3=Blocked.
+    // Previously this card's own chip used a different scheme (2=In progress, 3=Review, with
+    // an extra "Planned"=1 tier) — same numeric status showed a different label here than on
+    // the Stories list or the sprint triage table. Confirmed by Jim, 2026-07-23.
     const normalizeStatusValue = (rawStatus: any, entityType: 'story' | 'task') => {
         if (typeof rawStatus === 'number' && Number.isFinite(rawStatus)) return rawStatus;
         const status = String(rawStatus || '').toLowerCase();
         if (entityType === 'story') {
             if (['done', 'complete', 'completed', 'finished'].includes(status)) return 4;
-            if (['testing', 'qa', 'review'].includes(status)) return 3;
-            if (['in-progress', 'active', 'doing', 'blocked', 'in progress'].includes(status)) return 2;
-            if (['planned', 'ready'].includes(status)) return 1;
+            if (['testing', 'qa', 'review'].includes(status)) return 2;
+            if (['in-progress', 'active', 'doing', 'blocked', 'in progress', 'planned', 'ready'].includes(status)) return 1;
             return 0;
         }
         if (['done', 'complete', 'completed', 'finished'].includes(status)) return 2;
@@ -262,9 +267,8 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     const statusBadge = type === 'story'
         ? ({
             0: { bg: 'secondary', text: 'Backlog' },
-            1: { bg: 'info', text: 'Planned' },
-            2: { bg: 'primary', text: 'In progress' },
-            3: { bg: 'warning', text: 'Review' },
+            1: { bg: 'primary', text: 'In progress' },
+            2: { bg: 'warning', text: 'Review' },
             4: { bg: 'success', text: 'Done' },
         } as Record<number, { bg: string; text: string }>)[statusValue] || { bg: 'secondary', text: 'Backlog' }
         : ({
@@ -1098,9 +1102,8 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                         {type === 'story' ? (
                             <>
                                 <option value={0}>Backlog</option>
-                                <option value={1}>Planned</option>
-                                <option value={2}>In progress</option>
-                                <option value={3}>Review</option>
+                                <option value={1}>In progress</option>
+                                <option value={2}>Review</option>
                                 <option value={4}>Done</option>
                             </>
                         ) : (

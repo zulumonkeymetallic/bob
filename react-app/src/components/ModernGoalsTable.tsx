@@ -1858,8 +1858,10 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
         <div style={{
           flex: 1,
           overflowX: 'auto',
-          overflowY: 'auto',
-          maxHeight: '70vh',
+          // No overflowY/maxHeight here — that made this its own bounded scroll box, so the
+          // thead's position:sticky only tracked scrolling within these 70vh, not the page
+          // itself. Letting the table flow with the page means the sticky header now tracks
+          // the actual page scroll instead. Confirmed by Jim, 2026-07-23.
           transition: 'margin-right 0.3s ease',
           marginRight: showConfig ? '320px' : '0',
         }}>

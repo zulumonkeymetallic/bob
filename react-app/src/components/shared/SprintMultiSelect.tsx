@@ -72,7 +72,9 @@ const SprintMultiSelect: React.FC<SprintMultiSelectProps> = ({
       >
         {label}
       </Dropdown.Toggle>
-      <Dropdown.Menu style={{ maxHeight: 380, overflowY: 'auto', minWidth: 220, padding: '4px 0' }}>
+      {/* Explicit z-index below the notifications panel/GlobalSidebar (1000-1045) — see
+          YearMultiSelect.tsx for the same fix and why it's needed. */}
+      <Dropdown.Menu style={{ maxHeight: 380, overflowY: 'auto', minWidth: 220, padding: '4px 0', zIndex: 900 }}>
         {/* All sprints */}
         <label
           className="d-flex align-items-center gap-2 px-3 py-1"
