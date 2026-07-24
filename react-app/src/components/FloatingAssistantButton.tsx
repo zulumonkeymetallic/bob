@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Sparkles, X } from 'lucide-react';
 
 interface FloatingAssistantButtonProps {
   onClick: () => void;
@@ -42,7 +43,7 @@ const FloatingAssistantButton: React.FC<FloatingAssistantButtonProps> = ({ onCli
         transition: 'transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease',
       }}
     >
-      {isOpen ? '✕' : '🤖'}
+      {isOpen ? <X size={20} /> : <Sparkles size={20} />}
     </button>
   );
 };

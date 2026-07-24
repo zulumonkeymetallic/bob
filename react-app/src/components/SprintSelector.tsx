@@ -101,7 +101,6 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
   if (DISABLE_SELECTOR) {
     return (
       <div className={`d-flex align-items-center ${className}`} title="Sprint selection disabled for test">
-        <span className="me-2">🏃‍♂️</span>
         <span>All Sprints</span>
       </div>
     );
@@ -110,7 +109,6 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
   if (sprints.length === 0) {
     return (
       <div className={`d-flex align-items-center ${className}`}>
-        <span className="me-2">🏃‍♂️</span>
         <span className="text-muted">No sprints available</span>
       </div>
     );
@@ -121,30 +119,31 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
       <Dropdown.Toggle
         variant="outline-primary"
         id="sprint-selector"
+        size="sm"
         className="d-flex align-items-center"
+        style={{ fontSize: 12, padding: '2px 8px' }}
       >
-        <span className="me-2">🏃‍♂️</span>
         {effectiveSelectedId === '' ? (
           <span>All Sprints</span>
         ) : selectedSprint ? (
           <span className="d-flex align-items-center" style={{ minWidth: 0 }}>
             <strong
               title={selectedSprint.name}
-              style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block' }}
+              style={{ maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block' }}
             >
               {selectedSprint.name}
             </strong>
             {isSprintActive(selectedSprint) && (
-              <span className="badge bg-success ms-2">ACTIVE</span>
+              <span className="badge bg-success ms-2" style={{ fontSize: 10 }}>ACTIVE</span>
             )}
             {isSprintPlanned(selectedSprint) && (
-              <span className="badge bg-warning text-dark ms-2">PLANNED</span>
+              <span className="badge bg-warning text-dark ms-2" style={{ fontSize: 10 }}>PLANNED</span>
             )}
             {isSprintComplete(selectedSprint) && (
-              <span className="badge bg-secondary ms-2">COMPLETE</span>
+              <span className="badge bg-secondary ms-2" style={{ fontSize: 10 }}>COMPLETE</span>
             )}
             {isSprintCancelled(selectedSprint) && (
-              <span className="badge bg-danger ms-2">CANCELLED</span>
+              <span className="badge bg-danger ms-2" style={{ fontSize: 10 }}>CANCELLED</span>
             )}
           </span>
         ) : (
