@@ -21198,3 +21198,22 @@ exports.runAlignStoriesToGoalSprintsNow = httpsV2.onCall(async (req) => {
   return await _alignStories.runForUser(db, uid, { dryRun });
 });
 
+// TEMPORARY diagnostic — pinpointing the invalid_client error from
+// cleanupOrphanedCalendarEvents (confirmed live 2026-07-24, zero successful runs ever
+// logged for Jim). dryRun always forced true; deletable once root-caused. Remove after use.
+exports.debugCalendarCleanupDiag = httpsV2.onCall({
+  region: 'europe-west2',
+  invoker: 'public',
+  secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET],
+}, async (req) => {
+  const uid = req?.data?.uid;
+  if (!uid) throw new functionsV2.https.HttpsError('invalid-argument', 'uid required');
+  const calSync = require('./calendarSync');
+  try {
+    const r = await calSync._cleanupOrphanedCalendarEvents(uid, { dryRun: true });
+    return { ok: true, result: r };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e), code: e?.code || null, stack: String(e?.stack || '').split('\n').slice(0, 8) };
+  }
+});
+

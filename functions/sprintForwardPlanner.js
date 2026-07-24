@@ -292,15 +292,24 @@ async function runForUser(db, uid, options = {}) {
   //
   // What remains is the "extra safety" fallback only: TASKS ONLY (no stories), due on
   // the specific day being planned, aiCriticalityScore descending, pointsRemaining >= 1
-  // (MIN_POINTS_TO_SCHEDULE — nothing under 1pt/1hr may ever claim calendar time).
+  // (MIN_POINTS_TO_SCHEDULE — nothing under 1pt/1hr may ever claim calendar time), and
+  // aiCriticalityScore >= MIN_SCORE_TO_SCHEDULE. That score floor is new: previously this
+  // pool had no score gate at all — any due-today task with capacity remaining got a
+  // calendar slot regardless of how low its score was, so long as free capacity existed.
+  // Confirmed by Jim, 2026-07-24: low-value tasks (score ~51) were consuming calendar
+  // slots. Floor set at his explicit instruction. Filters on the raw aiCriticalityScore
+  // (what's shown in the UI), not effectiveScore (which can be inflated by priority/rank
+  // bonuses) — the floor is meant to reflect genuine AI-assessed importance.
   // This only fills genuine leftover gaps runCalendarPlannerJob didn't use.
   const MIN_POINTS_TO_SCHEDULE = 1;
+  const MIN_SCORE_TO_SCHEDULE = 75;
 
   const getDueMs = (item) => toMs(item.dueDate ?? item.targetDate ?? item.dueDateMs ?? item.dueAt ?? item.due);
 
   const tierBTaskPool = tasks
     .filter(t => !isPinnedItem(t))
     .filter(t => pointsRemaining(t) >= MIN_POINTS_TO_SCHEDULE)
+    .filter(t => Number(t.aiCriticalityScore || 0) >= MIN_SCORE_TO_SCHEDULE)
     .map(t => ({ ...t, _type: 'task', _score: effectiveScore(t), _dueMs: getDueMs(t), _mins: Math.round(pointsRemaining(t) * MINS_PER_POINT) }))
     .filter(t => t._dueMs != null);
 
