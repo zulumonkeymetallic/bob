@@ -705,3 +705,11 @@ div.tooltip .tooltip-arrow::before {
   border-left-color: #000 !important;
   border-right-color: #000 !important;
 }
+/* .text-muted sets its own gray color directly on whichever element it's applied to
+   (several tooltip bodies in the app wrap secondary detail lines in it) — a direct rule
+   on a descendant always wins over a color merely inherited from .tooltip-inner's parent,
+   important or not, so the fix above never reached this text. Confirmed by Jim,
+   2026-07-24: still illegible after the first fix, specifically the secondary line. */
+div.tooltip .text-muted {
+  color: rgba(255, 255, 255, 0.75) !important;
+}
