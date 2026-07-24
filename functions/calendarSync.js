@@ -875,17 +875,32 @@ async function logCalendarIntegration(uid, payload) {
 }
 
 async function getCalendarClientForUser(uid) {
-  const userDoc = await admin.firestore().collection('users').doc(uid).get();
-  const userData = userDoc.data() || {};
-  let tokens = userData.googleCalendarTokens || null;
+  // Reconnecting Google Calendar (Settings -> Integrations) writes the fresh token to
+  // tokens/{uid} — that's the collection the actual OAuth exchange handler updates. This
+  // function used to check users/{uid}.googleCalendarTokens FIRST and only fell back to
+  // tokens/{uid} if that field was completely absent — but nothing in the codebase writes
+  // to users/{uid}.googleCalendarTokens (confirmed 2026-07-24: it's dead, frozen since
+  // 2025-12-26). Since the field merely existing (however stale) satisfied the `!tokens`
+  // check, the fallback never ran and every reconnect since December silently had no
+  // effect on what this function actually used. Reversed the priority: check the
+  // collection that's actually maintained first.
+  const legacyDoc = await admin.firestore().collection('tokens').doc(uid).get();
+  let tokens = null;
+  if (legacyDoc.exists) {
+    const legacyData = legacyDoc.data() || {};
+    if (legacyData.refresh_token) {
+      tokens = {
+        refresh_token: legacyData.refresh_token,
+        access_token: legacyData.access_token || undefined,
+      };
+    } else if (legacyData.googleCalendarTokens) {
+      tokens = legacyData.googleCalendarTokens;
+    }
+  }
   if (!tokens) {
-    try {
-      const legacyDoc = await admin.firestore().collection('tokens').doc(uid).get();
-      if (legacyDoc.exists) {
-        const legacyData = legacyDoc.data() || {};
-        tokens = legacyData.googleCalendarTokens || (legacyData.refresh_token ? { refresh_token: legacyData.refresh_token } : null);
-      }
-    } catch { /* ignore */ }
+    const userDoc = await admin.firestore().collection('users').doc(uid).get();
+    const userData = userDoc.data() || {};
+    tokens = userData.googleCalendarTokens || null;
   }
   if (!tokens) throw new Error('Google Calendar not connected');
   const { clientId, clientSecret, redirectUri } = getGoogleOAuthConfig();
@@ -2580,6 +2595,15 @@ async function pullGoogleEventsForUser(uid, { windowStart, windowEnd }) {
     }
 
     await logCalendarIntegration(uid, { action: 'pull', status: 'success', windowStart: timeMin, windowEnd: timeMax, counts, syncResults });
+    // Settings -> Integrations reads profiles/{uid}.googleCalendarLastSyncAt for its "Last
+    // sync" display. That field was only ever written by the old importGoogleCalendarEvents
+    // path in index.js, which was superseded by this function months ago and is now gated
+    // off by LEGACY_GCAL_IMPORT — so the display had been frozen since whenever that path
+    // last ran, with nothing since keeping it current. Confirmed by Jim, 2026-07-24 (showing
+    // "7 months ago"). Write it here instead, where the actual current sync succeeds.
+    await db.collection('profiles').doc(uid).set({
+      googleCalendarLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true }).catch(() => {});
     return { counts, syncResults };
   } catch (error) {
     await logCalendarIntegration(uid, { action: 'pull', status: 'error', windowStart: timeMin, windowEnd: timeMax, error: error?.message || String(error) });
