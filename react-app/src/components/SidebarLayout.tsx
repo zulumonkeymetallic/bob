@@ -722,7 +722,14 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           borderBottom: '1px solid var(--notion-border)',
           background: currentPersona === 'work' ? '#d3d3d3' : 'var(--panel)',
           position: 'relative',
-          zIndex: 1000
+          // Was equal to GlobalSidebar's z-index (1000) — a tie at equal z-index goes to
+          // whichever renders later in the DOM, which happened to be GlobalSidebar, so
+          // opening the Activity Stream visually covered the Notification bell and
+          // Assistant button sitting in this toolbar, making them unreachable. Bumped above
+          // GlobalSidebar (1000-1002) but stays below AssistantDock/NotificationStream's own
+          // panels (1040/1045) so those can still render on top of this bar once opened.
+          // Confirmed by Jim, 2026-07-24.
+          zIndex: 1010
         }}>
           <div className="container-fluid" style={{ padding: '8px 16px' }}>
             <div className="d-flex justify-content-end align-items-center gap-3 flex-wrap" style={{ rowGap: 6 }}>

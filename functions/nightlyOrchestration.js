@@ -5241,10 +5241,118 @@ async function generateMissingAcceptanceCriteria() {
   return { totalGenerated, elapsedMs: Date.now() - stepStartMs };
 }
 
+// Same safety pattern as ACCEPTANCE_CRITERIA above — bounded candidates and time budget so
+// an LLM slowdown can't eat into the scheduling steps later in the chain.
+const TIME_OF_DAY_MAX_CANDIDATES_PER_USER = 40;
+const TIME_OF_DAY_TIME_BUDGET_MS = 60_000;
+const TIME_OF_DAY_RECURRING_TYPES = new Set(['chore', 'habit', 'routine']);
+
+/**
+ * Sets timeOfDay (morning/afternoon/evening) on tasks/stories that don't have one, inferred
+ * from title/description/theme via LLM. Previously timeOfDay was only ever set by whoever
+ * created the item — most items never got one, which meant they only ever showed under
+ * "Anytime" on the mobile daily-plan buckets and were invisible to due-today widgets that
+ * (as of 2026-07-24) also key off timeOfDay for undated items. Confirmed by Jim, 2026-07-24:
+ * "the ai should be setting AI time of day as part of nightly orchestration based on the
+ * context of the task or story." Chores/habits/routines are excluded — their own recurrence
+ * config decides when they're due, timeOfDay isn't meaningful for them the same way.
+ */
+async function assignMissingTimeOfDay() {
+  const db = ensureFirestore();
+  const profiles = await db.collection('profiles').get().catch(() => ({ docs: [] }));
+  let totalAssigned = 0;
+  const stepStartMs = Date.now();
+
+  for (const prof of profiles.docs) {
+    if (Date.now() - stepStartMs > TIME_OF_DAY_TIME_BUDGET_MS) {
+      console.warn('[TimeOfDay] time budget exhausted, deferring remaining users to next nightly run');
+      break;
+    }
+    const userId = prof.id;
+    try {
+      const sprintSnap = await db.collection('sprints')
+        .where('ownerUid', '==', userId)
+        .get()
+        .catch(() => ({ docs: [] }));
+      const activeByPersona = resolveActiveSprintIdsByPersona(sprintSnap.docs);
+      const activeSprintIds = [...activeByPersona.personal, ...activeByPersona.work];
+      if (activeSprintIds.length === 0) continue;
+
+      const chunks = [];
+      for (let i = 0; i < activeSprintIds.length; i += 10) chunks.push(activeSprintIds.slice(i, i + 10));
+
+      const candidates = [];
+      for (const chunk of chunks) {
+        const tasksSnap = await db.collection('tasks')
+          .where('ownerUid', '==', userId)
+          .where('sprintId', 'in', chunk)
+          .get()
+          .catch(() => ({ docs: [] }));
+        tasksSnap.docs.forEach((doc) => {
+          const data = doc.data() || {};
+          if (data.timeOfDay) return;
+          if (isTaskDoneStatus(data.status)) return;
+          if (TIME_OF_DAY_RECURRING_TYPES.has(String(data.type || '').toLowerCase())) return;
+          if (!data.title) return;
+          candidates.push({ ref: doc.ref, title: data.title, description: data.description || '', theme: data.theme || '' });
+        });
+        const storiesSnap = await db.collection('stories')
+          .where('ownerUid', '==', userId)
+          .where('sprintId', 'in', chunk)
+          .get()
+          .catch(() => ({ docs: [] }));
+        storiesSnap.docs.forEach((doc) => {
+          const data = doc.data() || {};
+          if (data.timeOfDay) return;
+          if (isStoryDoneStatus(data.status)) return;
+          if (!data.title) return;
+          candidates.push({ ref: doc.ref, title: data.title, description: data.description || '', theme: data.theme || '' });
+        });
+      }
+      if (candidates.length === 0) continue;
+      if (candidates.length > TIME_OF_DAY_MAX_CANDIDATES_PER_USER) {
+        console.warn(`[TimeOfDay] user ${userId}: ${candidates.length} candidates, capping at ${TIME_OF_DAY_MAX_CANDIDATES_PER_USER} for this run`);
+      }
+      const scoped = candidates.slice(0, TIME_OF_DAY_MAX_CANDIDATES_PER_USER);
+
+      const writer = db.bulkWriter();
+      let assigned = 0;
+      for (const item of scoped) {
+        if (Date.now() - stepStartMs > TIME_OF_DAY_TIME_BUDGET_MS) {
+          console.warn(`[TimeOfDay] time budget exhausted mid-user ${userId}, deferring remaining items`);
+          break;
+        }
+        const system = 'You classify personal productivity tasks/stories into the time of day they are best '
+          + 'suited for, based on their title, description, and theme. Guidance: exercise/fitness/focused deep '
+          + 'work -> morning; admin/calls/errands/meetings -> afternoon; social/reading/relaxation/reflection/'
+          + 'household chores done after work -> evening. Return ONLY valid JSON: '
+          + '{"timeOfDay": "morning"|"afternoon"|"evening"}';
+        const user = `Title: ${item.title}\nDescription: ${item.description}\nTheme: ${item.theme}`;
+        const parsed = await callLLMJsonSafe({ system, user, purpose: 'timeOfDayAssignment', userId });
+        const tod = String(parsed?.timeOfDay || '').toLowerCase();
+        if (!['morning', 'afternoon', 'evening'].includes(tod)) continue;
+        writer.set(item.ref, {
+          timeOfDay: tod,
+          aiTimeOfDaySet: true,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        assigned++;
+      }
+      await writer.close();
+      totalAssigned += assigned;
+      if (assigned > 0) console.log(`[TimeOfDay] user ${userId}: assigned for ${assigned} items`);
+    } catch (err) {
+      console.warn(`[TimeOfDay] failed for user ${userId}:`, err?.message || err);
+    }
+  }
+  return { totalAssigned, elapsedMs: Date.now() - stepStartMs };
+}
+
 // Manual trigger to run the nightly chain (pointing → conversions → scoring+Top3 → calendar)
 async function runNightlyChainCore() {
   const steps = [
     { name: 'generateMissingAcceptanceCriteria', fn: generateMissingAcceptanceCriteria },
+    { name: 'assignMissingTimeOfDay', fn: assignMissingTimeOfDay },
     { name: 'runAutoPointing', fn: runAutoPointingJob },
     { name: 'runAutoConversions', fn: runAutoConversionsJob },
     { name: 'runPriorityScoring', fn: runPriorityScoringJob },

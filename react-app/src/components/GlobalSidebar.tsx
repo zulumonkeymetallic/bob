@@ -914,11 +914,14 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                 </div>
               </div>
 
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', rowGap: '6px' }}>
                 <h5 style={{ margin: 0, fontSize: '18px', fontWeight: '600' }}>
                   {selectedType === 'goal' ? 'Goal Details' : selectedType === 'story' ? 'Story Details' : 'Task Details'}
                 </h5>
-                <div style={{ display: 'flex', gap: '8px' }}>
+                {/* Up to 6 icon buttons render here for stories (Add Note/Research/Orchestrate/
+                    Edit/Open/Delete) — with no wrap, that overflowed the panel's fixed width and
+                    pushed Delete off-screen to the right. Confirmed by Jim, 2026-07-24. */}
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                   <Button
                     variant="link"
                     size="sm"

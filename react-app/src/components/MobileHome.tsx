@@ -964,7 +964,12 @@ const MobileHome: React.FC = () => {
     end.setHours(23, 59, 59, 999);
     return sortedPendingTasks.filter((task) => {
       const due = resolveRecurringDueMs(task, today, start.getTime()) ?? getTaskDueMs(task);
-      return !!due && due >= start.getTime() && due <= end.getTime();
+      if (due) return due >= start.getTime() && due <= end.getTime();
+      // No due date, but tagged for a time-of-day bucket (Morning/Afternoon/Evening) —
+      // that's exactly what the same list shows on the default "All" tab as "today's"
+      // work, so "due today" should include it too instead of silently disagreeing with
+      // itself. Confirmed by Jim, 2026-07-24.
+      return !!(task as any).timeOfDay;
     });
   }, [sortedPendingTasks, getTaskDueMs]);
 

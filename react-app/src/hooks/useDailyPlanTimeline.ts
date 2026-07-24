@@ -320,7 +320,10 @@ export function useDailyPlanTimeline(params: UseDailyPlanTimelineParams = {}): U
       .filter((t) => (t.status ?? 0) !== 2)
       .filter((t) => {
         const due = resolveRecurringDueMs(t, today, start.getTime()) ?? resolveTaskDueMs(t);
-        return !!due && due >= start.getTime() && due <= end.getTime();
+        if (due) return due >= start.getTime() && due <= end.getTime();
+        // No due date, but tagged for a time-of-day bucket — matches MobileHome's
+        // controlled-mode tasksDueTodayForMobile fix. Confirmed by Jim, 2026-07-24.
+        return !!(t as any).timeOfDay;
       });
   }, [selfContained, fetchedTasks]);
 
