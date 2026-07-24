@@ -11,6 +11,10 @@ interface SidebarContextType {
   showSidebar: (item: Story | Task | Goal, type: 'story' | 'task' | 'goal') => void;
   hideSidebar: () => void;
   toggleCollapse: () => void;
+  /** True when the Notifications panel is pinned open (right-docked), so page layouts
+   * elsewhere can reserve space for it the same way they do for this sidebar. */
+  notificationsPinnedOpen: boolean;
+  setNotificationsPinnedOpen: (value: boolean) => void;
   updateItem: (updates: any) => Promise<void>;
   setUpdateHandler: (handler: (item: Story | Task | Goal, type: 'story' | 'task' | 'goal', updates: any) => Promise<void>) => void;
 }
@@ -30,6 +34,7 @@ export const SidebarProvider: React.FC<SidebarProviderProps> = ({ children }) =>
       return localStorage.getItem('globalSidebarCollapsed') === '1';
     } catch { return false; }
   });
+  const [notificationsPinnedOpen, setNotificationsPinnedOpen] = useState(false);
   const [updateHandler, setUpdateHandler] = useState<((item: Story | Task | Goal, type: 'story' | 'task' | 'goal', updates: any) => Promise<void>) | null>(null);
   const updateHandlerRef = useRef<typeof updateHandler>(null);
 
@@ -88,6 +93,8 @@ export const SidebarProvider: React.FC<SidebarProviderProps> = ({ children }) =>
         showSidebar,
         hideSidebar,
         toggleCollapse,
+        notificationsPinnedOpen,
+        setNotificationsPinnedOpen,
         updateItem,
         setUpdateHandler: setUpdateHandlerCallback,
       }}

@@ -26,8 +26,6 @@ import VideosBacklog from './components/VideosBacklog';
 import YouTubeHistoryDashboard from './components/YouTubeHistoryDashboard';
 // import ModernTableDemo from './components/ModernTableDemo';
 import FloatingActionButton from './components/FloatingActionButton';
-import FloatingAssistantButton from './components/FloatingAssistantButton';
-import AssistantDock from './components/AssistantDock';
 import ImportExportModal from './components/ImportExportModal';
 import SidebarLayout from './components/SidebarLayout';
 import SettingsPage from './components/SettingsPage';
@@ -167,7 +165,6 @@ function AppContent() {
   const { sprints } = useSprint();
   const [isNavExpanded, setIsNavExpanded] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
-  const [showAssistant, setShowAssistant] = useState(false);
 
   const LegacyPlannerRedirect: React.FC<{ level: Parameters<typeof buildPlannerPath>[0] }> = ({ level }) => {
     const legacyLocation = useLocation();
@@ -574,10 +571,6 @@ function AppContent() {
             <Route path="/public/roadmap/:shareCode" element={<PublicRoadmapView />} />
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
-
-          {/* BOB Assistant — Vertex AI powered, slides in from right */}
-          <FloatingAssistantButton onClick={() => setShowAssistant(v => !v)} isOpen={showAssistant} />
-          <AssistantDock open={showAssistant} onClose={() => setShowAssistant(false)} />
 
           {/* Bottom tab bar — only renders on Home/Fitness/Coach/Goals/Tasks routes */}
           <FitnessTabBar />

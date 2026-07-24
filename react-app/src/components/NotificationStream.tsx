@@ -75,7 +75,7 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
   const [pinned, setPinned] = useState(() => {
     try { return localStorage.getItem('notifications_pinned') === '1'; } catch { return false; }
   });
-  const { isVisible: activityStreamVisible } = useSidebar();
+  const { isVisible: activityStreamVisible, setNotificationsPinnedOpen } = useSidebar();
 
   const handleVisibilityChange = useCallback((id: string, visible: boolean) => {
     setVisibleMap((prev) => (prev[id] === visible ? prev : { ...prev, [id]: visible }));
@@ -90,6 +90,15 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
   // slim bar in exactly that situation — reverts automatically once the Activity Stream
   // closes, since this is a pure derivation, not separate state to keep in sync.
   const collapsedToBar = pinned && open && activityStreamVisible;
+
+  // Mirror into SidebarContext so page layouts (SidebarLayout's main content margin, same
+  // mechanism already used for the Activity Stream sidebar) can reserve space instead of
+  // letting this panel just overlap whatever's underneath. Confirmed by Jim, 2026-07-24:
+  // pinned notifications should shift content the same way the Activity Stream does.
+  useEffect(() => {
+    setNotificationsPinnedOpen(pinned && open);
+    return () => setNotificationsPinnedOpen(false);
+  }, [pinned, open, setNotificationsPinnedOpen]);
 
   const togglePinned = () => {
     setPinned((prev) => {

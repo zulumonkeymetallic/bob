@@ -15,9 +15,9 @@ import { useSidebar } from '../contexts/SidebarContext';
 import SprintSelector from './SprintSelector';
 import GlobalSearchBar from './GlobalSearchBar';
 import CompactSprintMetrics from './CompactSprintMetrics';
-import AssistantDock from './AssistantDock';
 import ProcessTextActivityHost from './ProcessTextActivityHost';
 import NotificationStream from './NotificationStream';
+import AssistantDock from './AssistantDock';
 import { useDeviceInfo } from '../utils/deviceDetection';
 // Test mode UI removed per request
 
@@ -94,7 +94,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   };
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
   const { selectedSprintId: globalSprintId, setSelectedSprintId: setGlobalSprintId } = useSprint();
-  const { isVisible: isRightSidebarVisible, isCollapsed: isRightSidebarCollapsed } = useSidebar();
+  const { isVisible: isRightSidebarVisible, isCollapsed: isRightSidebarCollapsed, notificationsPinnedOpen } = useSidebar();
   const [assistantOpen, setAssistantOpen] = useState(false);
 
   const navigationGroups: NavigationGroup[] = [
@@ -694,7 +694,17 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         className="flex-grow-1 sidebar-layout-main"
         style={{
           paddingTop: deviceInfo.isMobile ? '60px' : '0',
-          marginRight: isRightSidebarVisible && window.innerWidth >= 768 ? (isRightSidebarCollapsed ? '60px' : '400px') : '0',
+          // Reserve space for both the Activity Stream sidebar and pinned-open Notifications
+          // panel — they dock to the same right edge, so their reserved widths stack. When
+          // both are open at once, NotificationStream collapses itself to a slim 10px bar
+          // (see its own collapsedToBar logic) rather than a full 340px panel, so only 10px
+          // extra is needed in that case. Confirmed by Jim, 2026-07-24: pinned notifications
+          // should shift page content the same way the Activity Stream already does, not
+          // just overlap it.
+          marginRight: window.innerWidth < 768 ? '0' : `${
+            (isRightSidebarVisible ? (isRightSidebarCollapsed ? 60 : 400) : 0)
+            + (notificationsPinnedOpen ? (isRightSidebarVisible ? 10 : 340) : 0)
+          }px`,
           transition: 'margin-right 0.3s ease',
           minWidth: 0,
           display: 'flex',
