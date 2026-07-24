@@ -34,6 +34,9 @@ interface SprintTriageTableProps {
     onEditStory: (story: Story) => void;
     onEditTask: (task: Task) => void;
     onEditGoal?: (goal: Goal) => void;
+    /** iPad landscape: show only Title/Status/AI/Actions — the rest needs horizontal
+     * scrolling on that width. Confirmed by Jim, 2026-07-24. */
+    compactColumns?: boolean;
 }
 
 // Canonical status labels — 0=Backlog, 1=In Progress, 2=Review(stories)/Done(tasks), 4=Done
@@ -101,7 +104,7 @@ const abtn = (color?: string): React.CSSProperties => ({
 
 const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
     stories, tasks, goals, sprints, filterSprintId,
-    onEditStory, onEditTask, onEditGoal,
+    onEditStory, onEditTask, onEditGoal, compactColumns = false,
 }) => {
     const navigate = useNavigate();
     const { backgrounds } = useThemeAwareColors();
@@ -632,26 +635,26 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
     return (
         <>
             <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: '70vh' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1100 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: compactColumns ? 480 : 1100 }}>
                     <thead>
                         <tr>
-                            <TH label="Type" col="type" style={{ minWidth: 70 }} />
-                            <TH label="Ref" col="ref" style={{ minWidth: 80 }} />
+                            {!compactColumns && <TH label="Type" col="type" style={{ minWidth: 70 }} />}
+                            {!compactColumns && <TH label="Ref" col="ref" style={{ minWidth: 80 }} />}
                             <TH label="Title" col="title" style={{ minWidth: 200 }} />
-                            <TH label="Description" style={{ minWidth: 160, cursor: 'default' }} />
+                            {!compactColumns && <TH label="Description" style={{ minWidth: 160, cursor: 'default' }} />}
                             <TH label="Status" col="status" style={{ minWidth: 100 }} />
                             <TH label="AI" col="ai" style={{ minWidth: 50 }} />
-                            <TH label="Due" col="dueDate" style={{ minWidth: 90 }} />
-                            <TH label="Sprint" style={{ minWidth: 130, cursor: 'default' }} />
-                            <TH label="Parent" style={{ minWidth: 180, cursor: 'default' }} />
-                            <TH label="Last note" style={{ minWidth: 160, cursor: 'default' }} />
+                            {!compactColumns && <TH label="Due" col="dueDate" style={{ minWidth: 90 }} />}
+                            {!compactColumns && <TH label="Sprint" style={{ minWidth: 130, cursor: 'default' }} />}
+                            {!compactColumns && <TH label="Parent" style={{ minWidth: 180, cursor: 'default' }} />}
+                            {!compactColumns && <TH label="Last note" style={{ minWidth: 160, cursor: 'default' }} />}
                             <TH label="Actions" style={{ minWidth: 180, cursor: 'default' }} />
                         </tr>
                     </thead>
                     <tbody>
                         {rows.length === 0 && (
                             <tr>
-                                <td colSpan={11} style={{ padding: 32, textAlign: 'center', color: themeVars.muted as string, fontSize: 13 }}>
+                                <td colSpan={compactColumns ? 4 : 11} style={{ padding: 32, textAlign: 'center', color: themeVars.muted as string, fontSize: 13 }}>
                                     No stories or tasks in this sprint.
                                 </td>
                             </tr>
@@ -667,14 +670,17 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
                                     onMouseLeave={() => setHovered(null)}
                                 >
                                     {/* Type */}
+                                    {!compactColumns && (
                                     <td style={TD}>
                                         <span style={{ display: 'inline-block', padding: '2px 7px', borderRadius: 10, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', backgroundColor: rowType === 'story' ? '#0d6efd22' : '#6c757d22', color: rowType === 'story' ? '#0d6efd' : '#6c757d' }}>
                                             {rowType === 'story' ? 'Story' : ((item as any).type || 'Task')}
                                         </span>
                                     </td>
+                                    )}
                                     {/* Ref — opens the same edit modal as the row's Edit action,
                                         rather than navigating to a separate page. Confirmed by
                                         Jim, 2026-07-23: clicking the ref should stay on this page. */}
+                                    {!compactColumns && (
                                     <td style={{ ...TD, fontFamily: 'monospace', fontSize: 12 }}>
                                         <button
                                             type="button"
@@ -684,14 +690,17 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
                                             {itemRef(item, rowType)}
                                         </button>
                                     </td>
+                                    )}
                                     {/* Title */}
                                     <td style={{ ...TD, maxWidth: 240, fontWeight: 500 }}>
                                         {inlineText(item, rowType, 'title', item.title || '')}
                                     </td>
                                     {/* Description */}
+                                    {!compactColumns && (
                                     <td style={{ ...TD, maxWidth: 180, color: themeVars.muted as string }}>
                                         {inlineText(item, rowType, 'description', (item as any).description || '', true)}
                                     </td>
+                                    )}
                                     {/* Status */}
                                     <td style={TD}>{inlineStatus(item, rowType)}</td>
                                     {/* AI score */}
@@ -703,18 +712,25 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
                                         ) : <span style={{ color: themeVars.muted as string, fontSize: 11 }}>—</span>}
                                     </td>
                                     {/* Due */}
+                                    {!compactColumns && (
                                     <td style={{ ...TD, minWidth: 90 }}>
                                         {inlineText(item, rowType, 'dueDate', fmtDate((item as any).dueDate))}
                                     </td>
+                                    )}
                                     {/* Sprint */}
+                                    {!compactColumns && (
                                     <td style={{ ...TD, minWidth: 130 }}>
                                         {inlineSprintSelect(item, rowType)}
                                     </td>
+                                    )}
                                     {/* Parent + progress */}
+                                    {!compactColumns && (
                                     <td style={{ ...TD, minWidth: 180 }}>
                                         {parentCell(item, rowType)}
                                     </td>
+                                    )}
                                     {/* Last note */}
+                                    {!compactColumns && (
                                     <td style={{ ...TD, maxWidth: 200, color: themeVars.muted as string, fontSize: 12 }}>
                                         {note ? (
                                             <span title={note} style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -722,6 +738,7 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
                                             </span>
                                         ) : <span style={{ fontStyle: 'italic' }}>—</span>}
                                     </td>
+                                    )}
                                     {/* Actions */}
                                     <td style={{ ...TD, minWidth: 180, whiteSpace: 'nowrap' }}>
                                         {actionCell(item, rowType)}

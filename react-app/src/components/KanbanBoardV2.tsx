@@ -746,7 +746,13 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
 
     return (
         <div ref={boardWrapperRef} className="kanban-board-v2" style={{ display: 'flex', gap: '16px', height: '100%', overflowX: 'auto', paddingBottom: '16px' }}>
-            {Object.entries(columns).map(([key, col]) => (
+            {Object.entries(columns)
+                // "Show completed" off hides the Done column entirely (not just its cards) so
+                // Backlog/In Progress get the reclaimed width — matters most on iPad landscape,
+                // where showCompletedItems defaults to false for exactly this reason. Confirmed
+                // by Jim, 2026-07-24. Status can still be changed via a card's own status chip.
+                .filter(([key]) => key !== 'done' || showCompletedItems)
+                .map(([key, col]) => (
                 <KanbanColumnV2 key={key} status={key} title={col.title} color={col.color as string} registerScrollEl={registerColumnScrollEl}>
                     {col.items.map(item => {
                         const isStory = 'points' in item || (item as any).storyId === undefined; // Rough check, better to check ID or something

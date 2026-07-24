@@ -23,7 +23,7 @@ import EditTaskModal from './EditTaskModal';
 import EditGoalModal from './EditGoalModal';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { useDetailLevel } from '../contexts/DetailLevelContext';
-import { useDeviceInfo } from '../utils/deviceDetection';
+import { useDeviceInfo, getDeviceInfo } from '../utils/deviceDetection';
 import { useFocusGoals } from '../hooks/useFocusGoals';
 import { getActiveFocusLeafGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
 import {
@@ -70,12 +70,23 @@ const SprintKanbanPageV2: React.FC = () => {
     const [showAddStory, setShowAddStory] = useState(false);
     const [dueFilter, setDueFilter] = useState<'all' | 'today' | 'overdue' | 'top3' | 'critical'>('all');
     const [showFocusOnly, setShowFocusOnly] = useState(false);
-    const [showCompletedItems, setShowCompletedItems] = useState(true);
+    // Done items are hidden by default on the board's columns only on iPad landscape (the
+    // one device where 3 full columns are cramped) — everywhere else "Show completed" stays
+    // on, matching prior behaviour. Not persisted, same as before. Confirmed by Jim, 2026-07-24.
+    const [showCompletedItems, setShowCompletedItems] = useState(() => !(getDeviceInfo().isIPad && getDeviceInfo().isTablet));
     const [showAiScoredOnly, setShowAiScoredOnly] = useState(false);
     const [showDelegatedOnly, setShowDelegatedOnly] = useState(false);
     const [sortBy, setSortBy] = useState<'ai' | 'due' | 'priority' | 'default'>('default');
+    // iPad landscape defaults to the Triage table (less horizontal scrolling than 3 Kanban
+    // columns) unless the user has already picked a view explicitly, in which case that
+    // sticks. Confirmed by Jim, 2026-07-24.
     const [viewMode, setViewMode] = useState<'board' | 'table'>(() => {
-        try { return (localStorage.getItem('kanban_view_mode') as 'board' | 'table') || 'board'; } catch { return 'board'; }
+        try {
+            const stored = localStorage.getItem('kanban_view_mode');
+            if (stored === 'board' || stored === 'table') return stored;
+        } catch { /* noop */ }
+        const d = getDeviceInfo();
+        return (d.isIPad && d.isTablet) ? 'table' : 'board';
     });
     const [replanLoading, setReplanLoading] = useState(false);
     const [fullReplanLoading, setFullReplanLoading] = useState(false);
@@ -676,6 +687,7 @@ const SprintKanbanPageV2: React.FC = () => {
                                     onEditStory={setEditStory}
                                     onEditTask={setEditTask}
                                     onEditGoal={setEditGoal}
+                                    compactColumns={deviceInfo.isIPad && deviceInfo.isTablet}
                                 />
                             )}
                         </Card.Body>
