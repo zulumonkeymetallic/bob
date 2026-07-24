@@ -884,7 +884,11 @@ async function getCalendarClientForUser(uid) {
   // check, the fallback never ran and every reconnect since December silently had no
   // effect on what this function actually used. Reversed the priority: check the
   // collection that's actually maintained first.
-  const legacyDoc = await admin.firestore().collection('tokens').doc(uid).get();
+  const [legacyDoc, userDoc] = await Promise.all([
+    admin.firestore().collection('tokens').doc(uid).get(),
+    admin.firestore().collection('users').doc(uid).get(),
+  ]);
+  const userData = userDoc.data() || {};
   let tokens = null;
   if (legacyDoc.exists) {
     const legacyData = legacyDoc.data() || {};
@@ -898,8 +902,6 @@ async function getCalendarClientForUser(uid) {
     }
   }
   if (!tokens) {
-    const userDoc = await admin.firestore().collection('users').doc(uid).get();
-    const userData = userDoc.data() || {};
     tokens = userData.googleCalendarTokens || null;
   }
   if (!tokens) throw new Error('Google Calendar not connected');
