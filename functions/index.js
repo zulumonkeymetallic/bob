@@ -17247,9 +17247,17 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
   const db = ensureFirestore();
   const id = event.params.taskId;
   const ref = db.collection('tasks').doc(id);
-  // If the task document was deleted, proactively remove any stale index row
+  // If the task document was deleted, proactively remove any stale index row.
+  // Previously a bare `catch {}` here meant a failed cleanup left a permanently
+  // orphaned sprint_task_index row with no trace in the logs — confirmed live
+  // 2026-07-23: 322 of Jim's 570 index rows (56%) pointed at already-deleted
+  // tasks docs. Log failures now so a recurrence is actually visible.
   if (!after) {
-    try { await db.collection('sprint_task_index').doc(id).delete(); } catch { }
+    try {
+      await db.collection('sprint_task_index').doc(id).delete();
+    } catch (e) {
+      console.error('[onTaskWritten] failed to delete stale sprint_task_index row', id, e?.message || e);
+    }
     return;
   }
 
