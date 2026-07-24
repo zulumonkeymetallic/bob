@@ -2198,7 +2198,18 @@ exports._cleanupOrphanedCalendarEventsForAllUsers = async function(options = {})
       const r = await cleanupOrphanedCalendarEvents(p.id, options);
       results.push({ uid: p.id, ...r });
     } catch (e) {
+      // Confirmed live 2026-07-24: this step was throwing (invalid_client from
+      // the Google Calendar API) for Jim on every nightly run — silently, since
+      // the only trace was this in-memory results array, which nothing reads
+      // unless the callable is invoked directly and its response inspected.
+      // logCalendarIntegration writes to integration_logs, which every other
+      // step in this pipeline already uses for visibility — this step didn't.
       results.push({ uid: p.id, error: e?.message || String(e) });
+      await logCalendarIntegration(p.id, {
+        action: 'cleanup_orphans',
+        status: 'error',
+        error: e?.message || String(e),
+      });
     }
   }
   return { ok: true, results };
