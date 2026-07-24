@@ -681,3 +681,27 @@ a,
 .table tbody td {
   padding: 12px 16px !important;
 }
+
+/* Bootstrap tooltips (e.g. the top-toolbar sprint metric badges' hover cards) were
+   illegible — dark text on a dark background, and a translucent background letting page
+   content bleed through. The equivalent fix previously lived in App.css, which turned out
+   to be a dead file: never imported anywhere in the app, confirmed 2026-07-24 (grep across
+   the entire src tree found zero references). Every "fix" written there tonight was inert
+   from the moment it was saved. Moved here — theme-aware.css is confirmed live (imported
+   in App.tsx). */
+div.tooltip,
+div.tooltip.show {
+  --bs-tooltip-opacity: 1 !important;
+  opacity: 1 !important;
+}
+div.tooltip .tooltip-inner {
+  color: #fff !important;
+  background-color: #000 !important;
+  opacity: 1 !important;
+}
+div.tooltip .tooltip-arrow::before {
+  border-top-color: #000 !important;
+  border-bottom-color: #000 !important;
+  border-left-color: #000 !important;
+  border-right-color: #000 !important;
+}

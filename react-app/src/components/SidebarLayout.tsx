@@ -704,6 +704,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           marginRight: window.innerWidth < 768 ? '0' : `${
             (isRightSidebarVisible ? (isRightSidebarCollapsed ? 60 : 400) : 0)
             + (notificationsPinnedOpen ? (isRightSidebarVisible ? 10 : 340) : 0)
+            + (assistantOpen ? 400 : 0)
           }px`,
           transition: 'margin-right 0.3s ease',
           minWidth: 0,

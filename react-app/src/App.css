@@ -45,11 +45,14 @@
    inheriting this app's body text color instead of Bootstrap's own white-on-dark tooltip
    colors, so in light mode they rendered as dark text on a dark background — unreadable.
    Force the intended contrast regardless of theme. Confirmed by Jim, 2026-07-23. */
-.tooltip {
+div[role="tooltip"].tooltip,
+div.tooltip.show,
+div.tooltip.fade.show {
   --bs-tooltip-opacity: 1 !important;
   opacity: 1 !important;
 }
-.tooltip-inner {
+div.tooltip .tooltip-inner,
+div.tooltip.show .tooltip-inner {
   color: #fff !important;
   background-color: #000 !important;
   opacity: 1 !important;
@@ -967,6 +970,9 @@ p, .text-muted {
   color: var(--notion-text) !important;
 }
 
-/* Importing Bootstrap CSS */
-@import 'bootstrap/dist/css/bootstrap.min.css';
+/* bootstrap.min.css is already imported once in index.tsx — importing it again here
+   (at an invalid position, after other rules) caused the production minifier to merge
+   the two copies' identical .tooltip/.tooltip-inner selectors and silently drop this
+   file's !important overrides. Confirmed live 2026-07-24: the tooltip contrast fix
+   never actually shipped despite every deploy since claiming success. */
 @import 'bootstrap-icons/font/bootstrap-icons.css';

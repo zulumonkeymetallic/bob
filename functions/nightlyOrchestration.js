@@ -2051,6 +2051,44 @@ async function materializePlannerThemeBlocks({
       return;
     }
 
+    // Work is canonical: nothing may sit on top of it. Previously the block above only
+    // stopped Work itself from being skipped — whatever it overlapped stayed right where it
+    // was, visually stacked underneath. Confirmed by Jim, 2026-07-24 ("NOTHING should be
+    // placed on my work block"). Evict any BOB-linked item (has a storyId/taskId — proof BOB
+    // scheduled it, not something Jim typed into Google Calendar directly, which this must
+    // never touch) that overlaps the slot Work is about to occupy. Deleting rather than
+    // moving here is deliberate and safe: this step runs inside runCalendarPlannerJob, which
+    // is followed later in the same nightly chain by sprintForwardPlanner — deleting just
+    // resets the item to "unscheduled," and that later step finds it a real slot that
+    // already treats this same Work block as busy time (buildFreeSlotMap), so it can't just
+    // land right back here.
+    if (kind === 'work_shift' && overlapsExisting) {
+      const cand = Interval.fromDateTimes(start, end);
+      const evictees = existingBlocks.filter((block) => {
+        if (!(block.storyId || block.taskId)) return false;
+        const src = String(block.source || block.sourceType || '').toLowerCase();
+        if (src.includes('theme_allocation') || src.includes('work_shift') || src.includes('health_allocation')) return false;
+        const s = toDateTime(block.start, { defaultValue: null });
+        const e = toDateTime(block.end, { defaultValue: null });
+        if (!s || !e) return false;
+        return cand.overlaps(Interval.fromDateTimes(s, e));
+      });
+      for (const evictee of evictees) {
+        try {
+          await db.collection('calendar_blocks').doc(evictee.id).delete();
+          if (evictee.googleEventId) {
+            const calSync = require('./calendarSync');
+            await calSync.deleteGoogleCalendarEvent(userId, evictee.googleEventId).catch(() => {});
+          }
+          const idx = existingBlocks.findIndex((b) => b.id === evictee.id);
+          if (idx !== -1) existingBlocks.splice(idx, 1);
+          results.evicted = (results.evicted || 0) + 1;
+        } catch (e) {
+          console.warn('[materializePlannerThemeBlocks] failed to evict block overlapping Work', evictee.id, e?.message || e);
+        }
+      }
+    }
+
     const themeLabel = alloc.theme || (kind === 'health' ? 'Health & Fitness' : 'Work (Main Gig)');
     const payload = {
       ownerUid: userId,
