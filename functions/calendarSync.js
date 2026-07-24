@@ -911,6 +911,22 @@ async function getCalendarClientForUser(uid) {
   }
   const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
   oauth2Client.setCredentials(tokens);
+  // Nothing previously persisted a refreshed access_token (or a rotated refresh_token, if
+  // Google issues one) back to Firestore — each call refreshed in-memory only, for that one
+  // invocation. If Google ever rotates the refresh_token on use, the next call would present
+  // the now-already-consumed one and fail with invalid_client/invalid_grant — confirmed live
+  // 2026-07-24: a call that had just succeeded failed the exact same way moments later.
+  // Persist whatever the client hands back so subsequent calls use the current token.
+  oauth2Client.on('tokens', (newTokens) => {
+    const patch = {};
+    if (newTokens.access_token) patch.access_token = newTokens.access_token;
+    if (newTokens.refresh_token) patch.refresh_token = newTokens.refresh_token;
+    if (newTokens.expiry_date) patch.expiry_date = newTokens.expiry_date;
+    if (Object.keys(patch).length === 0) return;
+    patch.access_at = admin.firestore.FieldValue.serverTimestamp();
+    admin.firestore().collection('tokens').doc(uid).set(patch, { merge: true })
+      .catch((e) => console.warn('[getCalendarClientForUser] failed to persist refreshed token', uid, e?.message || e));
+  });
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
   return { calendar, userData };
 }

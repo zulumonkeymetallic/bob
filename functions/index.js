@@ -21217,3 +21217,19 @@ exports.debugCalendarCleanupDiag = httpsV2.onCall({
   }
 });
 
+// TEMPORARY — one-off delete for a specific Google Calendar event, needed because local
+// scripts can't reach the Secret Manager-bound OAuth params this runtime has. Deletable
+// once used. 2026-07-24.
+exports.debugCalendarDeleteEvent = httpsV2.onCall({
+  region: 'europe-west2',
+  invoker: 'public',
+  secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET],
+}, async (req) => {
+  const uid = req?.data?.uid;
+  const eventId = req?.data?.eventId;
+  if (!uid || !eventId) throw new functionsV2.https.HttpsError('invalid-argument', 'uid and eventId required');
+  const calSync = require('./calendarSync');
+  const r = await calSync.deleteGoogleCalendarEvent(uid, eventId);
+  return r;
+});
+
