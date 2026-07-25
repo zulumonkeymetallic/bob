@@ -5348,6 +5348,77 @@ async function assignMissingTimeOfDay() {
   return { totalAssigned, elapsedMs: Date.now() - stepStartMs };
 }
 
+// Bounded per-user runtime — Google Calendar deletes are one API call each, and a user with
+// hundreds of scheduled events must never be able to starve every step after this one in the
+// same 600s function budget. Users beyond the time budget are skipped for this run (their
+// stale events survive one more night) rather than the whole chain timing out.
+const CLEAR_BOB_EVENTS_TIME_BUDGET_MS = 90_000;
+
+/**
+ * Deletes every BOB-scheduled calendar_blocks doc (has a storyId/taskId — proof BOB placed
+ * it, never something the user typed into Google Calendar directly) and its linked Google
+ * Calendar event, for every user, at the start of each nightly run — before
+ * runCalendarPlanner/sprintForwardPlanner rebuild the day fresh. Confirmed by Jim,
+ * 2026-07-25: "I am expecting all bob created events to be deleted automatically each time
+ * nightly orchestration runs to ensure my gcal does not contain stale bob events." Wipe-and-
+ * rebuild rather than incrementally patch, so staleness (deleted stories, re-pointed
+ * scores, manual edits gone half-applied) can never accumulate silently — the existing
+ * end-of-chain cleanupOrphanedCalendarEvents step is left in place as a secondary safety
+ * net, not replaced, since it also catches anything this misses within a single run.
+ */
+async function clearBobScheduledEvents() {
+  const db = ensureFirestore();
+  const calSync = require('./calendarSync');
+  const profiles = await db.collection('profiles').get().catch(() => ({ docs: [] }));
+  const stepStartMs = Date.now();
+  let totalCandidates = 0, totalGcalDeleted = 0, totalGcalFailed = 0, totalFirestoreDeleted = 0;
+
+  for (const prof of profiles.docs) {
+    if (Date.now() - stepStartMs > CLEAR_BOB_EVENTS_TIME_BUDGET_MS) {
+      console.warn('[ClearBobEvents] time budget exhausted, deferring remaining users to next nightly run');
+      break;
+    }
+    const userId = prof.id;
+    try {
+      const snap = await db.collection('calendar_blocks').where('ownerUid', '==', userId).get();
+      const candidates = snap.docs.filter((doc) => {
+        const d = doc.data() || {};
+        return !!(d.storyId || d.taskId);
+      });
+      if (candidates.length === 0) continue;
+      totalCandidates += candidates.length;
+      // Sequential awaits here previously meant one Google API round-trip (~1-2s) per
+      // block, back-to-back — for an account with hundreds of accumulated stale blocks
+      // that alone blew past this function's 600s ceiling before the rebuild steps
+      // (runCalendarPlanner/sprintForwardPlanner) ever got a turn, leaving the calendar
+      // wiped with nothing rebuilt. Confirmed live 2026-07-25. Batched with modest
+      // concurrency, and now also time-budget-checked between batches, not just between
+      // users — a single user's backlog can no longer starve the rest of the chain.
+      const CONCURRENCY = 8;
+      for (let i = 0; i < candidates.length; i += CONCURRENCY) {
+        if (Date.now() - stepStartMs > CLEAR_BOB_EVENTS_TIME_BUDGET_MS) {
+          console.warn(`[ClearBobEvents] time budget exhausted mid-user ${userId}, deferring remaining blocks to next nightly run`);
+          break;
+        }
+        const batch = candidates.slice(i, i + CONCURRENCY);
+        await Promise.all(batch.map(async (doc) => {
+          const d = doc.data() || {};
+          if (d.googleEventId) {
+            const r = await calSync.deleteGoogleCalendarEvent(userId, d.googleEventId);
+            if (r.ok) totalGcalDeleted++; else totalGcalFailed++;
+          }
+          await doc.ref.delete();
+          totalFirestoreDeleted++;
+        }));
+      }
+      console.log(`[ClearBobEvents] user ${userId}: cleared ${candidates.length} BOB-scheduled blocks`);
+    } catch (err) {
+      console.warn(`[ClearBobEvents] failed for user ${userId}:`, err?.message || err);
+    }
+  }
+  return { totalCandidates, totalGcalDeleted, totalGcalFailed, totalFirestoreDeleted, elapsedMs: Date.now() - stepStartMs };
+}
+
 // Manual trigger to run the nightly chain (pointing → conversions → scoring+Top3 → calendar)
 async function runNightlyChainCore() {
   const steps = [
@@ -5371,6 +5442,7 @@ async function runNightlyChainCore() {
       },
     },
     { name: 'rolloverMissedChoresRoutines', fn: runRolloverForAllUsers },
+    { name: 'clearBobScheduledEvents', fn: clearBobScheduledEvents },
     { name: 'runCalendarPlanner', fn: runCalendarPlannerJob },
     { name: 'applyProjectedDueDates', fn: applyProjectedDueDatesForUnscheduledSprintItems },
     {

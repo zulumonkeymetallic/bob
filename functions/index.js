@@ -21208,13 +21208,59 @@ exports.debugCalendarCleanupDiag = httpsV2.onCall({
 }, async (req) => {
   const uid = req?.data?.uid;
   if (!uid) throw new functionsV2.https.HttpsError('invalid-argument', 'uid required');
+  const dryRun = req?.data?.dryRun !== false;
   const calSync = require('./calendarSync');
   try {
-    const r = await calSync._cleanupOrphanedCalendarEvents(uid, { dryRun: true });
+    const r = await calSync._cleanupOrphanedCalendarEvents(uid, { dryRun });
     return { ok: true, result: r };
   } catch (e) {
     return { ok: false, error: e?.message || String(e), code: e?.code || null, stack: String(e?.stack || '').split('\n').slice(0, 8) };
   }
+});
+
+// TEMPORARY — clears every BOB-scheduled calendar_blocks doc (has a storyId/taskId, proving
+// BOB placed it, not something Jim typed into Google Calendar directly) and its linked
+// Google Calendar event, ahead of a clean nightly rerun. Confirmed scope with Jim,
+// 2026-07-25: BOB-scheduled only, nothing he created himself. Deletable once used.
+exports.debugBulkDeleteBobEvents = httpsV2.onCall({
+  region: 'europe-west2',
+  invoker: 'public',
+  secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET],
+  timeoutSeconds: 540,
+}, async (req) => {
+  const uid = req?.data?.uid;
+  const dryRun = req?.data?.dryRun !== false;
+  if (!uid) throw new functionsV2.https.HttpsError('invalid-argument', 'uid required');
+  const calSync = require('./calendarSync');
+  const db = admin.firestore();
+  const snap = await db.collection('calendar_blocks').where('ownerUid', '==', uid).get();
+  const candidates = snap.docs.filter((doc) => {
+    const d = doc.data() || {};
+    return !!(d.storyId || d.taskId);
+  });
+  let gcalDeleted = 0, gcalFailed = 0, firestoreDeleted = 0;
+  const failures = [];
+  if (!dryRun) {
+    for (const doc of candidates) {
+      const d = doc.data() || {};
+      if (d.googleEventId) {
+        const r = await calSync.deleteGoogleCalendarEvent(uid, d.googleEventId);
+        if (r.ok) gcalDeleted++;
+        else { gcalFailed++; failures.push({ id: doc.id, reason: r.reason }); }
+      }
+      await doc.ref.delete();
+      firestoreDeleted++;
+    }
+  }
+  return {
+    ok: true,
+    dryRun,
+    candidateCount: candidates.length,
+    gcalDeleted,
+    gcalFailed,
+    firestoreDeleted,
+    failures: failures.slice(0, 10),
+  };
 });
 
 // TEMPORARY — one-off delete for a specific Google Calendar event, needed because local
