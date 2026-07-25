@@ -37,9 +37,15 @@ interface CoachVerdictBannerProps {
    * AiCoachPage) are unaffected.
    */
   compact?: boolean;
+  /**
+   * Dismissal is keyed per uid+date and shared across every mount, so dismissing this in
+   * the notification bell would also blank it where it's embedded as page content. Pass
+   * false in those places — the user dismisses notifications, not sections of a page.
+   */
+  dismissible?: boolean;
 }
 
-export const CoachVerdictBanner: React.FC<CoachVerdictBannerProps> = ({ compact = false }) => {
+export const CoachVerdictBanner: React.FC<CoachVerdictBannerProps> = ({ compact = false, dismissible = true }) => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
   const uid = currentUser?.uid;
@@ -109,7 +115,7 @@ export const CoachVerdictBanner: React.FC<CoachVerdictBannerProps> = ({ compact 
     }, () => setLastSyncMs(null));
   }, [uid]);
 
-  if (!coachConfigured || !coachData || dismissed) return null;
+  if (!coachConfigured || !coachData || (dismissible && dismissed)) return null;
 
   const { readinessLabel, readinessScore, briefingText } = coachData;
   const readinessPct = Math.round((readinessScore ?? 0) * 100);
@@ -157,12 +163,14 @@ export const CoachVerdictBanner: React.FC<CoachVerdictBannerProps> = ({ compact 
           <span style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--muted)' }}>
             AI Coach
           </span>
-          <button
-            onClick={handleDismiss}
-            style={{ background: 'none', border: 'none', padding: 0, fontSize: 10, color: 'var(--brand, #5f77dc)', cursor: 'pointer', textDecoration: 'underline' }}
-          >
-            Dismiss
-          </button>
+          {dismissible && (
+            <button
+              onClick={handleDismiss}
+              style={{ background: 'none', border: 'none', padding: 0, fontSize: 10, color: 'var(--brand, #5f77dc)', cursor: 'pointer', textDecoration: 'underline' }}
+            >
+              Dismiss
+            </button>
+          )}
         </div>
 
         <button

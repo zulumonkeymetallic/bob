@@ -23,6 +23,7 @@ import GlobalFitnessKpiBanner from './GlobalFitnessKpiBanner';
 import GlobalHealthProgressBanner from './GlobalHealthProgressBanner';
 import GlobalIntegrationStatus from './GlobalIntegrationStatus';
 import { useSidebar } from '../contexts/SidebarContext';
+import { useDeviceInfo } from '../utils/deviceDetection';
 
 interface StreamSectionProps {
   id: string;
@@ -76,6 +77,15 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
     try { return localStorage.getItem('notifications_pinned') === '1'; } catch { return false; }
   });
   const { isVisible: activityStreamVisible, setNotificationsPinnedOpen } = useSidebar();
+  const { isMobile } = useDeviceInfo();
+  // "Pinned" means "dock permanently and shift page content over" — SidebarLayout only
+  // reserves that margin on screens >=768px (window.innerWidth < 768 ? '0' : ...), so on
+  // mobile a pinned panel had no reserved space and just sat as a fixed 340px-wide overlay
+  // (nearly the full 375px viewport) on top of the page and the FAB, with no way to see or
+  // reach anything underneath. Mobile has no room to dock a permanent sidebar, so pinning
+  // is a no-op there — always fall back to the ordinary transient dropdown, which already
+  // sizes itself correctly (`min(92vw, 360px)`) and closes on outside click/Escape.
+  const effectivePinned = pinned && !isMobile;
 
   const handleVisibilityChange = useCallback((id: string, visible: boolean) => {
     setVisibleMap((prev) => (prev[id] === visible ? prev : { ...prev, [id]: visible }));
@@ -89,16 +99,16 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
   // this one open while the Activity Stream is also open would overlap it. Collapse to a
   // slim bar in exactly that situation — reverts automatically once the Activity Stream
   // closes, since this is a pure derivation, not separate state to keep in sync.
-  const collapsedToBar = pinned && open && activityStreamVisible;
+  const collapsedToBar = effectivePinned && open && activityStreamVisible;
 
   // Mirror into SidebarContext so page layouts (SidebarLayout's main content margin, same
   // mechanism already used for the Activity Stream sidebar) can reserve space instead of
   // letting this panel just overlap whatever's underneath. Confirmed by Jim, 2026-07-24:
   // pinned notifications should shift content the same way the Activity Stream does.
   useEffect(() => {
-    setNotificationsPinnedOpen(pinned && open);
+    setNotificationsPinnedOpen(effectivePinned && open);
     return () => setNotificationsPinnedOpen(false);
-  }, [pinned, open, setNotificationsPinnedOpen]);
+  }, [effectivePinned, open, setNotificationsPinnedOpen]);
 
   const togglePinned = () => {
     setPinned((prev) => {
@@ -113,7 +123,7 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
   }, [hasContent]);
 
   useEffect(() => {
-    if (!open || pinned) return;
+    if (!open || effectivePinned) return;
     const handleClick = (e: MouseEvent) => {
       if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) setOpen(false);
     };
@@ -126,11 +136,11 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
       document.removeEventListener('mousedown', handleClick);
       document.removeEventListener('keydown', handleKey);
     };
-  }, [open, pinned]);
+  }, [open, effectivePinned]);
 
   return (
     <div ref={wrapperRef} style={{ position: 'relative', display: hasContent ? 'block' : 'none' }}>
-      {open && !pinned && (
+      {open && !effectivePinned && (
         // The dropdown itself is a small, bounded panel with nothing behind it - the rest of
         // the page (including other header/card buttons that happen to sit near it, like the
         // Today's Plan card's Plan/Delta replan/Full replan row) stays fully visible AND
@@ -197,11 +207,11 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
       <div
         style={{
           display: open && !collapsedToBar ? 'block' : 'none',
-          ...(pinned
+          ...(effectivePinned
             ? { position: 'fixed', top: 56, right: 0, bottom: 0, marginTop: 0, borderRadius: 0, borderTop: 'none', borderRight: 'none', borderBottom: 'none' }
             : { position: 'absolute', top: '100%', right: 0, marginTop: 6, borderRadius: 10 }),
-          width: pinned ? 340 : 'min(92vw, 360px)',
-          maxHeight: pinned ? undefined : 520,
+          width: effectivePinned ? 340 : 'min(92vw, 360px)',
+          maxHeight: effectivePinned ? undefined : 520,
           overflowY: 'auto',
           background: 'var(--panel, #fff)',
           border: '1px solid var(--border, #e5e7eb)',
@@ -210,13 +220,18 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 4, marginBottom: 4 }}>
-          <button
-            onClick={togglePinned}
-            title={pinned ? 'Unpin' : 'Pin to right side'}
-            style={{ background: 'transparent', border: 'none', color: 'var(--muted, #9ca3af)', cursor: 'pointer', padding: 4, display: 'flex' }}
-          >
-            {pinned ? <PinOff size={14} /> : <Pin size={14} />}
-          </button>
+          {/* Pinning permanently docks the panel — meaningless on mobile (no room to reserve
+              a permanent 340px strip), so the toggle is hidden there rather than shown as a
+              no-op. */}
+          {!isMobile && (
+            <button
+              onClick={togglePinned}
+              title={pinned ? 'Unpin' : 'Pin to right side'}
+              style={{ background: 'transparent', border: 'none', color: 'var(--muted, #9ca3af)', cursor: 'pointer', padding: 4, display: 'flex' }}
+            >
+              {pinned ? <PinOff size={14} /> : <Pin size={14} />}
+            </button>
+          )}
           <button
             onClick={() => setOpen(false)}
             title="Close"

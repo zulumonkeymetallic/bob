@@ -593,6 +593,15 @@ service cloud.firestore {
       allow read: if isSignedIn() && request.auth.uid == uid;
       allow write: if false; // server-only via Cloud Functions
     }
+    // fitness_programme_cache: per-user iCal poll cache keyed by uid — written by
+    // pollFitnessProgrammes (coachFitnessScheduler.js). Had no rule at all, so every read
+    // from AiCoachPage's TrainingProgrammesSection was denied by default for every user,
+    // surfacing as an uncaught "Missing or insufficient permissions" promise rejection on
+    // every Coach page load, found while verifying today's coach mobile/desktop changes.
+    match /fitness_programme_cache/{uid} {
+      allow read: if isSignedIn() && request.auth.uid == uid;
+      allow write: if false; // server-only via Cloud Functions
+    }
     // coach_photos: body composition photo gallery per user
     match /coach_photos/{uid} {
       allow read: if isSignedIn() && request.auth.uid == uid;

@@ -894,15 +894,36 @@ exports.provisionIronmanGoals = httpsV2.onCall({ region: REGION }, async (req) =
   }
 
   // Guard — already provisioned?
-  const existingSnap = await firestore
-    .collection('goals')
-    .where('ownerUid', '==', uid)
-    .where('title', '==', 'Ironman 2027')
-    .limit(1)
-    .get();
+  // Identity comes from the profile pointer first, then the goal's *shape* (health umbrella)
+  // — never its title. Matching on the literal string 'Ironman 2027' meant renaming the goal
+  // (or a race date in any other year) made this guard miss, and re-running setup would
+  // silently build a second umbrella + four more phase goals alongside the first.
+  let existingUmbrellaId = null;
 
-  if (!existingSnap.empty) {
-    const umbrellaId = existingSnap.docs[0].id;
+  const profileSnap = await firestore.collection('profiles').doc(uid).get();
+  const pointerId = profileSnap.data()?.ironmanUmbrellaGoalId ?? null;
+  if (pointerId) {
+    // Verify it still exists — the pointer outlives a goal deleted from the Goals UI.
+    const pointedDoc = await firestore.collection('goals').doc(pointerId).get();
+    if (pointedDoc.exists && pointedDoc.data()?.ownerUid === uid) {
+      existingUmbrellaId = pointerId;
+    }
+  }
+
+  if (!existingUmbrellaId) {
+    // Equality-only query — served by single-field indexes, no composite index needed.
+    const existingSnap = await firestore
+      .collection('goals')
+      .where('ownerUid', '==', uid)
+      .where('goalKind', '==', 'umbrella')
+      .where('theme', '==', 1) // Health — don't mistake a career/wealth umbrella for this one
+      .limit(1)
+      .get();
+    if (!existingSnap.empty) existingUmbrellaId = existingSnap.docs[0].id;
+  }
+
+  if (existingUmbrellaId) {
+    const umbrellaId = existingUmbrellaId;
     const phasesSnap = await firestore
       .collection('goals')
       .where('ownerUid', '==', uid)
@@ -914,6 +935,14 @@ exports.provisionIronmanGoals = httpsV2.onCall({ region: REGION }, async (req) =
       .where('isActive', '==', true)
       .limit(1)
       .get();
+    // Repair the pointer when the umbrella was found by shape (pointer missing or stale) so
+    // the next call — and the UI's own fast path — resolves without falling back to a query.
+    if (pointerId !== umbrellaId) {
+      await firestore.collection('profiles').doc(uid).set(
+        { ironmanUmbrellaGoalId: umbrellaId },
+        { merge: true }
+      );
+    }
     await logCoachEvent(uid, 'provision_complete', { umbrellaId, alreadyExisted: true });
     return {
       ok: true,

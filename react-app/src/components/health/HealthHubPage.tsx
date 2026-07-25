@@ -1,33 +1,35 @@
 /**
  * HealthHubPage — /health and /health/:tab
- * Unified tabbed hub replacing the three scattered health routes.
- * Tabs: Metrics | Workouts | Coach
- * Old routes (/fitness, /coach, /fitness/full) redirect here via App.tsx.
+ * Unified tabbed hub. Tabs: Metrics | Workouts
+ * /fitness/full, /workouts, /running-results and /parkrun-results redirect here.
+ * /fitness and /coach do NOT — they remain their own routes (MetricsPage / CoachHubPage).
+ *
+ * The AI Coach lives at /coach (CoachHubPage) and nowhere else. This hub used to render a
+ * third copy of AiCoachPage in its own tab; /health/coach now redirects there instead, so
+ * there is one coach screen with one URL rather than the same page at three addresses.
  */
 import React from 'react';
-import { Nav, Container } from 'react-bootstrap';
-import { useNavigate, useParams } from 'react-router-dom';
-import { Activity, Brain, TrendingUp } from 'lucide-react';
+import { Nav } from 'react-bootstrap';
+import { Navigate, useNavigate, useParams } from 'react-router-dom';
+import { Activity, TrendingUp } from 'lucide-react';
 import MetricsPage from '../MetricsPage';
 import WorkoutsDashboard from '../WorkoutsDashboard';
-import AiCoachPage from '../coach/AiCoachPage';
 
-type HealthTab = 'metrics' | 'workouts' | 'coach';
+type HealthTab = 'metrics' | 'workouts';
 
 const TABS: Array<{ key: HealthTab; label: string; icon: React.ReactNode }> = [
   { key: 'metrics',  label: 'Metrics',   icon: <TrendingUp size={14} /> },
   { key: 'workouts', label: 'Workouts',  icon: <Activity size={14} /> },
-  { key: 'coach',    label: 'AI Coach',  icon: <Brain size={14} /> },
 ];
 
 const HealthHubPage: React.FC = () => {
   const { tab } = useParams<{ tab?: string }>();
   const navigate = useNavigate();
 
-  const activeTab: HealthTab =
-    tab === 'workouts' ? 'workouts' :
-    tab === 'coach'    ? 'coach'    :
-    'metrics';
+  // Preserve existing /health/coach links and bookmarks.
+  if (tab === 'coach') return <Navigate to="/coach" replace />;
+
+  const activeTab: HealthTab = tab === 'workouts' ? 'workouts' : 'metrics';
 
   const handleTab = (key: HealthTab) => {
     navigate(key === 'metrics' ? '/health' : `/health/${key}`, { replace: true });
@@ -58,7 +60,6 @@ const HealthHubPage: React.FC = () => {
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
         {activeTab === 'metrics'  && <MetricsPage />}
         {activeTab === 'workouts' && <WorkoutsDashboard />}
-        {activeTab === 'coach'    && <AiCoachPage />}
       </div>
     </div>
   );

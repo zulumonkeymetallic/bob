@@ -9,7 +9,7 @@
  *   1. Quick-provision the 4-phase Ironman structure automatically
  *   2. Link an existing umbrella health goal they already created via Goals
  *
- * The coach reads coach_daily (written at 05:00 by CoachOrchestrator) and
+ * The coach reads coach_daily (written at 04:00 by CoachOrchestrator) and
  * surfaces what it *did today* — not just numbers, but explicit actions taken.
  */
 
@@ -35,6 +35,7 @@ import { saveFocusWizardPrefill } from '../../services/focusGoalsService';
 import { CoachVerdictBanner } from './CoachVerdictBanner';
 import { AiCoachPhotoGallery } from './AiCoachPhotoGallery';
 import FitnessKpiGrid from '../fitness/FitnessKpiGrid';
+import { useDeviceInfo } from '../../utils/deviceDetection';
 import type { CoachDaily } from '../../types/CoachTypes';
 import './AiCoachPage.css';
 
@@ -206,7 +207,12 @@ const PhaseCard: React.FC<{
   coachData: CoachDaily;
   weeklyKpiRows?: any[];
   onNavigate?: (path: string) => void;
-}> = ({ phase, coachData, weeklyKpiRows, onNavigate }) => {
+  // Mobile gets phase name/progress only — the 12-week KPI grid and per-phase KPI bars are
+  // dense, desktop-width content (each grid row alone needs ~300px to read); cramming them
+  // into a phone-width card was the "same dashboard, just squeezed" problem, not an adapted
+  // mobile view. Full detail is still one tap away via `onNavigate('/metrics')`.
+  compact?: boolean;
+}> = ({ phase, coachData, weeklyKpiRows, onNavigate, compact = false }) => {
   const [phaseGoal, setPhaseGoal] = useState<any>(null);
 
   useEffect(() => {
@@ -255,8 +261,8 @@ const PhaseCard: React.FC<{
           />
         </div>
 
-        {/* Weekly sport KPI grid (12 weeks) */}
-        {weeklyKpiRows && weeklyKpiRows.length > 0 && (
+        {/* Weekly sport KPI grid (12 weeks) — desktop only, see `compact` doc above */}
+        {!compact && weeklyKpiRows && weeklyKpiRows.length > 0 && (
           <div className="mb-3">
             <div className="d-flex align-items-center justify-content-between mb-2">
               <span style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--bs-secondary)' }}>
@@ -277,7 +283,7 @@ const PhaseCard: React.FC<{
         )}
 
         {/* Phase KPIs */}
-        {kpisV2.length > 0 && (
+        {!compact && kpisV2.length > 0 && (
           <div>
             <div className="text-muted mb-2" style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
               Phase KPIs
@@ -448,7 +454,7 @@ const SetupScreen: React.FC<{ onComplete: () => void }> = ({ onComplete }) => {
       <div className="alert alert-info small mb-4">
         <strong>How it works:</strong> The coach reads your active Focus Goal's end date as your
         race date, then creates a 4-phase training structure (Base → Build → Peak → Taper) in your
-        Goals. Each morning at 05:00 it reads your HealthKit + Strava data and takes action —
+        Goals. Each morning at 04:00 it reads your HealthKit + Strava data and takes action —
         adapting workouts, scaling macros, and sending your Telegram briefing.
       </div>
 
@@ -879,6 +885,7 @@ const ManualProteinCard: React.FC<{
 export const AiCoachPage: React.FC = () => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
+  const { isMobile } = useDeviceInfo();
   const uid = currentUser?.uid;
   const [hasUmbrella, setHasUmbrella] = useState<boolean | null>(null);
   const [umbrellaGoalId, setUmbrellaGoalId] = useState<string | null>(null);
@@ -939,7 +946,7 @@ export const AiCoachPage: React.FC = () => {
     return unsub;
   }, [uid, hasUmbrella, today]);
 
-  // Coach data is written nightly at 05:00 by runCoachOrchestratorNightly.
+  // Coach data is written nightly at 04:00 by runCoachOrchestratorNightly.
   // Do not call getCoachToday from the UI — it causes errors before goals are provisioned.
 
   // Weekly photo prompt
@@ -1073,7 +1080,7 @@ export const AiCoachPage: React.FC = () => {
         <div>
           <h4 className="fw-bold mb-0">🏊‍♂️ Ironman Coach</h4>
           <p className="text-muted small mb-0">
-            Proactive. Agentic. Daily at 05:00.
+            Proactive. Agentic. Daily at 04:00.
             {lastHealthKitSync !== null && (
               <span className="ms-2" style={{ fontSize: '0.7rem', color: 'var(--bs-secondary)' }}>
                 · HealthKit synced {(() => {
@@ -1120,8 +1127,11 @@ export const AiCoachPage: React.FC = () => {
         />
       </div>
 
-      {/* Verdict banner (integrates with existing BOB banner system) */}
-      <CoachVerdictBanner />
+      {/* Verdict banner (integrates with existing BOB banner system). On mobile this same
+          verdict is rendered further down as the AI-assessment card, in the metrics → plan →
+          assessment order — showing both would be the same readiness score twice on one
+          screen. */}
+      {!isMobile && <CoachVerdictBanner />}
 
       {/* Weekly photo prompt */}
       {weeklyPromptActive && (
@@ -1154,7 +1164,7 @@ export const AiCoachPage: React.FC = () => {
                 <div style={{ fontSize: '2rem' }}>✅</div>
                 <div>
                   <div className="fw-semibold">Coach is set up</div>
-                  <div className="text-muted small">Daily briefing runs at 05:00 — today's data will appear here tomorrow morning.</div>
+                  <div className="text-muted small">Coach runs at 04:00, Telegram briefing at 07:00 — today's data will appear here tomorrow morning.</div>
                 </div>
               </div>
               {phaseGoals.length > 0 && (
@@ -1185,20 +1195,33 @@ export const AiCoachPage: React.FC = () => {
           </div>
         )}
 
-        {/* What the coach did today */}
-        {coachData && <CoachActionsToday coachData={coachData} />}
-
-        {/* Phase card — wide: carries the 12-week KPI grid, benefits from the extra room */}
+        {/* Training plan / phase. On mobile this sits directly under the vitals so the order
+            reads metrics → plan → AI assessment; on desktop it stays wide because it carries
+            the 12-week KPI grid, which needs the room. */}
         {phase && coachData && (
-          <div className="ai-coach-grid-wide">
+          <div className={isMobile ? undefined : 'ai-coach-grid-wide'}>
             <PhaseCard
               phase={phase}
               coachData={coachData}
               weeklyKpiRows={weeklyKpiRows.length > 0 ? weeklyKpiRows : undefined}
               onNavigate={navigate}
+              compact={isMobile}
             />
           </div>
         )}
+
+        {/* AI assessment — the readiness verdict as a notification-style card, matching how
+            it appears in the global Notification Stream. */}
+        {isMobile && (
+          <div className="card border-0 shadow-sm">
+            <div className="card-body">
+              <CoachVerdictBanner compact dismissible={false} />
+            </div>
+          </div>
+        )}
+
+        {/* What the coach did today */}
+        {coachData && <CoachActionsToday coachData={coachData} />}
 
         {/* Macros */}
         {macros && (
