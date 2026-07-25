@@ -1,7 +1,10 @@
 /**
  * FitnessTabBar — iOS-style fixed bottom tab bar.
  *
- * Renders only on the five linked routes (Home / Fitness / Coach / Goals / Tasks).
+ * Renders only on the five linked routes (Home / Fitness / Coach / Goals / Tasks), and only
+ * on mobile-width screens. Had no device check at all until 2026-07-25 — it showed on these
+ * routes at ANY viewport width, stacking with SidebarLayout's own desktop sidebar rail and
+ * reading as two navigation menus on screen simultaneously even on a full desktop window.
  * Mounted once in App.tsx alongside the FloatingAssistantButton so it persists
  * across navigation within that route group without remounting on tab change.
  */
@@ -9,6 +12,7 @@
 import React, { useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Home, Heart, Dumbbell, Target, ListChecks, type LucideIcon } from 'lucide-react';
+import { useDeviceInfo } from '../../utils/deviceDetection';
 
 const BODY_CLASS = 'has-fitness-tab-bar';
 const TAB_BAR_HEIGHT_PX = 64;
@@ -34,11 +38,14 @@ const SHOW_ON = TABS.flatMap(t => [t.path]);
 export const FitnessTabBar: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
+  const { isMobile } = useDeviceInfo();
   const pathname = location.pathname;
 
-  const visible = SHOW_ON.some(p => pathname === p || pathname.startsWith(`${p}/`))
+  const visible = isMobile && (
+    SHOW_ON.some(p => pathname === p || pathname.startsWith(`${p}/`))
     || pathname === '/ai-coach'
-    || pathname.startsWith('/ai-coach/');
+    || pathname.startsWith('/ai-coach/')
+  );
 
   useEffect(() => {
     if (!visible) return undefined;

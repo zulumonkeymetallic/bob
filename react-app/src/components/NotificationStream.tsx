@@ -76,7 +76,7 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
   const [pinned, setPinned] = useState(() => {
     try { return localStorage.getItem('notifications_pinned') === '1'; } catch { return false; }
   });
-  const { isVisible: activityStreamVisible, setNotificationsPinnedOpen } = useSidebar();
+  const { isVisible: activityStreamVisible, isCollapsed: activityStreamCollapsed, setNotificationsPinnedOpen } = useSidebar();
   const { isMobile } = useDeviceInfo();
   // "Pinned" means "dock permanently and shift page content over" — SidebarLayout only
   // reserves that margin on screens >=768px (window.innerWidth < 768 ? '0' : ...), so on
@@ -95,11 +95,13 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
   const hasContent = activeCount > 0;
   const prominent = activeCount > 1;
 
-  // Both this panel and GlobalSidebar's Activity Stream dock to the right edge, so pinning
-  // this one open while the Activity Stream is also open would overlap it. Collapse to a
-  // slim bar in exactly that situation — reverts automatically once the Activity Stream
-  // closes, since this is a pure derivation, not separate state to keep in sync.
-  const collapsedToBar = effectivePinned && open && activityStreamVisible;
+  // Both this panel and GlobalSidebar's Activity Stream dock to the right edge. Previously,
+  // pinning notifications while the Activity Stream was also open collapsed this panel down
+  // to a 10px sliver — which per Jim, 2026-07-25, reads as "notifications don't show and
+  // can't be pinned" rather than as a deliberate collapsed state. Instead, dock this panel
+  // immediately to the LEFT of whatever width the Activity Stream is currently occupying, at
+  // its normal full size — both stay genuinely visible and usable side by side.
+  const activityStreamReservedWidth = activityStreamVisible ? (activityStreamCollapsed ? 60 : 400) : 0;
 
   // Mirror into SidebarContext so page layouts (SidebarLayout's main content margin, same
   // mechanism already used for the Activity Stream sidebar) can reserve space instead of
@@ -188,27 +190,11 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
         </span>
       </button>
 
-      {/* Collapsed-to-a-bar state: pinned + open, but the Activity Stream sidebar is also
-          open and would otherwise overlap it. A slim strip rather than fully hiding it, so
-          it's clear notifications are still there and will reappear once the Activity
-          Stream closes. */}
-      {collapsedToBar && (
-        <div
-          style={{
-            position: 'fixed', top: 56, right: 0, bottom: 0, width: 10,
-            background: prominent ? 'var(--brand, #5f77dc)' : 'var(--muted, #9ca3af)',
-            zIndex: 999, // just below GlobalSidebar (1000) — it owns the right edge right now
-            cursor: 'default',
-          }}
-          title={`${activeCount} notification${activeCount === 1 ? '' : 's'} — collapsed while Activity Stream is open`}
-        />
-      )}
-
       <div
         style={{
-          display: open && !collapsedToBar ? 'block' : 'none',
+          display: open ? 'block' : 'none',
           ...(effectivePinned
-            ? { position: 'fixed', top: 56, right: 0, bottom: 0, marginTop: 0, borderRadius: 0, borderTop: 'none', borderRight: 'none', borderBottom: 'none' }
+            ? { position: 'fixed', top: 56, right: activityStreamReservedWidth, bottom: 0, marginTop: 0, borderRadius: 0, borderTop: 'none', borderRight: activityStreamReservedWidth > 0 ? undefined : 'none', borderBottom: 'none' }
             : { position: 'absolute', top: '100%', right: 0, marginTop: 6, borderRadius: 10 }),
           width: effectivePinned ? 340 : 'min(92vw, 360px)',
           maxHeight: effectivePinned ? undefined : 520,

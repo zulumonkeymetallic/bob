@@ -688,22 +688,31 @@ a,
    to be a dead file: never imported anywhere in the app, confirmed 2026-07-24 (grep across
    the entire src tree found zero references). Every "fix" written there tonight was inert
    from the moment it was saved. Moved here — theme-aware.css is confirmed live (imported
-   in App.tsx). */
+   in App.tsx).
+   That first fix forced a hardcoded black background/white text "regardless of theme" —
+   which did fix the illegibility, but meant a tooltip in LIGHT theme now renders as a stark
+   black box on an otherwise light page. Use this file's own --bg-surface/--text-primary/
+   --border-primary variables (defined above, this file being the one actually live) instead
+   of hardcoded colours, so the tooltip matches whichever theme is actually active — a light
+   control in light mode, a dark one in dark mode — while keeping the real contrast fix
+   (2026-07-25). Nearly repeated the exact App.css mistake here by reaching for --panel/--text
+   — those names only exist in that dead file and resolve to nothing in the live cascade. */
 div.tooltip,
 div.tooltip.show {
   --bs-tooltip-opacity: 1 !important;
   opacity: 1 !important;
 }
 div.tooltip .tooltip-inner {
-  color: #fff !important;
-  background-color: #000 !important;
+  color: var(--text-primary) !important;
+  background-color: var(--bg-surface) !important;
+  border: 1px solid var(--border-primary);
   opacity: 1 !important;
 }
 div.tooltip .tooltip-arrow::before {
-  border-top-color: #000 !important;
-  border-bottom-color: #000 !important;
-  border-left-color: #000 !important;
-  border-right-color: #000 !important;
+  border-top-color: var(--bg-surface) !important;
+  border-bottom-color: var(--bg-surface) !important;
+  border-left-color: var(--bg-surface) !important;
+  border-right-color: var(--bg-surface) !important;
 }
 /* .text-muted sets its own gray color directly on whichever element it's applied to
    (several tooltip bodies in the app wrap secondary detail lines in it) — a direct rule
@@ -711,5 +720,5 @@ div.tooltip .tooltip-arrow::before {
    important or not, so the fix above never reached this text. Confirmed by Jim,
    2026-07-24: still illegible after the first fix, specifically the secondary line. */
 div.tooltip .text-muted {
-  color: rgba(255, 255, 255, 0.75) !important;
+  color: var(--text-secondary) !important;
 }

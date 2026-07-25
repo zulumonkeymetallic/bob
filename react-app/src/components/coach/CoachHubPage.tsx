@@ -10,6 +10,7 @@ import { Brain, TrendingUp } from 'lucide-react';
 import AiCoachPage from './AiCoachPage';
 import FinanceCoachPage from '../finance/FinanceCoachPage';
 import WorkSurfaceNav from '../common/WorkSurfaceNav';
+import { useDeviceInfo } from '../../utils/deviceDetection';
 
 type CoachTab = 'ai' | 'finance';
 
@@ -21,6 +22,7 @@ const TABS: Array<{ key: CoachTab; label: string; icon: React.ReactNode }> = [
 const CoachHubPage: React.FC = () => {
   const { tab } = useParams<{ tab?: string }>();
   const navigate = useNavigate();
+  const { isMobile } = useDeviceInfo();
 
   const activeTab: CoachTab = tab === 'finance' ? 'finance' : 'ai';
 
@@ -31,7 +33,11 @@ const CoachHubPage: React.FC = () => {
   return (
     <div className="d-flex flex-column" style={{ height: '100%', minHeight: 0 }}>
       <div className="border-bottom px-3 pt-2" style={{ flexShrink: 0, background: 'var(--bs-body-bg)' }}>
-        <WorkSurfaceNav />
+        {/* WorkSurfaceNav's own doc comment says it's "deliberately not rendered on...
+            Mobile (bottom tab bar)" — this page never actually wired that up, so the
+            desktop quick-jump pills (Overview/Calendar/Kanban/Roadmap/Plan/Coach) were
+            showing above the bottom tab bar on phones too. */}
+        {!isMobile && <WorkSurfaceNav />}
         <Nav variant="tabs" className="border-0">
           {TABS.map(({ key, label, icon }) => (
             <Nav.Item key={key}>

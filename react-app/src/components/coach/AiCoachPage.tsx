@@ -1272,7 +1272,7 @@ export const AiCoachPage: React.FC = () => {
             <h6 className="text-muted mb-3" style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
               Progress Photos
             </h6>
-            <AiCoachPhotoGallery onUploadClick={() => fileInputRef.current?.click()} />
+            <AiCoachPhotoGallery />
           </div>
         </div>
 

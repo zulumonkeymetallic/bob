@@ -695,15 +695,13 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         style={{
           paddingTop: deviceInfo.isMobile ? '60px' : '0',
           // Reserve space for both the Activity Stream sidebar and pinned-open Notifications
-          // panel — they dock to the same right edge, so their reserved widths stack. When
-          // both are open at once, NotificationStream collapses itself to a slim 10px bar
-          // (see its own collapsedToBar logic) rather than a full 340px panel, so only 10px
-          // extra is needed in that case. Confirmed by Jim, 2026-07-24: pinned notifications
-          // should shift page content the same way the Activity Stream already does, not
-          // just overlap it.
+          // panel — they dock to the same right edge. NotificationStream docks itself to the
+          // left of the Activity Stream's current width rather than collapsing away (a 10px
+          // collapsed sliver read as "notifications don't show and can't be pinned" — fixed
+          // per Jim, 2026-07-25), so both reserved widths always stack in full, never just 10px.
           marginRight: window.innerWidth < 768 ? '0' : `${
             (isRightSidebarVisible ? (isRightSidebarCollapsed ? 60 : 400) : 0)
-            + (notificationsPinnedOpen ? (isRightSidebarVisible ? 10 : 340) : 0)
+            + (notificationsPinnedOpen ? 340 : 0)
             + (assistantOpen ? 400 : 0)
           }px`,
           transition: 'margin-right 0.3s ease',

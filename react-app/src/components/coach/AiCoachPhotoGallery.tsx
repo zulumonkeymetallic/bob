@@ -18,11 +18,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import type { CoachPhoto } from '../../types/CoachTypes';
 
-interface Props {
-  onUploadClick: () => void;
-}
-
-export const AiCoachPhotoGallery: React.FC<Props> = ({ onUploadClick }) => {
+export const AiCoachPhotoGallery: React.FC = () => {
   const { currentUser } = useAuth();
   const uid = currentUser?.uid;
   const [photos, setPhotos] = useState<(CoachPhoto & { id: string })[]>([]);
@@ -90,15 +86,12 @@ export const AiCoachPhotoGallery: React.FC<Props> = ({ onUploadClick }) => {
 
       {/* Photo grid */}
       {photos.length === 0 ? (
+        // Upload lives in exactly one place — the "Photo" button in the page header — rather
+        // than duplicating it here too. Two buttons that both open the same file picker read
+        // as two different actions until you try them.
         <div className="text-center py-8 text-gray-500 text-sm">
           <div className="text-3xl mb-2">📷</div>
-          <p>No progress photos yet.</p>
-          <button
-            onClick={onUploadClick}
-            className="mt-3 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg transition-colors"
-          >
-            Upload first photo
-          </button>
+          <p>No progress photos yet — use the Photo button above to add one.</p>
         </div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
