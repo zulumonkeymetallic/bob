@@ -227,7 +227,6 @@ interface EveningPullForwardSuggestion {
 }
 
 const FINANCE_WINDOW_DAYS = 5;
-const INTEGRATION_STALE_DAYS = 7;
 const NEXT_WORK_REFRESH_MS = 60 * 60 * 1000;
 const FINANCE_INCOME_BUCKETS = new Set(['income', 'net_salary', 'irregular_income']);
 const FINANCE_UNCATEGORISED_BUCKETS = new Set(['unknown', 'uncategorized', 'uncategorised']);
@@ -612,8 +611,6 @@ const Dashboard: React.FC = () => {
   const [monzoSummary, setMonzoSummary] = useState<MonzoSummary | null>(null);
   const [financeWindowSummary, setFinanceWindowSummary] = useState<FinanceWindowSummary | null>(null);
   const [monzoIntegrationStatus, setMonzoIntegrationStatus] = useState<any | null>(null);
-  const [monzoReconnectBusy, setMonzoReconnectBusy] = useState(false);
-  const [monzoReconnectMsg, setMonzoReconnectMsg] = useState<string | null>(null);
   const [fitnessOverviewSnapshot, setFitnessOverviewSnapshot] = useState<any | null>(null);
   const [runAnalysisSnapshot, setRunAnalysisSnapshot] = useState<any | null>(null);
   const [fitnessTrendSummary, setFitnessTrendSummary] = useState<FitnessTrendSummary | null>(null);
@@ -668,7 +665,6 @@ const Dashboard: React.FC = () => {
   } | null>(null);
   const timelineScrollBodyRef = useRef<HTMLDivElement | null>(null);
   const timelineNowMarkerRef = useRef<HTMLDivElement | null>(null);
-  const showPersistentDashboardBanners = dashboardDeviceType !== 'mobile';
 
   const decodeToDate = useCallback((value: any): Date | null => {
     if (value == null) return null;
@@ -929,82 +925,6 @@ const Dashboard: React.FC = () => {
     ));
   }, [decodeToDate, monzoIntegrationStatus, monzoSummary?.updatedAt, profileSnapshot?.monzoLastSyncAt, profileSnapshot?.monzoLastSyncedAt]);
 
-  const monzoSyncAgeDays = useMemo(() => {
-    if (!monzoLastSyncDate) return null;
-    const diffMs = Date.now() - monzoLastSyncDate.getTime();
-    return Math.floor(diffMs / (24 * 60 * 60 * 1000));
-  }, [monzoLastSyncDate]);
-
-  const showMonzoReconnectBanner = useMemo(() => {
-    const connected = !!monzoIntegrationStatus?.connected;
-    if (!connected) return true;
-    if (monzoSyncAgeDays == null) return true;
-    return monzoSyncAgeDays >= 3;
-  }, [monzoIntegrationStatus, monzoSyncAgeDays]);
-
-  const stravaConnected = !!profileSnapshot?.stravaConnected;
-  const stravaLastSyncDate = useMemo(() => {
-    if (!profileSnapshot) return null;
-    return decodeToDate(
-      profileSnapshot.stravaLastSyncAt
-      ?? profileSnapshot.stravaLastSyncEpochMs
-      ?? profileSnapshot.stravaLastSync,
-    );
-  }, [decodeToDate, profileSnapshot]);
-
-  const stravaSyncAgeDays = useMemo(() => {
-    if (!stravaLastSyncDate) return null;
-    const diffMs = Date.now() - stravaLastSyncDate.getTime();
-    return Math.floor(diffMs / (24 * 60 * 60 * 1000));
-  }, [stravaLastSyncDate]);
-
-  const showStravaReconnectBanner = useMemo(() => {
-    if (!stravaConnected || stravaSyncAgeDays == null) return false;
-    return stravaSyncAgeDays >= 3;
-  }, [stravaConnected, stravaSyncAgeDays]);
-
-  const traktConnected = !!(profileSnapshot?.traktConnected || profileSnapshot?.traktUser);
-  const traktLastSyncDate = useMemo(() => {
-    if (!profileSnapshot) return null;
-    return decodeToDate(
-      profileSnapshot.traktLastSyncAt
-      ?? profileSnapshot.traktLastSyncEpochMs
-      ?? profileSnapshot.traktLastSync,
-    );
-  }, [decodeToDate, profileSnapshot]);
-
-  const traktSyncAgeDays = useMemo(() => {
-    if (!traktLastSyncDate) return null;
-    const diffMs = Date.now() - traktLastSyncDate.getTime();
-    return Math.floor(diffMs / (24 * 60 * 60 * 1000));
-  }, [traktLastSyncDate]);
-
-  const showTraktReconnectBanner = useMemo(() => {
-    if (!traktConnected || traktSyncAgeDays == null) return false;
-    return traktSyncAgeDays >= INTEGRATION_STALE_DAYS;
-  }, [traktConnected, traktSyncAgeDays]);
-
-  const hardcoverConfigured = !!profileSnapshot?.hardcoverToken;
-  const hardcoverLastSyncDate = useMemo(() => {
-    if (!profileSnapshot) return null;
-    return decodeToDate(
-      profileSnapshot.hardcoverLastSyncAt
-      ?? profileSnapshot.hardcoverLastSyncEpochMs
-      ?? profileSnapshot.hardcoverLastSync,
-    );
-  }, [decodeToDate, profileSnapshot]);
-
-  const hardcoverSyncAgeDays = useMemo(() => {
-    if (!hardcoverLastSyncDate) return null;
-    const diffMs = Date.now() - hardcoverLastSyncDate.getTime();
-    return Math.floor(diffMs / (24 * 60 * 60 * 1000));
-  }, [hardcoverLastSyncDate]);
-
-  const showHardcoverReconnectBanner = useMemo(() => {
-    if (!hardcoverConfigured || hardcoverSyncAgeDays == null) return false;
-    return hardcoverSyncAgeDays >= INTEGRATION_STALE_DAYS;
-  }, [hardcoverConfigured, hardcoverSyncAgeDays]);
-
   const healthBannerData = useMemo(() => {
     if (!profileSnapshot) return null;
 
@@ -1236,29 +1156,6 @@ const Dashboard: React.FC = () => {
     if (!youtubeTakeoutLastImportDate) return true;
     return (youtubeTakeoutAgeDays ?? 0) >= 60;
   }, [currentUser, youtubeTakeoutAgeDays, youtubeTakeoutLastImportDate]);
-
-  const handleMonzoReconnect = useCallback(async () => {
-    if (!currentUser) return;
-    setMonzoReconnectMsg(null);
-    setMonzoReconnectBusy(true);
-    try {
-      const createSession = httpsCallable(functions, 'createMonzoOAuthSession');
-      const res: any = await createSession({ origin: window.location.origin });
-      const data = res?.data || res;
-      const sessionId = data?.sessionId;
-      const startUrl = data?.startUrl || (sessionId ? `${window.location.origin}/api/monzo/start?session=${sessionId}` : null);
-      if (!startUrl) throw new Error('Unable to resolve Monzo start URL');
-      const popup = window.open(startUrl, 'monzo-oauth', 'width=480,height=720');
-      if (!popup) {
-        setMonzoReconnectMsg('Popup blocked. Please allow popups for Monzo connect.');
-      }
-    } catch (err: any) {
-      console.error('Monzo reconnect failed', err);
-      setMonzoReconnectMsg(err?.message || 'Failed to start Monzo OAuth');
-    } finally {
-      setMonzoReconnectBusy(false);
-    }
-  }, [currentUser]);
 
   useEffect(() => {
     const updateScrollTime = () => {
@@ -4294,55 +4191,10 @@ const Dashboard: React.FC = () => {
       <Container fluid className="p-2 dashboard-compact">
         <Row>
           <Col>
-            {showPersistentDashboardBanners && (showMonzoReconnectBanner || showStravaReconnectBanner || showTraktReconnectBanner) && (() => {
-              const staleCount = [showMonzoReconnectBanner, showStravaReconnectBanner, showTraktReconnectBanner].filter(Boolean).length;
-              return (
-                <Alert variant="warning" className="py-1 px-2 mb-1" style={{ fontSize: 11 }}>
-                  <div className="fw-semibold mb-1">
-                    {staleCount} integration{staleCount === 1 ? '' : 's'} need{staleCount === 1 ? 's' : ''} attention
-                  </div>
-                  <div className="d-flex flex-column gap-1">
-                    {showMonzoReconnectBanner && (
-                      <div className="d-flex align-items-center justify-content-between flex-wrap gap-1">
-                        <span>
-                          <span className="fw-semibold">Monzo</span>
-                          <span className="text-muted ms-1">
-                            — {monzoIntegrationStatus?.connected ? `stale, ${monzoSyncAgeDays ?? 'unknown'}d ago` : 'disconnected'}
-                            {monzoReconnectMsg ? ` · ${monzoReconnectMsg}` : ''}
-                          </span>
-                        </span>
-                        <Button variant="outline-dark" size="sm" style={{ fontSize: 10, padding: '1px 8px' }} onClick={handleMonzoReconnect} disabled={monzoReconnectBusy}>
-                          {monzoReconnectBusy ? <Spinner size="sm" animation="border" className="me-1" /> : null}
-                          {monzoIntegrationStatus?.connected ? 'Reconnect' : 'Connect'}
-                        </Button>
-                      </div>
-                    )}
-                    {showStravaReconnectBanner && (
-                      <div className="d-flex align-items-center justify-content-between flex-wrap gap-1">
-                        <span>
-                          <span className="fw-semibold">Strava</span>
-                          <span className="text-muted ms-1">— stale, {stravaSyncAgeDays}d ago</span>
-                        </span>
-                        <Button variant="outline-dark" size="sm" style={{ fontSize: 10, padding: '1px 8px' }} onClick={() => navigate('/settings/integrations/strava')}>
-                          Reconnect
-                        </Button>
-                      </div>
-                    )}
-                    {showTraktReconnectBanner && (
-                      <div className="d-flex align-items-center justify-content-between flex-wrap gap-1">
-                        <span>
-                          <span className="fw-semibold">Trakt</span>
-                          <span className="text-muted ms-1">— stale, {traktSyncAgeDays}d ago</span>
-                        </span>
-                        <Button variant="outline-dark" size="sm" style={{ fontSize: 10, padding: '1px 8px' }} onClick={() => navigate('/settings/integrations/trakt')}>
-                          Settings
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                </Alert>
-              );
-            })()}
+            {/* Integration staleness (Monzo/Strava/HealthKit) moved into the notification
+                dropdown's "Integrations" row per Jim, 2026-07-25 — it belongs alongside the
+                other notifications with a real Reconnect action, not as its own page banner.
+                See GlobalIntegrationStatus.tsx. */}
 
             {false && (
               <Row className="g-3 mb-1">
