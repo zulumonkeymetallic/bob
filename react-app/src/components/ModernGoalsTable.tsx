@@ -97,6 +97,13 @@ interface ModernGoalsTableProps {
   highlightStoryId?: string;
   highlightGoalId?: string;
   goalKpiStatusByGoalId?: Record<string, GoalKpiStatusRow>;
+  /**
+   * Arrange rows so each goal is immediately followed by its children (recursive, via
+   * parentGoalId), instead of one flat list ordered only by the active sort column. Mirrors
+   * GoalsCardView's own groupByParent prop. Off by default — only GoalsManagement's /goals
+   * table opts in; other hosts (TravelMap, the tables showcase) are unaffected.
+   */
+  groupByParent?: boolean;
 }
 
 const defaultColumns: Column[] = [
@@ -940,11 +947,14 @@ const SortableRow: React.FC<SortableRowProps> = ({
             if (column.key === 'title') {
               const kind = String((goal as any).goalKind || '').toLowerCase();
               const hasParent = !!(goal as any).parentGoalId;
-              const KindBadge = kind === 'program' ? (
+              // Goal.goalKind is 'umbrella' | 'milestone' | 'execution' (types.ts) — this
+              // matched the literal strings 'program'/'phase', which goalKind never actually
+              // is, so every umbrella/milestone goal silently fell through to "Leaf".
+              const KindBadge = kind === 'umbrella' ? (
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, padding: '1px 6px', borderRadius: 10, fontWeight: 600, color: '#0ea5e9', background: '#e0f2fe', whiteSpace: 'nowrap' }}>
                   <Layers2 size={10} />Program
                 </span>
-              ) : kind === 'phase' ? (
+              ) : kind === 'milestone' ? (
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, padding: '1px 6px', borderRadius: 10, fontWeight: 600, color: '#10b981', background: '#d1fae5', whiteSpace: 'nowrap' }}>
                   <GitBranch size={10} />Phase
                 </span>
@@ -1232,6 +1242,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   highlightStoryId,
   highlightGoalId,
   goalKpiStatusByGoalId,
+  groupByParent = false,
 }) => {
   const { isDark, colors, backgrounds } = useThemeAwareColors();
   const [columns, setColumns] = useState<Column[]>(defaultColumns);
@@ -1690,6 +1701,38 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
     return list;
   }, [qualityFilteredRows, sortConfig]);
 
+  // With groupByParent, each goal is followed immediately by its children (recursively, via
+  // parentGoalId) instead of being scattered across the flat sort order — "Program" goals
+  // (Ironman, etc.) read as a group rather than mixed in with everything else by date/index.
+  // Sibling order within each group still follows sortConfig; only which goals sit adjacent
+  // to which changes. A goal whose parent isn't in the current (filtered) row set is treated
+  // as top-level, so filtering never hides a child goal entirely.
+  const groupedRows = useMemo(() => {
+    if (!groupByParent) return sortedRows;
+    const idsInView = new Set(sortedRows.map((g) => g.id));
+    const childrenByParent = new Map<string, GoalTableRow[]>();
+    const topLevel: GoalTableRow[] = [];
+    sortedRows.forEach((g) => {
+      const parentId = (g as any).parentGoalId as string | undefined;
+      if (parentId && idsInView.has(parentId)) {
+        if (!childrenByParent.has(parentId)) childrenByParent.set(parentId, []);
+        childrenByParent.get(parentId)!.push(g);
+      } else {
+        topLevel.push(g);
+      }
+    });
+    const out: GoalTableRow[] = [];
+    const visited = new Set<string>();
+    const visit = (g: GoalTableRow) => {
+      if (visited.has(g.id)) return; // guard against a malformed parentGoalId cycle
+      visited.add(g.id);
+      out.push(g);
+      childrenByParent.get(g.id)?.forEach(visit);
+    };
+    topLevel.forEach(visit);
+    return out;
+  }, [sortedRows, groupByParent]);
+
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
 
@@ -1943,10 +1986,10 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
               </thead>
               <tbody>
                 <SortableContext
-                  items={sortedRows.map(row => row.id)}
+                  items={groupedRows.map(row => row.id)}
                   strategy={verticalListSortingStrategy}
                 >
-                  {sortedRows.map((goal, index) => (
+                  {groupedRows.map((goal, index) => (
                     <SortableRow
                       key={goal.id}
                       goal={goal}

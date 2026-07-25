@@ -73,7 +73,10 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
   const [activeSprintGoalIds, setActiveSprintGoalIds] = useState<Set<string>>(new Set());
   const [activeFocusGoalIds, setActiveFocusGoalIds] = useState<Set<string>>(new Set());
   const [applyFocusOnlyFilter, setApplyFocusOnlyFilter] = useState(false);
-  const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true); // default on
+  // Off by default per Jim, 2026-07-25 — goals should show grouped under their
+  // program/umbrella regardless of which sprint happens to be selected, not filtered down to
+  // whatever has a story in the active sprint.
+  const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(false);
   const [pots, setPots] = useState<Record<string, { name: string; balance: number }>>({});
   const [goalKpiMetrics, setGoalKpiMetrics] = useState<Record<string, { resolvedKpis?: any[]; updatedAt?: any }>>({});
   const { selectedSprintId, setSelectedSprintId, sprints } = useSprint();
@@ -233,7 +236,12 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
     return active?.id || null;
   }, [sprints]);
 
-  // When viewing past/future years, stop scoping by sprint
+  // When viewing past/future years, stop scoping by sprint. This used to also force
+  // applyActiveSprintFilter back to true whenever the current year was in view — silently
+  // overriding its default (false, per Jim 2026-07-25: goals shouldn't be filtered by sprint
+  // selector) on every mount, since today's year is in the default selectedYears range. The
+  // sprint-filter default is a standing product decision now, not something a year-selection
+  // effect should re-assert; still auto-selects a sensible default sprint in the dropdown.
   const currentYear = new Date().getFullYear();
   useEffect(() => {
     const isCurrentYearSelected = allYears || selectedYears.includes(currentYear);
@@ -242,7 +250,6 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
       if (selectedSprintId !== '') setSelectedSprintId('');
       return;
     }
-    if (!applyActiveSprintFilter) setApplyActiveSprintFilter(true);
     const hasSavedPreference = (() => {
       try { return localStorage.getItem('bob_selected_sprint') !== null; } catch { return false; }
     })();
@@ -937,6 +944,7 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
                     onEditModal={(goal) => setEditGoal(goal)}
                     onOpenWorkspace={(goal) => setWorkspaceGoal(goal)}
                     goalKpiStatusByGoalId={goalKpiStatusByGoalId}
+                    groupByParent
                   />
                 ) : (
                   <GoalsCardView
@@ -946,6 +954,7 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
                     onGoalPriorityChange={handleGoalPriorityChange}
                     themes={globalThemes}
                     cardLayout={goalsDetailLevel === 'full' ? 'comfortable' : 'grid'}
+                    groupByParent
                     showDescriptions={goalsDetailLevel === 'minimal' ? false : showGoalDescriptions}
                     goalKpiStatusByGoalId={goalKpiStatusByGoalId}
                   />
