@@ -722,3 +722,38 @@ div.tooltip .tooltip-arrow::before {
 div.tooltip .text-muted {
   color: var(--text-secondary) !important;
 }
+
+/* Bootstrap popovers (VersionDisplay's "App Information" popover) have the same class of bug
+   as the tooltip above: Bootstrap's own --bs-popover-bg/color variables default to a fixed
+   light-mode value with no theme-awareness, so this popover kept a white background and
+   near-black text even in dark mode. Same fix, same variables. Per Jim, 2026-07-25. */
+.popover {
+  background-color: var(--bg-surface) !important;
+  border-color: var(--border-primary) !important;
+}
+.popover .popover-header {
+  background-color: var(--bg-surface) !important;
+  color: var(--text-primary) !important;
+  border-bottom-color: var(--border-primary) !important;
+}
+.popover .popover-body {
+  color: var(--text-primary) !important;
+}
+/* Same descendant-specificity issue as the tooltip's .text-muted fix above. */
+.popover .text-muted {
+  color: var(--text-secondary) !important;
+}
+.popover .hr,
+.popover hr {
+  border-color: var(--border-primary) !important;
+  opacity: 1;
+}
+.bs-popover-top > .popover-arrow::before, .bs-popover-top > .popover-arrow::after,
+.bs-popover-bottom > .popover-arrow::before, .bs-popover-bottom > .popover-arrow::after,
+.bs-popover-start > .popover-arrow::before, .bs-popover-start > .popover-arrow::after,
+.bs-popover-end > .popover-arrow::before, .bs-popover-end > .popover-arrow::after {
+  border-top-color: var(--bg-surface) !important;
+  border-bottom-color: var(--bg-surface) !important;
+  border-left-color: var(--bg-surface) !important;
+  border-right-color: var(--bg-surface) !important;
+}

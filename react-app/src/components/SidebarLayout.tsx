@@ -346,8 +346,14 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
               </button>
             </div>
 
-            {/* Nav group icons — single click navigates to group primary route */}
-            <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', scrollbarWidth: 'none' as any, paddingTop: '4px', paddingBottom: '4px' }}>
+            {/* Nav group icons — single click navigates to group primary route.
+                minHeight: 0 is required here: a flex child with flex:1 + overflow-y:auto
+                otherwise sizes to its own content (14 groups × 36px) rather than being capped
+                to the space actually available, so on any window under ~700px tall this list
+                grew past the rail's height:100vh and pushed the theme-toggle/sign-out footer
+                below it out of the flex column entirely — clipped by the parent's
+                overflow:hidden rather than scrolled into view. Per Jim, 2026-07-25. */}
+            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', scrollbarWidth: 'none' as any, paddingTop: '4px', paddingBottom: '4px' }}>
               {navigationGroups.map((group) => {
                 const Icon = group.lucideIcon;
                 const primaryPath = group.items[0]?.path;
@@ -444,8 +450,10 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
               </div>
             )}
 
-            {/* Navigation - Scrollable */}
-            <div className="flex-grow-1" style={{ overflowY: 'auto', overflowX: 'hidden', scrollbarWidth: 'thin' }}>
+            {/* Navigation - Scrollable. minHeight: 0 — same overflow fix as the collapsed
+                rail's icon list below; Bootstrap's flex-grow-1 alone doesn't reset min-height,
+                so this could grow past available space and push Bottom Actions out of view. */}
+            <div className="flex-grow-1" style={{ minHeight: 0, overflowY: 'auto', overflowX: 'hidden', scrollbarWidth: 'thin' }}>
               <Nav className="flex-column py-2">{navigationGroups.map((group) => (
                 <div key={group.label} className="mb-2">
                   <div
