@@ -17131,6 +17131,20 @@ exports.onStoryDueDateAutoSprint = functionsV2.firestore.onDocumentUpdated("stor
   const afterDue = toMillis(afterData.dueDate || afterData.targetDate);
   if ((beforeDue ?? null) === (afterDue ?? null)) return;
 
+  // A pinned/Top-3 story's sprint placement is an explicit priority signal
+  // (alignStoriesToGoalSprints pulls it into the active sprint specifically because it's
+  // pinned) — this trigger's pure date-math resolution has no concept of that and was
+  // silently overwriting it back out of the active sprint on the very next dueDate touch
+  // in the same nightly run. Confirmed live 2026-07-25: ST-20320 and ST-93220 (both pinned
+  // Top-3) vanished from the Kanban "In Progress" column — moved into the active sprint by
+  // alignStoriesToGoalSprints at 08:36:12, then yanked back out by this trigger 27 seconds
+  // later when a downstream step touched their dueDate, with zero visibility into why.
+  // Jim, 2026-07-25: "why are stories being moved out of my sprint when they are top 3."
+  const isPinned = afterData.userPriorityFlag === true
+    || (Number.isFinite(Number(afterData.userPriorityRank)) && Number(afterData.userPriorityRank) >= 1 && Number(afterData.userPriorityRank) <= 5)
+    || afterData.aiTop3ForDay === true;
+  if (isPinned) return;
+
   const ownerUid = afterData.ownerUid || beforeData.ownerUid;
   if (!ownerUid) return;
   const persona = afterData.persona || beforeData.persona || null;
