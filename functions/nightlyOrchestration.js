@@ -3869,12 +3869,30 @@ async function runCalendarPlannerJob() {
       return bs - as;
     };
 
-    const scoredStories = openStories.map((story) => ({
+    // openStories/openTasks had no score floor at all — any non-done backlog item became a
+    // placement candidate regardless of how low its aiCriticalityScore was, so a score-55
+    // backlog story could still claim real calendar time (confirmed live 2026-07-25:
+    // ST-55607, a low-priority unpinned backlog item, split into 8 work sessions with 4 of
+    // them landing on a single day). sprintForwardPlanner already has an explicit floor for
+    // exactly this reason (MIN_SCORE_TO_SCHEDULE, added 2026-07-24 per Jim: "low-value tasks
+    // were consuming calendar slots") — this is the same rule applied to the primary
+    // scheduler. Pinned and Top-3 items are exempt, matching sprintForwardPlanner's own
+    // carve-out: a human or the Top-3 engine explicitly choosing an item is a stronger signal
+    // than its raw score. Jim, 2026-07-25: "if its low priority why is in my calendar at all."
+    const isPinnedForFloor = (item) => item.userPriorityFlag === true
+      || (Number.isFinite(Number(item.userPriorityRank)) && Number(item.userPriorityRank) >= 1 && Number(item.userPriorityRank) <= 5);
+    const MIN_SCORE_TO_QUEUE = 75;
+    const queueEligibleStories = openStories.filter((story) =>
+      isPinnedForFloor(story) || isTopStory(story) || Number(story.aiCriticalityScore || 0) >= MIN_SCORE_TO_QUEUE);
+    const queueEligibleTasks = openTasks.filter((task) =>
+      isPinnedForFloor(task) || isTopTask(task) || Number(task.aiCriticalityScore || 0) >= MIN_SCORE_TO_QUEUE);
+
+    const scoredStories = queueEligibleStories.map((story) => ({
       ...story,
       aiScore: scoreWithBonus(story.priority, story.aiCriticalityScore, story.userPriorityRank),
     }));
     const storyMap = new Map(scoredStories.map((story) => [story.id, story]));
-    const scoredTasks = openTasks.map((task) => ({
+    const scoredTasks = queueEligibleTasks.map((task) => ({
       ...task,
       aiScore: scoreWithBonus(task.priority, task.aiCriticalityScore, task.userPriorityRank),
     }));
