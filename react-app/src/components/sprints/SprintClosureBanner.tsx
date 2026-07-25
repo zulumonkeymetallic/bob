@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { Alert, Button } from 'react-bootstrap';
 import { Clock, Calendar, BarChart3 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
@@ -131,64 +130,77 @@ const SprintClosureBanner: React.FC = () => {
     return null;
   }
 
+  // Matches the plain-row style the rest of the notification dropdown already uses
+  // (DeferralCandidatesBanner, CheckInBanner, CoachVerdictBanner's compact mode) instead of
+  // a full-width react-bootstrap Alert with its own colour/icon/button chrome — this was the
+  // one banner in the panel that never got migrated. Per Jim, 2026-07-25.
   return (
-    <div className="sprint-closure-banners">
-      {visibleSprints.map(sprint => (
-        <Alert 
-          key={sprint.id}
-          variant="warning" 
-          dismissible 
-          onClose={() => handleDismiss(sprint.id)}
-          className="mb-3 border-0 shadow-sm"
-          style={{ 
-            backgroundColor: '#fff8e1',
-            borderLeft: '4px solid #ff9800',
-            borderRadius: '8px'
-          }}
-        >
-          <div className="d-flex align-items-center justify-content-between">
-            <div className="d-flex align-items-center">
-              <Clock 
-                size={24} 
-                className="me-3" 
-                style={{ color: '#ff9800' }} 
-              />
-              <div>
-                <div className="fw-bold text-dark">
-                  ⏰ Sprint Overdue: "{sprint.name}"
-                </div>
-                <div className="text-muted small">
-                  This sprint ended {formatDaysOverdue(sprint.endDate)} - time to close and retrospective
-                </div>
-              </div>
+    <div style={{ minWidth: 260 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--muted)', marginBottom: 6 }}>
+        Sprint overdue
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {visibleSprints.map(sprint => (
+          <div
+            key={sprint.id}
+            style={{
+              background: 'var(--notion-hover, rgba(0,0,0,0.04))',
+              border: '1px solid var(--border, #e5e7eb)', borderRadius: 6,
+              padding: '5px 6px 5px 8px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Clock size={13} style={{ flexShrink: 0, color: 'var(--text-danger, #dc2626)' }} />
+              <span
+                style={{ fontSize: 12, fontWeight: 600, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                title={sprint.name}
+              >
+                {sprint.name}
+              </span>
+              <span
+                role="button"
+                tabIndex={0}
+                style={{ background: 'none', border: 'none', padding: 0, fontSize: 10, color: 'var(--brand, #5f77dc)', cursor: 'pointer', textDecoration: 'underline', flexShrink: 0 }}
+                onClick={() => handleDismiss(sprint.id)}
+              >
+                Dismiss
+              </span>
             </div>
-            
-            <div className="d-flex gap-2">
-              <Button
-                variant="outline-primary"
-                size="sm"
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 3 }}>
+              <span style={{ fontSize: 10, color: 'var(--muted)', flex: 1 }}>
+                {formatDaysOverdue(sprint.endDate)} — time to close and retrospective
+              </span>
+              <button
                 onClick={handlePlanningMatrix}
-                className="d-flex align-items-center gap-1"
+                title="Planning Matrix"
+                aria-label="Planning Matrix"
+                style={quickActionButtonStyle('var(--brand, #5f77dc)')}
               >
-                <BarChart3 size={16} />
-                Planning Matrix
-              </Button>
-              
-              <Button
-                variant="primary"
-                size="sm"
+                <BarChart3 size={14} />
+              </button>
+              <button
                 onClick={handleCloseSprint}
-                className="d-flex align-items-center gap-1"
+                title="Close Sprint"
+                aria-label="Close Sprint"
+                style={quickActionButtonStyle('var(--text-success, #15803d)')}
               >
-                <Calendar size={16} />
-                Close Sprint
-              </Button>
+                <Calendar size={14} />
+              </button>
             </div>
           </div>
-        </Alert>
-      ))}
+        ))}
+      </div>
     </div>
   );
 };
+
+function quickActionButtonStyle(color: string): React.CSSProperties {
+  return {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    width: 22, height: 22, flexShrink: 0, padding: 0,
+    background: 'transparent', border: 'none', borderRadius: 6,
+    color, cursor: 'pointer',
+  };
+}
 
 export default SprintClosureBanner;
