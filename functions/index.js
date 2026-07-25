@@ -21218,10 +21218,10 @@ exports.debugCalendarCleanupDiag = httpsV2.onCall({
   }
 });
 
-// TEMPORARY — clears every BOB-scheduled calendar_blocks doc (has a storyId/taskId, proving
-// BOB placed it, not something Jim typed into Google Calendar directly) and its linked
-// Google Calendar event, ahead of a clean nightly rerun. Confirmed scope with Jim,
-// 2026-07-25: BOB-scheduled only, nothing he created himself. Deletable once used.
+// TEMPORARY — clears every BOB-scheduled calendar_blocks doc (has a storyId/taskId, OR a
+// title matching BOB's own "[TK-xxxxx]"/"[ST-xxxxx]" stamp even when unlinked) and its
+// linked Google Calendar event. Confirmed scope with Jim, 2026-07-25: BOB-scheduled only,
+// nothing he created himself. Deletable once used.
 exports.debugBulkDeleteBobEvents = httpsV2.onCall({
   region: 'europe-west2',
   invoker: 'public',
@@ -21233,10 +21233,11 @@ exports.debugBulkDeleteBobEvents = httpsV2.onCall({
   if (!uid) throw new functionsV2.https.HttpsError('invalid-argument', 'uid required');
   const calSync = require('./calendarSync');
   const db = admin.firestore();
+  const BOB_TITLE_RE = /\[(TK|ST)-[A-Z0-9]+\]/;
   const snap = await db.collection('calendar_blocks').where('ownerUid', '==', uid).get();
   const candidates = snap.docs.filter((doc) => {
     const d = doc.data() || {};
-    return !!(d.storyId || d.taskId);
+    return !!(d.storyId || d.taskId) || BOB_TITLE_RE.test(String(d.title || ''));
   });
   let gcalDeleted = 0, gcalFailed = 0, firestoreDeleted = 0;
   const failures = [];

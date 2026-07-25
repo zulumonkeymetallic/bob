@@ -5354,17 +5354,28 @@ async function assignMissingTimeOfDay() {
 // stale events survive one more night) rather than the whole chain timing out.
 const CLEAR_BOB_EVENTS_TIME_BUDGET_MS = 90_000;
 
+// Matches the "{title} [TK-XXXXXX] [Theme]" / "{title} [ST-XXXXXX] [Theme]" naming
+// convention BOB itself stamps onto every event it creates — a human typing an event into
+// Google Calendar directly essentially never produces this exact bracketed-ref pattern.
+// Needed because storyId/taskId alone under-catches: confirmed live 2026-07-25, 59 real
+// Google Calendar events (49 unique tasks/stories, 9 of them duplicated 2-3x) were BOB's own
+// creations by title but had taskId/storyId both null on the mirrored calendar_blocks doc —
+// they slipped through the storyId/taskId-only wipe entirely and sat on Jim's real calendar
+// untouched, duplicates and all.
+const BOB_EVENT_TITLE_PATTERN = /\[(TK|ST)-[A-Z0-9]+\]/;
+
 /**
- * Deletes every BOB-scheduled calendar_blocks doc (has a storyId/taskId — proof BOB placed
- * it, never something the user typed into Google Calendar directly) and its linked Google
- * Calendar event, for every user, at the start of each nightly run — before
+ * Deletes every BOB-scheduled calendar_blocks doc — has a storyId/taskId (proof BOB placed
+ * it), OR a title matching BOB's own "[TK-xxxxx]"/"[ST-xxxxx]" stamp even when unlinked — and
+ * its linked Google Calendar event, for every user, at the start of each nightly run, before
  * runCalendarPlanner/sprintForwardPlanner rebuild the day fresh. Confirmed by Jim,
  * 2026-07-25: "I am expecting all bob created events to be deleted automatically each time
  * nightly orchestration runs to ensure my gcal does not contain stale bob events." Wipe-and-
  * rebuild rather than incrementally patch, so staleness (deleted stories, re-pointed
- * scores, manual edits gone half-applied) can never accumulate silently — the existing
- * end-of-chain cleanupOrphanedCalendarEvents step is left in place as a secondary safety
- * net, not replaced, since it also catches anything this misses within a single run.
+ * scores, manual edits gone half-applied, sync races that null out a link) can never
+ * accumulate silently — the existing end-of-chain cleanupOrphanedCalendarEvents step is left
+ * in place as a secondary safety net, not replaced, since it also catches anything this
+ * misses within a single run.
  */
 async function clearBobScheduledEvents() {
   const db = ensureFirestore();
@@ -5383,7 +5394,7 @@ async function clearBobScheduledEvents() {
       const snap = await db.collection('calendar_blocks').where('ownerUid', '==', userId).get();
       const candidates = snap.docs.filter((doc) => {
         const d = doc.data() || {};
-        return !!(d.storyId || d.taskId);
+        return !!(d.storyId || d.taskId) || BOB_EVENT_TITLE_PATTERN.test(String(d.title || ''));
       });
       if (candidates.length === 0) continue;
       totalCandidates += candidates.length;
