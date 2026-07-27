@@ -20,6 +20,14 @@ import DeferItemModal from './DeferItemModal';
 import NewCalendarEventModal, { BlockFormState, buildCalendarComposerInitialValues } from './planner/NewCalendarEventModal';
 import { findItemWithManualPriorityRank, getManualPriorityLabel, getManualPriorityRank, getNextManualPriorityRank } from '../utils/manualPriority';
 import { applyPlannerDefer } from '../utils/plannerDeferral';
+import {
+    WORKFLOW_STATUS_LABELS,
+    WORKFLOW_STATUS_OPTIONS,
+    WORKFLOW_STATUS_VARIANTS,
+    WorkflowStatus,
+    toWorkflowStatus,
+    workflowStatusToRaw,
+} from '../utils/workflowStatus';
 
 interface KanbanCardV2Props {
     item: Story | Task;
@@ -167,22 +175,6 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         }
     })();
 
-    const normalizeStatusValue = (rawStatus: any, entityType: 'story' | 'task') => {
-        if (typeof rawStatus === 'number' && Number.isFinite(rawStatus)) return rawStatus;
-        const status = String(rawStatus || '').toLowerCase();
-        if (entityType === 'story') {
-            if (['done', 'complete', 'completed', 'finished'].includes(status)) return 4;
-            if (['testing', 'qa', 'review'].includes(status)) return 3;
-            if (['in-progress', 'active', 'doing', 'blocked', 'in progress'].includes(status)) return 2;
-            if (['planned', 'ready'].includes(status)) return 1;
-            return 0;
-        }
-        if (['done', 'complete', 'completed', 'finished'].includes(status)) return 2;
-        if (['blocked'].includes(status)) return 3;
-        if (['in-progress', 'active', 'doing', 'in progress'].includes(status)) return 1;
-        return 0;
-    };
-
     const toDateInputValue = (value: number | null) => {
         if (!value) return '';
         const d = new Date(value);
@@ -255,28 +247,18 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
         ? `Deferred to ${new Date(deferredUntilMs as number).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
         : null;
     const [priorityValue, setPriorityValue] = useState<number>(Number((item as any).priority ?? 0));
-    const [statusValue, setStatusValue] = useState<number>(normalizeStatusValue((item as any).status, type));
+    const [statusValue, setStatusValue] = useState<WorkflowStatus>(toWorkflowStatus((item as any).status, type));
     const [dueInputValue, setDueInputValue] = useState<string>(toDateInputValue(dueDateMs));
     const [updatingField, setUpdatingField] = useState<'priority' | 'status' | 'dueDate' | null>(null);
     const priorityBadge = getPriorityBadge(priorityValue);
-    const statusBadge = type === 'story'
-        ? ({
-            0: { bg: 'secondary', text: 'Backlog' },
-            1: { bg: 'info', text: 'Planned' },
-            2: { bg: 'primary', text: 'In progress' },
-            3: { bg: 'warning', text: 'Review' },
-            4: { bg: 'success', text: 'Done' },
-        } as Record<number, { bg: string; text: string }>)[statusValue] || { bg: 'secondary', text: 'Backlog' }
-        : ({
-            0: { bg: 'secondary', text: 'To do' },
-            1: { bg: 'primary', text: 'Doing' },
-            2: { bg: 'success', text: 'Done' },
-            3: { bg: 'danger', text: 'Blocked' },
-        } as Record<number, { bg: string; text: string }>)[statusValue] || { bg: 'secondary', text: 'To do' };
+    const statusBadge = {
+        bg: WORKFLOW_STATUS_VARIANTS[statusValue],
+        text: WORKFLOW_STATUS_LABELS[statusValue],
+    };
 
     useEffect(() => {
         setPriorityValue(Number((item as any).priority ?? 0));
-        setStatusValue(normalizeStatusValue((item as any).status, type));
+        setStatusValue(toWorkflowStatus((item as any).status, type));
         setDueInputValue(toDateInputValue(dueDateMs));
     }, [item.id, (item as any).priority, (item as any).status, dueDateMs, type]);
 
@@ -309,11 +291,14 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     const handleStatusChange = async (event: React.ChangeEvent<HTMLSelectElement>) => {
         event.stopPropagation();
         const previous = statusValue;
-        const next = Number(event.target.value);
+        const next = event.target.value as WorkflowStatus;
         setStatusValue(next);
         setUpdatingField('status');
         try {
-            await applyQuickPatch({ status: next });
+            await applyQuickPatch({
+                status: workflowStatusToRaw(next, type),
+                ...(next === 'done' ? { completedAt: Date.now() } : {}),
+            });
         } catch (error) {
             console.warn('Failed to update status on kanban card', error);
             setStatusValue(previous);
@@ -1073,8 +1058,8 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                     {onCompleteChore && type === 'task' ? (
                         <input
                             type="checkbox"
-                            checked={statusValue === 2 || choreCompleteBusy}
-                            disabled={statusValue === 2 || choreCompleteBusy}
+                            checked={statusValue === 'done' || choreCompleteBusy}
+                            disabled={statusValue === 'done' || choreCompleteBusy}
                             onChange={(e) => { e.stopPropagation(); onCompleteChore(item as Task); }}
                             onClick={(e) => e.stopPropagation()}
                             onPointerDown={(e) => e.stopPropagation()}
@@ -1095,22 +1080,9 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                             color: statusBadge.bg === 'warning' || statusBadge.bg === 'light' ? '#000' : '#fff',
                         }}
                     >
-                        {type === 'story' ? (
-                            <>
-                                <option value={0}>Backlog</option>
-                                <option value={1}>Planned</option>
-                                <option value={2}>In progress</option>
-                                <option value={3}>Review</option>
-                                <option value={4}>Done</option>
-                            </>
-                        ) : (
-                            <>
-                                <option value={0}>To do</option>
-                                <option value={1}>Doing</option>
-                                <option value={3}>Blocked</option>
-                                <option value={2}>Done</option>
-                            </>
-                        )}
+                        {WORKFLOW_STATUS_OPTIONS.map((opt) => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        ))}
                     </select>
                     )}
                 </div>

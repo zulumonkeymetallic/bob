@@ -12,6 +12,13 @@ import { ActivityStreamService } from '../services/ActivityStreamService';
 import { ChoiceHelper } from '../config/choices';
 import { getBadgeVariant, getPriorityBadge, getStatusName } from '../utils/statusHelpers';
 import { taskStatusText } from '../utils/storyCardFormatting';
+import {
+  WORKFLOW_STATUS_LABELS,
+  WORKFLOW_STATUS_OPTIONS,
+  WORKFLOW_STATUS_VARIANTS,
+  toWorkflowStatus,
+  workflowStatusToRaw,
+} from '../utils/workflowStatus';
 import { extractWeatherSummary, extractWeatherTemp, formatWeatherLine } from '../utils/weatherFormat';
 import { isRecurringDueOnDate, resolveRecurringDueMs, resolveTaskDueMs } from '../utils/recurringTaskDue';
 import { Wand2, AlertCircle, RefreshCw, Sparkles, Clock3, Pencil, Home, CalendarDays, ListChecks, BookOpen, Target, CheckSquare, Wallet, Brain, type LucideIcon } from 'lucide-react';
@@ -1917,15 +1924,11 @@ const MobileHome: React.FC = () => {
                 ? new Date((story as any).dueDate as any).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
                 : null;
               const meta = [story.ref, goal?.title || 'No goal', dueLabel ? `Due ${dueLabel}` : null].filter(Boolean).join(' · ');
-              const storyStatusNum = typeof story.status === 'number' ? story.status : 0;
-              const statusChip = ({
-                0: { bg: 'secondary', text: 'Backlog' },
-                1: { bg: 'info',      text: 'Planned' },
-                2: { bg: 'primary',   text: 'In progress' },
-                3: { bg: 'warning',   text: 'Review' },
-                4: { bg: 'success',   text: 'Done' },
-              } as Record<number, { bg: string; text: string }>)[storyStatusNum >= 4 ? 4 : storyStatusNum]
-                ?? { bg: 'secondary', text: 'Backlog' };
+              const storyStatus = toWorkflowStatus(story.status, 'story');
+              const statusChip = {
+                bg: WORKFLOW_STATUS_VARIANTS[storyStatus],
+                text: WORKFLOW_STATUS_LABELS[storyStatus],
+              };
               const iconBtnStyle: React.CSSProperties = {
                 color: 'var(--bs-secondary-color)', padding: 4, borderRadius: 4,
                 border: 'none', background: 'transparent', cursor: 'pointer', lineHeight: 0, flexShrink: 0,
@@ -1959,20 +1962,17 @@ const MobileHome: React.FC = () => {
                       </Badge>
                     </Dropdown.Toggle>
                     <Dropdown.Menu align="end">
-                      {([
-                        { value: 0, bg: 'secondary', text: 'Backlog' },
-                        { value: 1, bg: 'info',      text: 'Planned' },
-                        { value: 2, bg: 'primary',   text: 'In progress' },
-                        { value: 3, bg: 'warning',   text: 'Review' },
-                        { value: 4, bg: 'success',   text: 'Done' },
-                      ] as { value: number; bg: string; text: string }[]).map(opt => (
+                      {WORKFLOW_STATUS_OPTIONS.map(opt => (
                         <Dropdown.Item
                           key={opt.value}
-                          active={storyStatusNum === opt.value}
-                          onClick={() => updateStoryField(story, { status: opt.value as Story['status'] })}
+                          active={storyStatus === opt.value}
+                          onClick={() => updateStoryField(story, {
+                            status: workflowStatusToRaw(opt.value, 'story') as Story['status'],
+                            ...(opt.value === 'done' ? { completedAt: Date.now() } : {}),
+                          })}
                         >
-                          <Badge bg={opt.bg} style={{ fontSize: 10, color: opt.bg === 'warning' ? '#000' : '#fff', marginRight: 6 }}>
-                            {opt.text}
+                          <Badge bg={WORKFLOW_STATUS_VARIANTS[opt.value]} style={{ fontSize: 10, color: '#fff', marginRight: 6 }}>
+                            {opt.label}
                           </Badge>
                         </Dropdown.Item>
                       ))}

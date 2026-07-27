@@ -148,6 +148,7 @@ export interface Story {
   aiTop3Date?: string;
   aiPriorityLabel?: string;
   aiTop3Reason?: string;
+  completedAt?: number; // when status first moved to Done (Dashboard already reads this)
   // User-set #1 priority flag for gcal override
   userPriorityFlag?: boolean;
   userPriorityRank?: 1 | 2 | 3 | null;

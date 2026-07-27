@@ -2,6 +2,7 @@ import { Goal } from '../types';
 import type { GlobalTheme } from '../constants/globalThemes';
 import { themeVars } from './themeVars';
 import { resolveThemeDefinition } from './themeResolver';
+import { workflowStatusLabel } from './workflowStatus';
 
 export const toSentenceCase = (value: string): string => {
   return value
@@ -11,44 +12,12 @@ export const toSentenceCase = (value: string): string => {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 };
 
-export const storyStatusText = (status: any): string => {
-  // Numeric legacy mapping (0..4)
-  if (typeof status === 'number') {
-    switch (status) {
-      case 0: return 'Backlog';
-      case 1: return 'Planned'; // Shown as its own label but mapped to Backlog lane
-      case 2: return 'In Progress';
-      case 3: return 'In Progress'; // unify former "Testing" with In Progress
-      case 4: return 'Done';
-      default: return 'Unknown';
-    }
-  }
-  // String mapping with normalisation
-  const s = String(status || '').trim().toLowerCase().replace(/_/g, '-');
-  if (!s) return 'Backlog';
-  if (['backlog', 'todo', 'planned', 'new'].includes(s)) return 'Backlog';
-  if (['in-progress', 'in progress', 'active', 'wip', 'testing', 'qa', 'review'].includes(s)) return 'In Progress';
-  if (['blocked', 'paused', 'on-hold', 'onhold', 'stalled', 'waiting'].includes(s)) return 'Blocked';
-  if (['done', 'complete', 'completed', 'closed', 'finished'].includes(s)) return 'Done';
-  return toSentenceCase(s.replace(/-/g, ' '));
-};
+// Three workflow states only — Backlog / In Progress / Done — everywhere. The legacy
+// "Planned", "Testing"/"Review" and "Blocked" rungs collapse into In Progress; see
+// utils/workflowStatus for the single source of truth on how each raw value maps.
+export const storyStatusText = (status: any): string => workflowStatusLabel(status, 'story');
 
-export const taskStatusText = (status: any): string => {
-  // Numeric mapping common in tasks (0 Backlog/Todo, 1 In Progress, 2 Done, 3 Blocked)
-  if (typeof status === 'number') {
-    if (status === 3) return 'Blocked';
-    if (status >= 2) return 'Done';
-    if (status === 1) return 'In Progress';
-    return 'Backlog';
-  }
-  const s = String(status || '').trim().toLowerCase().replace(/_/g, '-');
-  if (!s) return 'Backlog';
-  if (['backlog', 'todo', 'planned', 'new'].includes(s)) return 'Backlog';
-  if (['in-progress', 'in progress', 'active', 'doing'].includes(s)) return 'In Progress';
-  if (['blocked', 'paused', 'on-hold', 'onhold', 'stalled', 'waiting'].includes(s)) return 'Blocked';
-  if (['done', 'complete', 'completed', 'closed', 'finished'].includes(s)) return 'Done';
-  return toSentenceCase(s.replace(/-/g, ' '));
-};
+export const taskStatusText = (status: any): string => workflowStatusLabel(status, 'task');
 
 export const priorityLabel = (priority: any, fallback: string = 'None'): string => {
   if (priority === null || priority === undefined || priority === '') return fallback;

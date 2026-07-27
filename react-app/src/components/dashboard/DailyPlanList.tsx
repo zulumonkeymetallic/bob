@@ -19,6 +19,14 @@ import { db } from '../../firebase';
 import { getPriorityBadge } from '../../utils/statusHelpers';
 import type { Story, Task } from '../../types';
 import type { DailyPlanTimelineItem } from '../../hooks/useDailyPlanTimeline';
+import {
+  WORKFLOW_STATUS_LABELS,
+  WORKFLOW_STATUS_OPTIONS,
+  WORKFLOW_STATUS_VARIANTS,
+  WorkflowStatus,
+  toWorkflowStatus,
+  workflowStatusToRaw,
+} from '../../utils/workflowStatus';
 import '../../styles/KanbanCards.css';
 
 export interface DailyPlanDeferTarget {
@@ -45,40 +53,6 @@ export interface DailyPlanListProps {
   onEdit?: (item: DailyPlanTimelineItem) => void;
 }
 
-const normalizeStatusValue = (rawStatus: any, entityType: 'story' | 'task'): number => {
-  if (typeof rawStatus === 'number' && Number.isFinite(rawStatus)) return rawStatus;
-  const status = String(rawStatus || '').toLowerCase();
-  if (entityType === 'story') {
-    if (['done', 'complete', 'completed', 'finished'].includes(status)) return 4;
-    if (['testing', 'qa', 'review'].includes(status)) return 3;
-    if (['in-progress', 'active', 'doing', 'blocked', 'in progress'].includes(status)) return 2;
-    if (['planned', 'ready'].includes(status)) return 1;
-    return 0;
-  }
-  if (['done', 'complete', 'completed', 'finished'].includes(status)) return 2;
-  if (['blocked'].includes(status)) return 3;
-  if (['in-progress', 'active', 'doing', 'in progress'].includes(status)) return 1;
-  return 0;
-};
-
-// Mirrors KanbanCardV2's statusBadge map exactly, so a story/task reads the same colour
-// wherever it's shown.
-const STATUS_BADGE: Record<'story' | 'task', Record<number, { bg: string; text: string }>> = {
-  story: {
-    0: { bg: 'secondary', text: 'Backlog' },
-    1: { bg: 'info', text: 'Planned' },
-    2: { bg: 'primary', text: 'In progress' },
-    3: { bg: 'warning', text: 'Review' },
-    4: { bg: 'success', text: 'Done' },
-  },
-  task: {
-    0: { bg: 'secondary', text: 'To do' },
-    1: { bg: 'primary', text: 'Doing' },
-    2: { bg: 'success', text: 'Done' },
-    3: { bg: 'danger', text: 'Blocked' },
-  },
-};
-
 const getManualPriorityRank = (entity: any): number | null => {
   const explicit = Number(entity?.userPriorityRank);
   if (explicit >= 1 && explicit <= 5) return explicit;
@@ -98,27 +72,31 @@ const DailyPlanEntityControls: React.FC<{
   entityType: 'story' | 'task';
   isTop3?: boolean;
 }> = ({ entity, entityType, isTop3 }) => {
-  const [statusValue, setStatusValue] = useState<number>(normalizeStatusValue((entity as any).status, entityType));
+  const [statusValue, setStatusValue] = useState<WorkflowStatus>(toWorkflowStatus((entity as any).status, entityType));
   const [updating, setUpdating] = useState(false);
 
   useEffect(() => {
-    setStatusValue(normalizeStatusValue((entity as any).status, entityType));
+    setStatusValue(toWorkflowStatus((entity as any).status, entityType));
   }, [entity, entityType]);
 
   const manualRank = getManualPriorityRank(entity);
   const priorityBadge = getPriorityBadge((entity as any).priority);
   const aiScore = getAiScoreRounded(entity);
-  const statusBadge = STATUS_BADGE[entityType][statusValue] || STATUS_BADGE[entityType][0];
+  const statusBadge = { bg: WORKFLOW_STATUS_VARIANTS[statusValue], text: WORKFLOW_STATUS_LABELS[statusValue] };
 
   const handleStatusChange = async (event: React.ChangeEvent<HTMLSelectElement>) => {
     event.stopPropagation();
     const previous = statusValue;
-    const next = Number(event.target.value);
+    const next = event.target.value as WorkflowStatus;
     setStatusValue(next);
     setUpdating(true);
     try {
       const collectionName = entityType === 'story' ? 'stories' : 'tasks';
-      await updateDoc(doc(db, collectionName, entity.id), { status: next, updatedAt: serverTimestamp() });
+      await updateDoc(doc(db, collectionName, entity.id), {
+        status: workflowStatusToRaw(next, entityType),
+        ...(next === 'done' ? { completedAt: Date.now() } : {}),
+        updatedAt: serverTimestamp(),
+      });
     } catch (err) {
       console.warn('DailyPlanList: failed to update status', err);
       setStatusValue(previous);
@@ -154,22 +132,9 @@ const DailyPlanEntityControls: React.FC<{
           color: statusBadge.bg === 'warning' || statusBadge.bg === 'light' ? '#000' : '#fff',
         }}
       >
-        {entityType === 'story' ? (
-          <>
-            <option value={0}>Backlog</option>
-            <option value={1}>Planned</option>
-            <option value={2}>In progress</option>
-            <option value={3}>Review</option>
-            <option value={4}>Done</option>
-          </>
-        ) : (
-          <>
-            <option value={0}>To do</option>
-            <option value={1}>Doing</option>
-            <option value={3}>Blocked</option>
-            <option value={2}>Done</option>
-          </>
-        )}
+        {WORKFLOW_STATUS_OPTIONS.map((opt) => (
+          <option key={opt.value} value={opt.value}>{opt.label}</option>
+        ))}
       </select>
     </div>
   );
