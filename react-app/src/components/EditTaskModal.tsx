@@ -27,7 +27,7 @@ import { getGoalDisplayPath, getLeafGoalOptions, resolveLeafGoalSelection } from
 import EditStoryModal from './EditStoryModal';
 import NewCalendarEventModal, { buildCalendarComposerInitialValues } from './planner/NewCalendarEventModal';
 import DeferItemModal from './DeferItemModal';
-import { Activity, Bot, CalendarPlus, Clock3, Maximize2, Minimize2, Trash2, Wand2 } from 'lucide-react';
+import { Activity, Bot, CalendarPlus, CheckCheck, Clock3, Maximize2, Minimize2, Trash2, Wand2 } from 'lucide-react';
 import DrivePickerButton from './shared/DrivePickerButton';
 
 interface EditTaskModalProps {
@@ -616,6 +616,23 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
               >
                 <Bot size={14} />
               </Button>
+              {(task as any)?.aiDelegationStatus === 'human_review' && (
+                <Button
+                  variant="success"
+                  size="sm"
+                  title="Mark reviewed — clears the human review state. Status is left alone, so this never closes the task."
+                  onClick={async () => {
+                    await updateDoc(doc(db, 'tasks', task!.id), {
+                      aiDelegationStatus: null,
+                      aiDelegationReviewedAt: serverTimestamp(),
+                      updatedAt: serverTimestamp(),
+                    });
+                  }}
+                  disabled={saving || !task}
+                >
+                  <CheckCheck size={14} />
+                </Button>
+              )}
               <Button variant="outline-secondary" size="sm" title="Defer intelligently" onClick={() => setShowDeferModal(true)}>
                 <Clock3 size={14} />
               </Button>

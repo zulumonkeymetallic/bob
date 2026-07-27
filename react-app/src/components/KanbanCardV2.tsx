@@ -236,7 +236,7 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     const aiDelegationRevisionRaw = Number((item as any).aiDelegationRevision);
     const aiDelegationRevision = Number.isFinite(aiDelegationRevisionRaw) ? aiDelegationRevisionRaw : 1;
     const delegationColor = flaggedToAi
-        ? aiDelegationStatus === 'review'      ? '#28a745'
+        ? aiDelegationStatus === 'human_review' ? '#28a745'
         : aiDelegationStatus === 'in_progress' ? '#17a2b8'
         : aiDelegationStatus === 'failed'      ? '#dc3545'
         : '#ffc107'   // queued → yellow

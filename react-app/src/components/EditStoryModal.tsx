@@ -17,7 +17,7 @@ import ActivityStreamPanel from './common/ActivityStreamPanel';
 import ModernTaskTable from './ModernTaskTable';
 import { cascadeStoryPersona } from '../utils/personaCascade';
 import { useNavigate } from 'react-router-dom';
-import { Activity, Bot, CalendarPlus, Clock3, Maximize2, Minimize2, Shuffle, Trash2, Wand2 } from 'lucide-react';
+import { Activity, Bot, CalendarPlus, CheckCheck, Clock3, Maximize2, Minimize2, Shuffle, Trash2, Wand2 } from 'lucide-react';
 import { planningSprints } from '../utils/sprintFilter';
 import { evaluateStorySprintAlignment, getSprintFocusGoalIds } from '../utils/sprintAlignment';
 import { getGoalDisplayPath, getLeafGoalOptions, resolveLeafGoalSelection } from '../utils/goalHierarchy';
@@ -642,6 +642,23 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
               >
                 <Bot size={14} />
               </Button>
+              {(story as any)?.aiDelegationStatus === 'human_review' && (
+                <Button
+                  variant="success"
+                  size="sm"
+                  title="Mark reviewed — clears the human review state. Status is left alone."
+                  onClick={async () => {
+                    await updateDoc(doc(db, 'stories', story!.id), {
+                      aiDelegationStatus: null,
+                      aiDelegationReviewedAt: serverTimestamp(),
+                      updatedAt: serverTimestamp(),
+                    });
+                  }}
+                  disabled={loading || !story}
+                >
+                  <CheckCheck size={14} />
+                </Button>
+              )}
               <Button variant="outline-secondary" size="sm" title="Defer intelligently" onClick={() => setShowDeferModal(true)}>
                 <Clock3 size={14} />
               </Button>

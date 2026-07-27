@@ -163,7 +163,12 @@ export interface Story {
   locationLon?: number;
   // AI delegation
   flaggedToAi?: boolean;
-  aiDelegationStatus?: 'queued' | 'in_progress' | 'review' | 'failed';
+  // Written only by the delegation pipeline — there is no manual setter, so this
+  // state exists solely on AI-delegated items. 'human_review' means the AI has
+  // finished and the result is waiting on Jim; it is never expressed via `status`,
+  // because status has no Review lane (story 0/2/4, task 0/1/2 — writing 2 on a
+  // task would close it).
+  aiDelegationStatus?: 'queued' | 'in_progress' | 'human_review' | 'blocked' | 'failed';
   aiDelegationNote?: string;
   aiDelegatedAt?: number;
   aiDelegationDocumentLink?: string;
@@ -383,7 +388,12 @@ export interface Task {
   deferredBy?: string;
   // AI delegation
   flaggedToAi?: boolean;
-  aiDelegationStatus?: 'queued' | 'in_progress' | 'review' | 'failed';
+  // Written only by the delegation pipeline — there is no manual setter, so this
+  // state exists solely on AI-delegated items. 'human_review' means the AI has
+  // finished and the result is waiting on Jim; it is never expressed via `status`,
+  // because status has no Review lane (story 0/2/4, task 0/1/2 — writing 2 on a
+  // task would close it).
+  aiDelegationStatus?: 'queued' | 'in_progress' | 'human_review' | 'blocked' | 'failed';
   aiDelegationNote?: string;
   aiDelegatedAt?: number;
   aiDelegationDocumentLink?: string;
