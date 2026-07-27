@@ -7,7 +7,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import { Story, Task, Goal } from '../types';
 import KanbanBoardV2 from './KanbanBoardV2';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Maximize2, Minimize2, RefreshCw, Sparkles, LayoutList, Columns2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Maximize2, Minimize2, RefreshCw, Sparkles, LayoutList, Columns2, Rows3 } from 'lucide-react';
 import SprintTriageTable from './SprintTriageTable';
 import { displayRefForEntity } from '../utils/referenceGenerator';
 import { useSprint } from '../contexts/SprintContext';
@@ -33,6 +33,11 @@ import {
     normalizePlannerCallableError,
 } from '../utils/plannerOrchestration';
 import PlanActionBar from './planner/PlanActionBar';
+
+// board = three status columns; goals = the same columns repeated per goal in
+// horizontal swimlanes (matching the iOS board); table = the triage table.
+type ViewMode = 'board' | 'goals' | 'table';
+const VIEW_MODES: ViewMode[] = ['board', 'goals', 'table'];
 
 const SprintKanbanPageV2: React.FC = () => {
     const navigate = useNavigate();
@@ -72,9 +77,16 @@ const SprintKanbanPageV2: React.FC = () => {
     const [showAiScoredOnly, setShowAiScoredOnly] = useState(false);
     const [showDelegatedOnly, setShowDelegatedOnly] = useState(false);
     const [sortBy, setSortBy] = useState<'ai' | 'due' | 'priority' | 'default'>('default');
-    const [viewMode, setViewMode] = useState<'board' | 'table'>(() => {
-        try { return (localStorage.getItem('kanban_view_mode') as 'board' | 'table') || 'board'; } catch { return 'board'; }
+    const [viewMode, setViewMode] = useState<ViewMode>(() => {
+        try {
+            const stored = localStorage.getItem('kanban_view_mode');
+            return VIEW_MODES.includes(stored as ViewMode) ? (stored as ViewMode) : 'board';
+        } catch { return 'board'; }
     });
+    const selectViewMode = (mode: ViewMode) => {
+        setViewMode(mode);
+        try { localStorage.setItem('kanban_view_mode', mode); } catch { /* noop */ }
+    };
     const [replanLoading, setReplanLoading] = useState(false);
     const [fullReplanLoading, setFullReplanLoading] = useState(false);
     const [replanFeedback, setReplanFeedback] = useState<string | null>(null);
@@ -516,17 +528,29 @@ const SprintKanbanPageV2: React.FC = () => {
                                 <Button
                                     variant={viewMode === 'board' ? 'secondary' : 'outline-secondary'}
                                     size="sm"
-                                    onClick={() => { setViewMode('board'); try { localStorage.setItem('kanban_view_mode', 'board'); } catch {} }}
+                                    onClick={() => selectViewMode('board')}
                                     title="Board view"
+                                    aria-pressed={viewMode === 'board'}
                                     style={{ borderRadius: 0, border: 'none', padding: '4px 10px' }}
                                 >
                                     <Columns2 size={15} />
                                 </Button>
                                 <Button
+                                    variant={viewMode === 'goals' ? 'secondary' : 'outline-secondary'}
+                                    size="sm"
+                                    onClick={() => selectViewMode('goals')}
+                                    title="Goal swimlanes — group the board into one horizontal lane per goal"
+                                    aria-pressed={viewMode === 'goals'}
+                                    style={{ borderRadius: 0, border: 'none', padding: '4px 10px' }}
+                                >
+                                    <Rows3 size={15} />
+                                </Button>
+                                <Button
                                     variant={viewMode === 'table' ? 'secondary' : 'outline-secondary'}
                                     size="sm"
-                                    onClick={() => { setViewMode('table'); try { localStorage.setItem('kanban_view_mode', 'table'); } catch {} }}
+                                    onClick={() => selectViewMode('table')}
                                     title="Triage table view"
+                                    aria-pressed={viewMode === 'table'}
                                     style={{ borderRadius: 0, border: 'none', padding: '4px 10px' }}
                                 >
                                     <LayoutList size={15} />
@@ -676,8 +700,9 @@ const SprintKanbanPageV2: React.FC = () => {
                 <Col style={{ height: '100%' }}>
                     <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', height: '100%', borderRadius: isFullscreen ? 0 : undefined }}>
                         <Card.Body style={{ padding: '24px', height: '100%', overflow: 'auto', backgroundColor: isFullscreen ? 'var(--bg)' : undefined }}>
-                            {viewMode === 'board' ? (
+                            {viewMode !== 'table' ? (
                                 <KanbanBoardV2
+                                    groupByGoal={viewMode === 'goals'}
                                     sprintId={filterSprintId}
                                     themeFilter={themeFilterIds.length > 0 ? themeFilterIds : null}
                                     goalFilter={goalFilterIds.length > 0 ? goalFilterIds : null}

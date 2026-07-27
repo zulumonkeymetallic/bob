@@ -16,6 +16,14 @@ import { findItemWithManualPriorityRank, getManualPriorityLabel, getManualPriori
 import DeferItemModal from './DeferItemModal';
 import { useAuth } from '../contexts/AuthContext';
 import { useSidebar } from '../contexts/SidebarContext';
+import {
+    WORKFLOW_STATUS_COLORS,
+    WORKFLOW_STATUS_LABELS,
+    WORKFLOW_STATUS_OPTIONS,
+    WorkflowStatus,
+    toWorkflowStatus,
+    workflowStatusToRaw,
+} from '../utils/workflowStatus';
 
 const BASE_URL = 'https://bob.jc1.tech';
 const EXCLUDED_TASK_TYPES = new Set(['chore', 'routine', 'habit', 'core', 'read', 'watch']);
@@ -36,21 +44,13 @@ interface SprintTriageTableProps {
     onEditGoal?: (goal: Goal) => void;
 }
 
-// Canonical status labels — 0=Backlog, 1=In Progress, 2=Review(stories)/Done(tasks), 4=Done
-// (raw value 4 is what KanbanBoardV2 actually writes when a story card is dragged to its
-// Done column — labelling it "Bin" here was wrong: this dropdown changes workflow status,
-// not archival. Real deletion already has its own dedicated Delete/Trash2 button below.)
-const STORY_STATUS: Record<number, string> = { 0: 'Backlog', 1: 'In Progress', 2: 'Review', 4: 'Done' };
-const TASK_STATUS: Record<number, string> = { 0: 'Backlog', 1: 'In Progress', 2: 'Done' };
-// "done" threshold per entity type (used for hide-done filter)
-const isDone = (status: number, type: RowType) => type === 'story' ? status >= 4 : status >= 2;
-
-function statusColor(status: number, type: RowType) {
-    if (status === 1) return '#0d6efd';
-    if (status === 2) return '#198754';
-    if (status === 4) return '#198754'; // Done (stories) — same green as Done (tasks/status 2)
-    return themeVars.muted as string;
-}
+// Status labelling/bucketing lives in utils/workflowStatus — three states only
+// (Backlog / In Progress / Done), identical to the board's three columns. This
+// table used to label story status 2 as "Review", which is the value the board
+// writes for In Progress: picking "In Progress" here wrote 1 while dragging a
+// card wrote 2, so the two surfaces disagreed and a status set in one appeared
+// to be ignored by the other.
+const isDone = (status: any, type: RowType) => toWorkflowStatus(status, type) === 'done';
 
 function fmtDate(v: any): string {
     if (!v) return '';
@@ -119,6 +119,17 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
     const [latestNotes, setLatestNotes] = useState<Record<string, string>>({});
     const [hideDone, setHideDone] = useState(true);
     const [flaggingPriorityId, setFlaggingPriorityId] = useState<string | null>(null);
+    // Optimistic overlays. Tasks reach this table via the server-maintained
+    // `sprint_task_index` materialised view, not `tasks` itself — a status write or a
+    // delete only shows up here once a Cloud Function has rewritten (or removed) the
+    // index row. Without these overlays the row snapped straight back to its old status,
+    // or simply stayed put after a delete, which reads as "the table won't let me change
+    // anything".
+    const [pendingStatus, setPendingStatus] = useState<Record<string, WorkflowStatus>>({});
+    const [deletedIds, setDeletedIds] = useState<Set<string>>(new Set());
+
+    const effectiveStatus = (item: Story | Task, type: RowType): WorkflowStatus =>
+        pendingStatus[item.id] ?? toWorkflowStatus((item as any).status, type);
 
     const handleFlagPriority = async (story: Story) => {
         if (!currentUser) return;
@@ -151,19 +162,19 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
         }
     };
 
-    // Sprint-scoped data
+    // Sprint-scoped data. Done items are *not* stripped here — the "Showing active only"
+    // toggle below owns that decision, and hard-filtering status 4 up here meant a
+    // completed story could never be shown again even with the toggle flipped off.
     const sprintStories = useMemo(() =>
-        filterSprintId
-            ? stories.filter(s => (s as any).sprintId === filterSprintId && (s as any).status !== 4)
-            : stories.filter(s => (s as any).status !== 4),
-    [stories, filterSprintId]);
+        (filterSprintId ? stories.filter(s => (s as any).sprintId === filterSprintId) : stories)
+            .filter(s => !deletedIds.has(s.id)),
+    [stories, filterSprintId, deletedIds]);
 
     const sprintTasks = useMemo(() =>
-        (filterSprintId
-            ? tasks.filter(t => (t as any).sprintId === filterSprintId && (t as any).status !== 4)
-            : tasks.filter(t => (t as any).status !== 4)
-        ).filter(t => !EXCLUDED_TASK_TYPES.has(String((t as any).type || '').toLowerCase())),
-    [tasks, filterSprintId]);
+        (filterSprintId ? tasks.filter(t => (t as any).sprintId === filterSprintId) : tasks)
+            .filter(t => !EXCLUDED_TASK_TYPES.has(String((t as any).type || '').toLowerCase()))
+            .filter(t => !deletedIds.has(t.id)),
+    [tasks, filterSprintId, deletedIds]);
 
     // Activity stream subscription for latest notes
     useEffect(() => {
@@ -200,21 +211,25 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
     [goals]);
 
     const storyOptions = useMemo(() =>
-        sprintStories.map(s => ({ id: s.id, label: `${(s as any).ref ? (s as any).ref + ' — ' : ''}${s.title}` })),
+        sprintStories
+            .filter(s => !isDone((s as any).status, 'story'))
+            .map(s => ({ id: s.id, label: `${(s as any).ref ? (s as any).ref + ' — ' : ''}${s.title}` })),
     [sprintStories]);
 
-    // Progress helpers
+    // Progress helpers — completion is the canonical "done" bucket, not a hard-coded 2.
+    // Story status 2 is In Progress, so goal progress used to count active stories as
+    // finished and never counted the ones that genuinely were (status 4).
     const storyProgress = (storyId: string) => {
         const t = sprintTasks.filter(t => (t as any).parentId === storyId || (t as any).storyId === storyId);
         if (!t.length) return null;
-        const done = t.filter(t => Number((t as any).status) === 2).length;
+        const done = t.filter(t => isDone((t as any).status, 'task')).length;
         return { done, total: t.length, pct: Math.round(done / t.length * 100) };
     };
 
     const goalProgress = (goalId: string) => {
         const s = sprintStories.filter(s => (s as any).goalId === goalId);
         if (!s.length) return null;
-        const done = s.filter(s => Number((s as any).status) === 2).length;
+        const done = s.filter(s => isDone((s as any).status, 'story')).length;
         return { done, total: s.length, pct: Math.round(done / s.length * 100) };
     };
 
@@ -224,9 +239,65 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
 
     const saveItem = async (id: string, collection_: 'stories' | 'tasks', updates: Record<string, any>) => {
         addSaving(id);
-        try { await updateDoc(doc(db, collection_, id), { ...updates, updatedAt: serverTimestamp() }); }
-        finally { rmSaving(id); }
+        try {
+            await updateDoc(doc(db, collection_, id), { ...updates, updatedAt: serverTimestamp() });
+        } catch (err: any) {
+            console.error(`[SprintTriageTable] update ${collection_}/${id} failed`, err);
+            alert(`Couldn't save that change: ${err?.code || err?.message || 'unknown error'}`);
+            throw err;
+        } finally { rmSaving(id); }
     };
+
+    // Status changes commit immediately on selection. The previous version stashed the
+    // value in local state and only wrote it on the select's blur, so choosing a status
+    // and then clicking anything that re-rendered the row (a live Firestore snapshot, a
+    // sort, the row disappearing behind the hide-done filter) dropped the change on the
+    // floor.
+    const setRowStatus = async (item: Story | Task, type: RowType, next: WorkflowStatus) => {
+        const previous = effectiveStatus(item, type);
+        if (next === previous) return;
+        setPendingStatus(prev => ({ ...prev, [item.id]: next }));
+        const updates: Record<string, any> = { status: workflowStatusToRaw(next, type) };
+        if (next === 'done') {
+            updates.completedAt = Date.now();
+            // Completing releases any manual #1/#2/#3 pin — mirrors the board's drop handler.
+            if (type === 'story') {
+                updates.userPriorityFlag = false;
+                updates.userPriorityRank = null;
+                updates.userPriorityFlagAt = null;
+            }
+        }
+        try {
+            await saveItem(item.id, type === 'story' ? 'stories' : 'tasks', updates);
+        } catch {
+            setPendingStatus(prev => {
+                const nextMap = { ...prev };
+                delete nextMap[item.id];
+                return nextMap;
+            });
+        }
+    };
+
+    // Drop an optimistic status once the real document catches up, so the overlay can
+    // never mask a later change made somewhere else (board drag, mobile, iOS sync).
+    useEffect(() => {
+        setPendingStatus(prev => {
+            const entries = Object.entries(prev);
+            if (entries.length === 0) return prev;
+            const byId = new Map<string, { raw: any; type: RowType }>();
+            stories.forEach(s => byId.set(s.id, { raw: (s as any).status, type: 'story' }));
+            tasks.forEach(t => byId.set(t.id, { raw: (t as any).status, type: 'task' }));
+            let changed = false;
+            const next: Record<string, WorkflowStatus> = {};
+            entries.forEach(([id, status]) => {
+                const actual = byId.get(id);
+                if (!actual) { changed = true; return; } // row is gone — drop the overlay
+                if (toWorkflowStatus(actual.raw, actual.type) === status) { changed = true; return; }
+                next[id] = status;
+            });
+            return changed ? next : prev;
+        });
+    }, [stories, tasks]);
 
     const commitEdit = (item: Story | Task, type: RowType) => {
         if (!editCell) return;
@@ -235,7 +306,6 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
         let updates: Record<string, any> = {};
         if (field === 'title') updates.title = editVal.trim();
         else if (field === 'description') updates.description = editVal.trim();
-        else if (field === 'status') updates.status = Number(editVal);
         else if (field === 'dueDate') updates.dueDate = parseDateMs(editVal);
         else if (field === 'sprintId') updates.sprintId = editVal || null;
         else if (field === 'goalId') {
@@ -246,7 +316,7 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
             const match = sprintStories.find(s => s.id === editVal || s.title === editVal);
             updates.parentId = match ? match.id : (editVal || null);
         } else return;
-        if (Object.keys(updates).length) saveItem(item.id, col as any, updates);
+        if (Object.keys(updates).length) saveItem(item.id, col as any, updates).catch(() => { /* surfaced in saveItem */ });
         setEditCell(null); setEditVal('');
     };
 
@@ -262,8 +332,8 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
             const c = (resp?.data?.created || resp?.data?.stories || resp?.data?.results || [])[0] || {};
             if (c.storyId || c.id) {
                 const sid = c.storyId || c.id;
-                await updateDoc(doc(db, 'stories', sid), { status: 1, updatedAt: serverTimestamp() });
-                await updateDoc(doc(db, 'tasks', task.id), { status: 2, convertedToStoryId: sid, updatedAt: serverTimestamp() });
+                await updateDoc(doc(db, 'stories', sid), { status: workflowStatusToRaw('in-progress', 'story'), updatedAt: serverTimestamp() });
+                await updateDoc(doc(db, 'tasks', task.id), { status: workflowStatusToRaw('done', 'task'), convertedToStoryId: sid, updatedAt: serverTimestamp() });
                 const ref = c.storyRef || c.ref || c.reference;
                 if (ref) setConvertedStory({ ref, id: sid });
             }
@@ -274,14 +344,28 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
     const handleDelete = async (id: string, type: RowType) => {
         if (!window.confirm(`Delete this ${type}? Cannot be undone.`)) return;
         const col = type === 'story' ? 'stories' : 'tasks';
+        const source = type === 'story'
+            ? stories.find(s => s.id === id)
+            : tasks.find(t => t.id === id);
+        // Drop the row straight away. Tasks are read from the server-maintained
+        // sprint_task_index, whose row only disappears once onTaskWritten has processed
+        // the delete — waiting on that made a successful delete look like nothing had
+        // happened, and a stale index row (task already gone) never cleared at all.
+        setDeletedIds(prev => new Set(prev).add(id));
         try {
-            // Claim ownership first so docs without ownerUid can be deleted
-            if (currentUser?.uid) {
+            // Only claim ownership when the doc genuinely has none — the delete rule
+            // rejects ownerUid == null, but an unconditional write here costs a round-trip
+            // on every delete and hard-fails on rows whose underlying doc is already gone.
+            if (currentUser?.uid && !(source as any)?.ownerUid) {
                 await updateDoc(doc(db, col, id), { ownerUid: currentUser.uid, updatedAt: serverTimestamp() });
             }
             await deleteDoc(doc(db, col, id));
         } catch (err: any) {
+            // not-found means the underlying doc was already deleted (typically a stale
+            // index row) — the row should stay gone, not bounce back with an alert.
+            if (err?.code === 'not-found') return;
             console.error(`[SprintTriageTable] delete ${type} failed`, err);
+            setDeletedIds(prev => { const next = new Set(prev); next.delete(id); return next; });
             alert(`Failed to delete ${type}: ${err?.message || 'permission denied'}`);
         }
     };
@@ -295,10 +379,10 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
     const rows = useMemo(() => {
         const all = [
             ...sprintStories
-                .filter(s => !hideDone || !isDone(Number((s as any).status ?? 0), 'story'))
+                .filter(s => !hideDone || effectiveStatus(s, 'story') !== 'done')
                 .map(s => ({ item: s as Story | Task, rowType: 'story' as RowType })),
             ...sprintTasks
-                .filter(t => !hideDone || !isDone(Number((t as any).status ?? 0), 'task'))
+                .filter(t => !hideDone || effectiveStatus(t, 'task') !== 'done')
                 .map(t => ({ item: t as Story | Task, rowType: 'task' as RowType })),
         ];
         return [...all].sort((a, b) => {
@@ -306,14 +390,20 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
             if (sortKey === 'type') { av = a.rowType; bv = b.rowType; }
             else if (sortKey === 'ref') { av = itemRef(a.item, a.rowType); bv = itemRef(b.item, b.rowType); }
             else if (sortKey === 'title') { av = a.item.title || ''; bv = b.item.title || ''; }
-            else if (sortKey === 'status') { av = Number((a.item as any).status ?? 0); bv = Number((b.item as any).status ?? 0); }
+            else if (sortKey === 'status') {
+                const order: Record<WorkflowStatus, number> = { backlog: 0, 'in-progress': 1, done: 2 };
+                av = order[effectiveStatus(a.item, a.rowType)];
+                bv = order[effectiveStatus(b.item, b.rowType)];
+            }
             else if (sortKey === 'ai') { av = Number((a.item as any).aiCriticalityScore ?? -1); bv = Number((b.item as any).aiCriticalityScore ?? -1); }
             else if (sortKey === 'dueDate') { av = fmtDate((a.item as any).dueDate); bv = fmtDate((b.item as any).dueDate); }
             if (av < bv) return sortDir === 'asc' ? -1 : 1;
             if (av > bv) return sortDir === 'asc' ? 1 : -1;
             return 0;
         });
-    }, [sprintStories, sprintTasks, sortKey, sortDir]);
+        // hideDone/pendingStatus belong here: without them the "Showing active only"
+        // button changed state but never re-derived the row list.
+    }, [sprintStories, sprintTasks, sortKey, sortDir, hideDone, pendingStatus]);
 
     // Render helpers
     const SortIcon = ({ col }: { col: SortKey }) =>
@@ -359,31 +449,37 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
         );
     };
 
+    // Always-live select (no click-to-edit step) that writes the moment a status is
+    // picked. Three options only — the same Backlog / In Progress / Done the board uses.
     const inlineStatus = (item: Story | Task, type: RowType) => {
-        const status = Number((item as any).status ?? 0);
-        const labels = type === 'story' ? STORY_STATUS : TASK_STATUS;
-        const statuses = type === 'story' ? [0, 1, 2, 4] : [0, 1, 2];
-        const editing = editCell?.id === item.id && editCell?.field === 'status';
-        if (editing) {
-            return (
-                <select autoFocus className="form-select form-select-sm" value={editVal}
-                    style={{ fontSize: 12, padding: '2px 6px' }}
-                    onChange={e => setEditVal(e.target.value)}
-                    onBlur={() => commitEdit(item, type)}
-                    onKeyDown={e => { if (e.key === 'Escape') cancelEdit(); }}
-                >
-                    {statuses.map(s => <option key={s} value={s}>{labels[s]}</option>)}
-                </select>
-            );
-        }
-        const col = statusColor(status, type);
+        const status = effectiveStatus(item, type);
+        const col = WORKFLOW_STATUS_COLORS[status];
         return (
-            <span
-                onClick={() => startEdit(item.id, 'status', String(status))}
-                style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600, cursor: 'pointer', backgroundColor: col + '22', color: col, border: `1px solid ${col}44` }}
+            <select
+                className="form-select form-select-sm"
+                value={status}
+                aria-label={`Status — ${WORKFLOW_STATUS_LABELS[status]}`}
+                disabled={saving.has(item.id)}
+                onChange={e => { void setRowStatus(item, type, e.target.value as WorkflowStatus); }}
+                style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    padding: '2px 22px 2px 8px',
+                    borderRadius: 10,
+                    width: 'auto',
+                    minWidth: 108,
+                    cursor: 'pointer',
+                    backgroundColor: col + '22',
+                    color: col,
+                    border: `1px solid ${col}44`,
+                }}
             >
-                {labels[status] ?? status}
-            </span>
+                {WORKFLOW_STATUS_OPTIONS.map(opt => (
+                    <option key={opt.value} value={opt.value} style={{ color: themeVars.text as string }}>
+                        {opt.label}
+                    </option>
+                ))}
+            </select>
         );
     };
 

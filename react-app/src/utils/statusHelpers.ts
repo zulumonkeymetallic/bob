@@ -13,7 +13,9 @@ export const isStatus = (actualStatus: any, expectedStatus: string): boolean => 
     if (expectedStatus === 'Blocked') return actualStatus === 3;
     if (expectedStatus === 'Deferred') return actualStatus === 4;
 
-    // Story status mapping — 0=Backlog, 1=In Progress, 2=Review, 4=Bin/Done
+    // Story status mapping — 0=Backlog, 1=Planned, 2=In Progress, 3=Testing, 4=Done.
+    // Legacy compatibility shim only: the user-facing model is the three states in
+    // utils/workflowStatus (1/2/3 all read as In Progress there).
     if (expectedStatus === 'backlog') return actualStatus === 0;
     if (expectedStatus === 'in-progress' || expectedStatus === 'in_progress') return actualStatus === 1;
     if (expectedStatus === 'planned') return actualStatus === 1; // legacy alias kept for compat

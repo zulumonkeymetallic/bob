@@ -22,6 +22,7 @@ import { ChoiceHelper } from '../config/choices';
 import { EntitySummary, searchEntities, loadEntitySummary, formatEntityLabel } from '../utils/entityLookup';
 import { useNavigate } from 'react-router-dom';
 import { isStatus, getPriorityBadge } from '../utils/statusHelpers';
+import { WORKFLOW_STATUS_LABELS, WORKFLOW_STATUS_VARIANTS, toWorkflowStatus } from '../utils/workflowStatus';
 import { normalizePriorityValue } from '../utils/priorityUtils';
 import { resolveThemeFromValue } from '../utils/themeResolver';
 import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
@@ -259,52 +260,12 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     // Helper to normalize string casing
     const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-    // Story status mapping (numeric and string)
-    if (type === 'story') {
-      // Numeric mapping used in Kanban: 0=backlog,1=planned,2=active/in-progress,3=testing,4=done
-      if (typeof status === 'number') {
-        switch (status) {
-          case 4: return { label: 'Done', variant: 'success' };
-          case 3: return { label: 'Review', variant: 'warning' };
-          case 2: return { label: 'Active', variant: 'primary' };
-          case 1: return { label: 'Planned', variant: 'secondary' };
-          case 0: return { label: 'Backlog', variant: 'secondary' };
-          default: return { label: 'Unknown', variant: 'light' };
-        }
-      }
-      // String mapping fallback
-      const map: Record<string, { label: string; variant: string }> = {
-        backlog: { label: 'Backlog', variant: 'secondary' },
-        planned: { label: 'Planned', variant: 'secondary' },
-        active: { label: 'Active', variant: 'primary' },
-        'in-progress': { label: 'Active', variant: 'primary' },
-        testing: { label: 'Review', variant: 'warning' },
-        done: { label: 'Done', variant: 'success' },
-        defect: { label: 'Defect', variant: 'danger' },
-      };
-      return map[String(status) as keyof typeof map] || { label: cap(String(status || 'Unknown')), variant: 'light' };
-    }
-
-    // Task status mapping (primarily string-based today)
-    if (type === 'task') {
-      if (typeof status === 'number') {
-        // Conservative mapping: 0=todo/planned,1=in-progress,3=blocked,2=done (if ever used)
-        switch (status) {
-          case 2: return { label: 'Done', variant: 'success' };
-          case 3: return { label: 'Blocked', variant: 'danger' };
-          case 1: return { label: 'In Progress', variant: 'primary' };
-          case 0: return { label: 'Todo', variant: 'secondary' };
-          default: return { label: 'Unknown', variant: 'light' };
-        }
-      }
-      const map: Record<string, { label: string; variant: string }> = {
-        todo: { label: 'Todo', variant: 'secondary' },
-        planned: { label: 'Planned', variant: 'secondary' },
-        'in-progress': { label: 'In Progress', variant: 'primary' },
-        blocked: { label: 'Blocked', variant: 'danger' },
-        done: { label: 'Done', variant: 'success' },
-      };
-      return map[String(status) as keyof typeof map] || { label: cap(String(status || 'Unknown')), variant: 'light' };
+    // Stories and tasks share the three-state workflow model — Backlog / In Progress /
+    // Done — so a sidebar badge always says the same thing as the board column the item
+    // is sitting in.
+    if (type === 'story' || type === 'task') {
+      const workflow = toWorkflowStatus(status, type);
+      return { label: WORKFLOW_STATUS_LABELS[workflow], variant: WORKFLOW_STATUS_VARIANTS[workflow] };
     }
 
     // Goal status mapping

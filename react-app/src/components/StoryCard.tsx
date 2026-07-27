@@ -12,26 +12,26 @@ import { themeVars } from '../utils/themeVars';
 import { colorWithAlpha } from '../utils/storyCardFormatting';
 import DeferItemModal from './DeferItemModal';
 import { applyPlannerDefer } from '../utils/plannerDeferral';
+import {
+  WORKFLOW_STATUS_LABELS,
+  WORKFLOW_STATUS_OPTIONS,
+  WORKFLOW_STATUS_VARIANTS,
+  WorkflowStatus,
+  toWorkflowStatus,
+  workflowStatusToRaw,
+} from '../utils/workflowStatus';
 
 interface StoryCardProps {
   story: Story;
   index: number;
 }
 
-const statusBadgeMap: Record<number, { bg: string; text: string }> = {
-  0: { bg: 'secondary', text: 'Backlog' },
-  1: { bg: 'info', text: 'Planned' },
-  2: { bg: 'primary', text: 'In progress' },
-  3: { bg: 'warning', text: 'Review' },
-  4: { bg: 'success', text: 'Done' },
-};
-
 const StoryCard: React.FC<StoryCardProps> = ({ story, index }) => {
   const { showSidebar } = useSidebar();
   const [aiBusy, setAiBusy] = useState(false);
   const [showDeferModal, setShowDeferModal] = useState(false);
   const [priorityValue, setPriorityValue] = useState<number>(Number((story as any).priority ?? 0));
-  const [statusValue, setStatusValue] = useState<number>(Number((story as any).status ?? 0));
+  const [statusValue, setStatusValue] = useState<WorkflowStatus>(toWorkflowStatus((story as any).status, 'story'));
   const [dueInputValue, setDueInputValue] = useState<string>(() => {
     const raw = (story as any).dueDate ?? (story as any).targetDate ?? null;
     if (!raw) return '';
@@ -74,7 +74,7 @@ const StoryCard: React.FC<StoryCardProps> = ({ story, index }) => {
   })();
 
   const priorityBadge = getPriorityBadge(priorityValue);
-  const statusBadge = statusBadgeMap[statusValue] ?? { bg: 'secondary', text: 'Backlog' };
+  const statusBadge = { bg: WORKFLOW_STATUS_VARIANTS[statusValue], text: WORKFLOW_STATUS_LABELS[statusValue] };
 
   const applyPatch = async (patch: Record<string, any>) => {
     await updateDoc(doc(db, 'stories', (story as any).id), {
@@ -97,10 +97,15 @@ const StoryCard: React.FC<StoryCardProps> = ({ story, index }) => {
   const handleStatusChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
     e.stopPropagation();
     const prev = statusValue;
-    const next = Number(e.target.value);
+    const next = e.target.value as WorkflowStatus;
     setStatusValue(next);
     setUpdatingField('status');
-    try { await applyPatch({ status: next }); }
+    try {
+      await applyPatch({
+        status: workflowStatusToRaw(next, 'story'),
+        ...(next === 'done' ? { completedAt: Date.now() } : {}),
+      });
+    }
     catch { setStatusValue(prev); }
     finally { setUpdatingField(null); }
   };
@@ -258,11 +263,9 @@ const StoryCard: React.FC<StoryCardProps> = ({ story, index }) => {
                 color: statusBadge.bg === 'warning' || statusBadge.bg === 'light' ? '#000' : '#fff',
               }}
             >
-              <option value={0}>Backlog</option>
-              <option value={1}>Planned</option>
-              <option value={2}>In progress</option>
-              <option value={3}>Review</option>
-              <option value={4}>Done</option>
+              {WORKFLOW_STATUS_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
             </select>
           </div>
 

@@ -72,6 +72,14 @@ import { LEGACY_THEME_MAP } from '../../constants/globalThemes';
 import { pushDiagnosticLog } from '../../hooks/useDiagnosticsLog';
 import { usePersona } from '../../contexts/PersonaContext';
 import { getBadgeVariant, getPriorityBadge, getStatusName } from '../../utils/statusHelpers';
+import {
+  WORKFLOW_STATUS_LABELS,
+  WORKFLOW_STATUS_OPTIONS,
+  WORKFLOW_STATUS_VARIANTS,
+  WorkflowStatus,
+  toWorkflowStatus,
+  workflowStatusToRaw,
+} from '../../utils/workflowStatus';
 import { isRecurringDueOnDate, resolveRecurringDueMs } from '../../utils/recurringTaskDue';
 import EditTaskModal from '../EditTaskModal';
 import EditStoryModal from '../EditStoryModal';
@@ -1345,10 +1353,14 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
     }
   }, [triggerDeltaRescore]);
 
-  const handleStoryStatusChange = useCallback(async (story: Story, status: number) => {
+  const handleStoryStatusChange = useCallback(async (story: Story, status: WorkflowStatus) => {
     try {
       const ref = doc(db, 'stories', story.id);
-      await updateDoc(ref, { status, updatedAt: serverTimestamp() });
+      await updateDoc(ref, {
+        status: workflowStatusToRaw(status, 'story'),
+        ...(status === 'done' ? { completedAt: Date.now() } : {}),
+        updatedAt: serverTimestamp(),
+      });
       triggerDeltaRescore(story.id, 'story');
     } catch (err) {
       console.error('Failed to update story status', err);
@@ -2011,15 +2023,11 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
                             const parsed = raw ? Date.parse(String(raw)) : NaN;
                             return Number.isNaN(parsed) ? null : parsed;
                           })();
-                          const storyStatusVal = Number(story.status ?? 0);
-                          const storyStatusMap: Record<number, { bg: string; label: string }> = {
-                            0: { bg: 'light', label: 'Backlog' },
-                            1: { bg: 'info', label: 'Planned' },
-                            2: { bg: 'primary', label: 'In Progress' },
-                            3: { bg: 'warning', label: 'Testing' },
-                            4: { bg: 'success', label: 'Done' },
+                          const storyStatusVal = toWorkflowStatus(story.status, 'story');
+                          const storyS = {
+                            bg: WORKFLOW_STATUS_VARIANTS[storyStatusVal],
+                            label: WORKFLOW_STATUS_LABELS[storyStatusVal],
                           };
-                          const storyS = storyStatusMap[storyStatusVal] || storyStatusMap[0];
                           return (
                             <div key={story.id} className="border rounded p-2 mb-2 dashboard-due-item">
                               <div className="d-flex align-items-start justify-content-between gap-2">
@@ -2102,17 +2110,15 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
                                   <select
                                     className="dashboard-chip-select"
                                     value={storyStatusVal}
-                                    onChange={(e) => handleStoryStatusChange(story, Number(e.target.value))}
+                                    onChange={(e) => handleStoryStatusChange(story, e.target.value as WorkflowStatus)}
                                     style={{
                                       backgroundColor: `var(--bs-${storyS.bg})`,
                                       color: storyS.bg === 'light' || storyS.bg === 'warning' ? '#000' : '#fff',
                                     }}
                                   >
-                                    <option value={0}>Backlog</option>
-                                    <option value={1}>Planned</option>
-                                    <option value={2}>In Progress</option>
-                                    <option value={3}>Testing</option>
-                                    <option value={4}>Done</option>
+                                    {WORKFLOW_STATUS_OPTIONS.map((opt) => (
+                                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                                    ))}
                                   </select>
                                 </span>
                                 <span className="text-muted" style={{ fontSize: 11 }}>
