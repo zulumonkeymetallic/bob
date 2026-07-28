@@ -116,8 +116,12 @@ export const useUnifiedPlannerData = (range: PlannerRange | null): PlannerDataSt
 
     setInstancesLoading(true);
 
-    const startKey = format(range.start, 'yyyyMMdd');
-    const endKey = format(range.end, 'yyyyMMdd');
+    // `scheduled_instances.occurrenceDate` is yyyy-MM-dd. Querying with yyyyMMdd matched
+    // nothing at all — '-' sorts below '0', so '2026-07-28' < '20260728' and the `>=`
+    // bound excluded every row. The planner showed no instances for the same reason the
+    // daily check-in showed no planned items.
+    const startKey = format(range.start, 'yyyy-MM-dd');
+    const endKey = format(range.end, 'yyyy-MM-dd');
 
     const unsubscribe = onSnapshot(
       schedulerCollections.userInstancesRange(db, ownerUid, startKey, endKey),
