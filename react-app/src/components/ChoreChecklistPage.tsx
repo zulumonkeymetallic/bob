@@ -14,6 +14,7 @@ import DeferItemModal from './DeferItemModal';
 import EditTaskModal from './EditTaskModal';
 import { resolveRecurringDueMs } from '../utils/recurringTaskDue';
 import { applyPlannerDefer, type PlannerDeferPayload } from '../utils/plannerDeferral';
+import { dedupeTasks } from '../utils/taskDedupe';
 
 interface BlockWindow {
   start: number;
@@ -164,7 +165,9 @@ const ChoreChecklistPage: React.FC = () => {
       const bDue = resolveRecurringDueMs(b, selectedDate, blockWindow?.start ?? rangeStartMs) ?? 0;
       return aDue - bDue;
     });
-    return filtered;
+    // A repeating Apple reminder arrives from bob-mac-sync as one task per completed
+    // occurrence, so a single daily habit can fill this whole page. See utils/taskDedupe.ts.
+    return dedupeTasks(filtered);
   }, [tasks, currentPersona, rangeStartMs, rangeEndMs, blockWindow, localDone, selectedDate]);
 
   const handleComplete = useCallback(async (task: Task) => {

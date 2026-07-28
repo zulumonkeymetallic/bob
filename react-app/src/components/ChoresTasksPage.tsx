@@ -6,6 +6,7 @@ import { format, formatDistanceToNow } from 'date-fns';
 import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
+import { dedupeTasks } from '../utils/taskDedupe';
 
 type TaskType = 'chore' | 'routine';
 
@@ -72,7 +73,8 @@ const ChoresTasksPage: React.FC = () => {
         const bu = (b.updatedAt && (b.updatedAt as any).toDate ? (b.updatedAt as any).toDate().getTime() : (b.updatedAt as any)) || 0;
         return bu - au;
       });
-      setRows(filtered);
+      // dedupeTasks: see utils/taskDedupe.ts — reminder imports multiply per occurrence.
+      setRows(dedupeTasks(filtered as any) as TaskRow[]);
       setLoading(false);
     }, () => setLoading(false));
     return () => unsub();

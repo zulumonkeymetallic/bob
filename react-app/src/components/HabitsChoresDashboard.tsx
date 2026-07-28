@@ -9,6 +9,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import { Goal, Task } from '../types';
 import { useNavigate, Link } from 'react-router-dom';
 import { isRecurringDueOnDate, resolveRecurringDueMs } from '../utils/recurringTaskDue';
+import { dedupeTasks } from '../utils/taskDedupe';
 import EditTaskModal from './EditTaskModal';
 
 interface Occurrence {
@@ -168,11 +169,13 @@ const HabitsChoresDashboard: React.FC = () => {
   }, [currentUser?.uid]);
 
   const filteredTasks = useMemo(() => {
-    return tasks
+    // dedupeTasks: one reminder-import copy per row, not one per completed occurrence.
+    // See utils/taskDedupe.ts.
+    return dedupeTasks(tasks
       .filter((task) => !task.deleted)
       .filter((task) => (task.status ?? 0) !== 2)
       .filter((task) => !currentPersona || !task.persona || task.persona === currentPersona)
-      .filter((task) => !!getHabitKind(task));
+      .filter((task) => !!getHabitKind(task)));
   }, [tasks, currentPersona]);
 
   const taskStats = useMemo(() => {
