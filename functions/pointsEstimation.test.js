@@ -1,7 +1,8 @@
 const {
-  FIBONACCI_POINTS,
+  pointsScale,
+  POINTS_MIN,
   POINTS_SOURCE,
-  clampToFibonacci,
+  clampPoints,
   shouldApplyEstimate,
   provenanceFields,
   buildEstimationPrompt,
@@ -15,33 +16,47 @@ const {
  * deterministic, and anything the model returns is clamped to the scale or rejected. The
  * iOS suite asserts the same rules against the Swift mirror.
  */
-describe('clampToFibonacci', () => {
+describe('clampPoints', () => {
   test('valid values pass through', () => {
-    FIBONACCI_POINTS.forEach((v) => expect(clampToFibonacci(v)).toBe(v));
+    pointsScale('task').forEach((v) => expect(clampPoints(v)).toBe(v));
   });
 
-  test('off-scale numbers snap to the nearest valid value', () => {
-    expect(clampToFibonacci(4)).toBe(3);   // equidistant 3 vs 5 — first wins, deterministically
-    expect(clampToFibonacci(6)).toBe(5);
-    expect(clampToFibonacci(7)).toBe(8);
-    expect(clampToFibonacci(100)).toBe(21);
-    expect(clampToFibonacci(0.4)).toBe(1);
+  it('snaps off-grid numbers to the nearest 0.25', () => {
+    expect(clampPoints(0.3)).toBe(0.25);
+    expect(clampPoints(0.4)).toBe(0.5);
+    expect(clampPoints(1.1)).toBe(1);
+    expect(clampPoints(2.6)).toBe(2.5);
+    expect(clampPoints(3.13)).toBe(3.25);
   });
 
-  test('numeric strings are accepted — models quote things', () => {
-    expect(clampToFibonacci('8')).toBe(8);
-    expect(clampToFibonacci(' 13 ')).toBe(13);
+  it('treats 0.25 as the floor — it is TASK_DEFAULT_POINTS, not corruption', () => {
+    // 618 of Jim's tasks sit on this value. A clamp that moved it would rewrite his
+    // backlog, which is what the previous Fibonacci scale would have done.
+    expect(POINTS_MIN).toBe(0.25);
+    expect(clampPoints(0.01)).toBe(0.25);
+    expect(clampPoints(0.1666)).toBe(0.25);
   });
 
-  test('unusable output is rejected, not guessed', () => {
-    // An absent estimate is honest. A fabricated one is worse than none.
-    expect(clampToFibonacci('medium')).toBeNull();
-    expect(clampToFibonacci('')).toBeNull();
-    expect(clampToFibonacci(null)).toBeNull();
-    expect(clampToFibonacci(undefined)).toBeNull();
-    expect(clampToFibonacci(0)).toBeNull();
-    expect(clampToFibonacci(-3)).toBeNull();
-    expect(clampToFibonacci(NaN)).toBeNull();
+  it('caps at the ceiling for the kind, and stories may exceed tasks', () => {
+    expect(clampPoints(100, 'task')).toBe(8);
+    expect(clampPoints(13, 'task')).toBe(8);
+    expect(clampPoints(13, 'story')).toBe(13);
+    expect(clampPoints(21, 'story')).toBe(13);
+  });
+
+  it('accepts numeric strings — models quote things', () => {
+    expect(clampPoints('8')).toBe(8);
+    expect(clampPoints(' 2.5 ')).toBe(2.5);
+  });
+
+  it('rejects unusable output rather than guessing', () => {
+    expect(clampPoints('medium')).toBeNull();
+    expect(clampPoints('')).toBeNull();
+    expect(clampPoints(null)).toBeNull();
+    expect(clampPoints(undefined)).toBeNull();
+    expect(clampPoints(0)).toBeNull();
+    expect(clampPoints(-3)).toBeNull();
+    expect(clampPoints(NaN)).toBeNull();
   });
 });
 
@@ -90,7 +105,8 @@ describe('buildEstimationPrompt', () => {
 
   test('names every valid value so the model has the scale', () => {
     const { system } = buildEstimationPrompt({ title: 'x' });
-    FIBONACCI_POINTS.forEach((v) => expect(system).toContain(String(v)));
+    expect(system).toContain('0.25');
+    expect(system).toContain('8');
   });
 
   test('survives an item with nothing but a title', () => {

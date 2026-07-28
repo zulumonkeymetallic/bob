@@ -10270,7 +10270,13 @@ async function generateCalendarPlanForUser({ db, userId, profile, runId }) {
     completedAt: nowMs,
     plannedCount: plan.planned.length,
     unscheduledCount: plan.unscheduled.length,
-    conflicts: plan.conflicts || [],
+    // Sanitised, not trusted. A single undefined anywhere in this array makes Firestore
+    // reject the entire document, and this write sits mid-way through
+    // `nightly_task_maintenance` — so one malformed conflict took down scoring, sizing and
+    // pointing for the whole account, every night, silently. The source of the undefined
+    // (`scheduler/engine.js`) is fixed too; this is the guard that stops the next one
+    // costing a nightly run.
+    conflicts: stripUndefinedDeep(plan.conflicts || []),
     createdAt: nowMs,
     updatedAt: nowMs,
     runId,
@@ -10281,6 +10287,24 @@ async function generateCalendarPlanForUser({ db, userId, profile, runId }) {
     unscheduled: plan.unscheduled.length,
     conflicts: Array.isArray(plan.conflicts) ? plan.conflicts.length : 0,
   };
+}
+
+/**
+ * Recursively replace `undefined` with `null` so a value can be persisted.
+ *
+ * Firestore rejects `undefined` outright, and the failure is total: one bad leaf fails
+ * the whole `set()`. Anything assembled from optional fields and then written wholesale
+ * needs this.
+ */
+function stripUndefinedDeep(value) {
+  if (value === undefined) return null;
+  if (Array.isArray(value)) return value.map(stripUndefinedDeep);
+  if (value && typeof value === 'object' && value.constructor === Object) {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, stripUndefinedDeep(v)]),
+    );
+  }
+  return value;
 }
 
 async function applyDailySprintCalendarPlanForUser({ db, userId, profile, runId }) {

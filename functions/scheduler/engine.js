@@ -796,10 +796,17 @@ function planOccurrences({
       });
       conflicts.push({
         dayKey: occurrence.dayKey,
-        blockId: occurrence.requiredBlockId || undefined,
+        // `null`, never `undefined`. Firestore rejects an undefined value anywhere in a
+        // document, and these conflicts are persisted verbatim into `planning_jobs`
+        // (functions/index.js). A single `no-block` conflict — which by definition has no
+        // required block — therefore threw, failing the whole write, which aborted
+        // `nightly_task_maintenance` before it reached sizing. On Jim's account that
+        // silently disabled server-side pointing entirely; accounts that happened to
+        // generate no `no-block` conflicts were unaffected, which is why it looked healthy.
+        blockId: occurrence.requiredBlockId || null,
         reason: 'no-block',
         message: `No eligible block matched ${occurrence.title || occurrence.sourceId}.`,
-        detail: occurrence.requiredBlockId ? `Required block ${occurrence.requiredBlockId} unavailable.` : undefined,
+        detail: occurrence.requiredBlockId ? `Required block ${occurrence.requiredBlockId} unavailable.` : null,
       });
       continue;
     }
