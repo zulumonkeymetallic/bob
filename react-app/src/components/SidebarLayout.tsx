@@ -19,6 +19,7 @@ import ProcessTextActivityHost from './ProcessTextActivityHost';
 import NotificationStream from './NotificationStream';
 import AssistantDock from './AssistantDock';
 import { useDeviceInfo } from '../utils/deviceDetection';
+import { forceCacheReset } from '../utils/staleCacheGuard';
 // Test mode UI removed per request
 
 interface SidebarLayoutProps {
@@ -583,7 +584,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             blueprint.organize.build
           </Offcanvas.Title>
         </Offcanvas.Header>
-        <Offcanvas.Body>
+        <Offcanvas.Body className="d-flex flex-column" style={{ overflow: 'hidden' }}>
           {/* User Info Mobile */}
           {currentUser && (
             <div className="mb-3 pb-3 border-bottom border-secondary">
@@ -622,15 +623,16 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             </div>
           )}
 
-          {/* Navigation Mobile */}
-          <Nav className="flex-column">
+          {/* Navigation Mobile — scrolls in its own space so the sticky Sign Out footer
+              below can never clip it (it did on phone: the list ran under the footer). */}
+          <Nav className="flex-column" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
             {navigationGroups.map((group) => (
               <div key={group.label} className="mb-2">
                 {/* Group Header Mobile */}
                 <div
-                  className="d-flex align-items-center justify-content-between px-3 py-2 text-white-50"
+                  className="d-flex align-items-center justify-content-between px-3 py-2"
                   onClick={() => toggleGroup(group.label)}
-                  style={{ cursor: 'pointer', fontSize: '0.9rem', fontWeight: '600' }}
+                  style={{ cursor: 'pointer', fontSize: '0.85rem', fontWeight: 700, color: 'rgba(255,255,255,0.72)', textTransform: 'uppercase', letterSpacing: 0.4 }}
                 >
                   <div className="d-flex align-items-center">
                     <i className={`fas fa-${group.icon} me-2`}></i>
@@ -645,13 +647,16 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                     {group.items.map((item) => (
                       <div
                         key={item.path}
-                        className="nav-link text-white py-2 border-0"
+                        className="py-2 border-0"
                         onClick={() => {
                           navigate(item.path);
                           setShowSidebar(false);
                           console.info('[Sidebar] mobile navigation executed', { to: item.path });
                         }}
-                        style={{ fontSize: '0.9rem', cursor: 'pointer' }}
+                        // .nav-link sets its own --bs-nav-link-color, which beat the
+                        // .text-white utility and rendered these items near-invisible grey
+                        // on the dark offcanvas. Colour is set inline so nothing can win.
+                        style={{ fontSize: '0.95rem', cursor: 'pointer', color: '#fff', paddingLeft: 12, borderRadius: 6 }}
                       >
                         <i className={`fas fa-${item.icon} me-2`}></i>
                         {item.label}
@@ -665,13 +670,11 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
 
           {/* Bottom Actions Mobile - Now Sticky */}
           <div
-            className="mt-auto pt-3 border-top border-secondary"
+            className="pt-3 border-top border-secondary"
             style={{
-              position: 'sticky',
-              bottom: 0,
+              flexShrink: 0,
               background: 'var(--bs-dark)',
-              zIndex: 10,
-              marginTop: 'auto !important'
+              paddingBottom: 'env(safe-area-inset-bottom, 0px)',
             }}
           >
             <div className="d-flex gap-2 mb-2">
@@ -684,6 +687,17 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                 {theme === 'light' ? 'Dark' : 'Light'} Mode
               </Button>
             </div>
+            {/* Escape hatch for a device already stranded on a stale Firestore cache —
+                the boot-time guard only fires when the build hash changes, which is no
+                help if you are stuck right now. Drops IndexedDB + SW caches and reloads. */}
+            <Button
+              variant="outline-light"
+              size="sm"
+              onClick={() => { void forceCacheReset(); }}
+              className="w-100 mb-2"
+            >
+              Force refresh (clear cached data)
+            </Button>
             <Button
               variant="outline-danger"
               size="sm"
