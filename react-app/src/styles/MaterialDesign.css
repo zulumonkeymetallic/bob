@@ -596,6 +596,16 @@
 .md-fab {
   opacity: 1 !important;
   visibility: visible !important;
+  /* Below Bootstrap's offcanvas (1045) so it can't float over the mobile menu — it was
+     sitting on top of the menu's footer buttons and swallowing their taps. */
+  z-index: 1040 !important;
+}
+
+/* Belt and braces: while an offcanvas is open, take the FAB out of the way entirely. */
+body.offcanvas-open .md-fab,
+body.modal-open .md-fab {
+  opacity: 0 !important;
+  pointer-events: none !important;
 }
 
 .md-fab:hover {

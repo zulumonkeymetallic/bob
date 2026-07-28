@@ -625,7 +625,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
 
           {/* Navigation Mobile — scrolls in its own space so the sticky Sign Out footer
               below can never clip it (it did on phone: the list ran under the footer). */}
-          <Nav className="flex-column" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+          <Nav className="flex-column" style={{ flex: 1, minHeight: 0, overflowY: 'auto', flexWrap: 'nowrap' }}>
             {navigationGroups.map((group) => (
               <div key={group.label} className="mb-2">
                 {/* Group Header Mobile */}
