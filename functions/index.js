@@ -770,12 +770,31 @@ async function resolveSprintIdForDate(db, ownerUid, persona, dueDateMs, cache) {
         id: doc.id,
         start: toMillis(data.startDate),
         end: toMillis(data.endDate),
+        status: Number(data.status ?? 0),
       };
     }).filter((s) => s.start && s.end);
     cache?.set(key, sprints);
   }
-  const match = sprints.find((s) => dueDateMs >= s.start && dueDateMs <= s.end);
-  return match?.id ?? null;
+  // Sprint windows overlap in practice (Jim's S46 26 Jun-31 Jul and S47 1 Jul-31 Aug share
+  // a month), so a due date can match several. This used to take the first match from an
+  // unordered Firestore query, which meant the answer depended on document order: every
+  // July task landed in S47, a *Planning* sprint, while S46 — the Active one — ended up with
+  // zero tasks and the Kanban board rendered empty. Confirmed live 2026-07-28.
+  //
+  // Precedence: the Active sprint wins outright; otherwise the one closing soonest that
+  // still contains the date, since that is the most specific bucket. Id breaks any
+  // remaining tie so the result is stable across runs.
+  const candidates = sprints.filter((s) => dueDateMs >= s.start && dueDateMs <= s.end);
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => {
+    const aActive = a.status === 1 ? 0 : 1;
+    const bActive = b.status === 1 ? 0 : 1;
+    if (aActive !== bActive) return aActive - bActive;
+    if (a.end !== b.end) return a.end - b.end;
+    if (a.start !== b.start) return a.start - b.start;
+    return String(a.id).localeCompare(String(b.id));
+  });
+  return candidates[0].id;
 }
 
 async function findSlotForDay(db, ownerUid, dayStartMs, dayEndMs, durationMs) {
@@ -17493,12 +17512,21 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
         const ss = await qs.get();
         const due = Number(after.dueDate) || null;
         if (due) {
-          for (const d of ss.docs) {
-            const s = d.data() || {};
-            if (typeof s.startDate === 'number' && typeof s.endDate === 'number') {
-              if (due >= s.startDate && due <= s.endDate) { effectiveSprintId = d.id; break; }
-            }
-          }
+          // Same precedence as resolveSprintIdForDate above — this was a second copy of the
+          // first-match-wins loop, so the index could disagree with the task's own sprintId.
+          const candidates = ss.docs
+            .map((d) => ({ id: d.id, ...(d.data() || {}) }))
+            .filter((s) => typeof s.startDate === 'number' && typeof s.endDate === 'number')
+            .filter((s) => due >= s.startDate && due <= s.endDate);
+          candidates.sort((a, b) => {
+            const aActive = Number(a.status ?? 0) === 1 ? 0 : 1;
+            const bActive = Number(b.status ?? 0) === 1 ? 0 : 1;
+            if (aActive !== bActive) return aActive - bActive;
+            if (a.endDate !== b.endDate) return a.endDate - b.endDate;
+            if (a.startDate !== b.startDate) return a.startDate - b.startDate;
+            return String(a.id).localeCompare(String(b.id));
+          });
+          if (candidates.length) effectiveSprintId = candidates[0].id;
         }
       } catch { }
     }
