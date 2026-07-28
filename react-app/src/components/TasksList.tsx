@@ -333,7 +333,7 @@ const TasksList: React.FC = () => {
     let filtered = tasks;
 
     if (filters.status) {
-      filtered = filtered.filter(task => isStatus(task.status, filters.status));
+      filtered = filtered.filter(task => isStatus(task.status, filters.status, 'task'));
     }
 
     if (filters.priority) {

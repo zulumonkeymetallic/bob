@@ -38,7 +38,15 @@ service cloud.firestore {
     // Allow updates when either the existing or incoming doc asserts ownership
     match /tasks/{id} {
       allow create: if isOwnerForCreate();
-      allow read, delete: if isOwner();
+      allow read: if isOwner();
+      // Null-owner fallback on delete, matching /stories below and the update rule here.
+      // isOwner() alone requires a non-null ownerUid, so legacy task docs written before
+      // ownerUid was mandatory could be read and edited but never deleted — the Delete
+      // button on the Kanban triage table just failed. Jim, 2026-07-28.
+      allow delete: if isSignedIn() && (
+        resource.data.ownerUid == request.auth.uid ||
+        resource.data.ownerUid == null
+      );
       // Legacy documents with no ownerUid can't satisfy either clause below when a client
       // update omits ownerUid from the patch (e.g. KanbanBoardV2's drag-and-drop status
       // update) — Firestore merges the patch onto the existing doc, so

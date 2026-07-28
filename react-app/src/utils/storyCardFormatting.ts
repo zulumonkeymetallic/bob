@@ -11,8 +11,9 @@ export const toSentenceCase = (value: string): string => {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 };
 
-// Canonical numeric mapping — matches statusHelpers.ts's isStatus(), SprintTriageTable,
-// KanbanCardV2/KanbanBoardV2, and DailyPlanList: 0=Backlog, 1=In Progress, 2=Review, 4=Done.
+// Canonical numeric mapping — matches utils/workStatus.ts, statusHelpers.ts's isStatus(),
+// SprintTriageTable, KanbanCardV2/KanbanBoardV2 and DailyPlanList: 0=Backlog, 1=In Progress,
+// 4=Done. Legacy 2/3 are read as In Progress and are never written.
 // This used to label status=1 "Planned" (mapped into the Backlog lane) and status=2/3
 // "In Progress" — a story sitting at status=1, genuinely in progress, showed as "Planned"
 // here while every other surface called it "In Progress". Confirmed by Jim, 2026-07-23.
@@ -22,8 +23,9 @@ export const storyStatusText = (status: any): string => {
     switch (status) {
       case 0: return 'Backlog';
       case 1: return 'In Progress';
-      case 2: return 'Review';
-      case 3: return 'Review'; // rarely-used review_gate tier, folded into Review
+      // No Review lane on any surface (Jim, 2026-07-28) — legacy 2/3 read as In Progress.
+      case 2: return 'In Progress';
+      case 3: return 'In Progress';
       case 4: return 'Done';
       default: return 'Unknown';
     }
@@ -32,8 +34,7 @@ export const storyStatusText = (status: any): string => {
   const s = String(status || '').trim().toLowerCase().replace(/_/g, '-');
   if (!s) return 'Backlog';
   if (['backlog', 'todo', 'new'].includes(s)) return 'Backlog';
-  if (['in-progress', 'in progress', 'active', 'wip', 'planned'].includes(s)) return 'In Progress';
-  if (['testing', 'qa', 'review'].includes(s)) return 'Review';
+  if (['in-progress', 'in progress', 'active', 'wip', 'planned', 'testing', 'qa', 'review'].includes(s)) return 'In Progress';
   if (['blocked', 'paused', 'on-hold', 'onhold', 'stalled', 'waiting'].includes(s)) return 'Blocked';
   if (['done', 'complete', 'completed', 'closed', 'finished'].includes(s)) return 'Done';
   return toSentenceCase(s.replace(/-/g, ' '));

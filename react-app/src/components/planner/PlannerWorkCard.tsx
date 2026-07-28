@@ -327,9 +327,7 @@ const PlannerWorkCard: React.FC<PlannerWorkCardProps> = ({
                       {choiceTable === 'story' ? (
                         <>
                           <option value={0}>Backlog</option>
-                          <option value={1}>Ready</option>
-                          <option value={2}>In Progress</option>
-                          <option value={3}>Review</option>
+                          <option value={1}>In Progress</option>
                           <option value={4}>Done</option>
                         </>
                       ) : (

@@ -11,9 +11,20 @@ interface KanbanColumnV2Props {
      * board can scroll all columns together in lockstep when the mouse isn't directly
      * over a specific column. Hovering the column itself still scrolls it natively. */
     registerScrollEl?: (status: string, el: HTMLDivElement | null) => void;
+    /** Unique key for scroll registration. Defaults to `status`; the swimlane layout has
+     * three columns per goal so it needs `${goalId}:${status}` to avoid collisions. */
+    scrollKey?: string;
+    /** Swimlane cells must not own a vertical scroller — the page owns it, so a band is as
+     * tall as its fullest column. Only the flat board's columns scroll independently. */
+    scrolls?: boolean;
+    /** Header is redundant inside a swimlane after the first band. */
+    showHeader?: boolean;
 }
 
-const KanbanColumnV2: React.FC<KanbanColumnV2Props> = ({ status, title, color, children, registerScrollEl }) => {
+const KanbanColumnV2: React.FC<KanbanColumnV2Props> = ({
+    status, title, color, children, registerScrollEl,
+    scrollKey, scrolls = true, showHeader = true,
+}) => {
     const ref = useRef<HTMLDivElement>(null);
     const [isDraggedOver, setIsDraggedOver] = useState(false);
 
@@ -30,13 +41,16 @@ const KanbanColumnV2: React.FC<KanbanColumnV2Props> = ({ status, title, color, c
         });
     }, [status]);
 
+    const registrationKey = scrollKey ?? status;
     useEffect(() => {
-        registerScrollEl?.(status, ref.current);
-        return () => registerScrollEl?.(status, null);
-    }, [status, registerScrollEl]);
+        if (!scrolls) return undefined;
+        registerScrollEl?.(registrationKey, ref.current);
+        return () => registerScrollEl?.(registrationKey, null);
+    }, [registrationKey, scrolls, registerScrollEl]);
 
     return (
-        <div className="kanban-column" style={{ flex: 1, minWidth: '300px', display: 'flex', flexDirection: 'column', height: '100%' }}>
+        <div className="kanban-column" style={{ flex: 1, minWidth: scrolls ? '300px' : 0, display: 'flex', flexDirection: 'column', height: scrolls ? '100%' : undefined }}>
+            {showHeader && (
             <div
                 className="kanban-column-header"
                 style={{
@@ -66,18 +80,19 @@ const KanbanColumnV2: React.FC<KanbanColumnV2Props> = ({ status, title, color, c
                     {React.Children.count(children)}
                 </span>
             </div>
+            )}
 
             <div
                 ref={ref}
-                data-kanban-column-body="true"
+                data-kanban-column-body={scrolls ? 'true' : undefined}
                 className={`kanban-column-body${isDraggedOver ? ' is-dragged-over' : ''}`}
                 style={{
                     flex: 1,
                     padding: '8px',
                     backgroundColor: isDraggedOver ? 'var(--notion-hover)' : 'var(--bg-subtle)',
                     borderRadius: '8px',
-                    overflowY: 'auto',
-                    minHeight: '200px',
+                    overflowY: scrolls ? 'auto' : 'visible',
+                    minHeight: scrolls ? '200px' : '80px',
                     transition: 'background-color 0.2s ease'
                 }}
             >

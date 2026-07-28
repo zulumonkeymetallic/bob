@@ -119,9 +119,13 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
                 {actions && (
                     <div style={{
                         display: 'flex',
+                        alignItems: 'center',
                         gap: spacing[3],
                         flexShrink: 0,
                         flexWrap: 'wrap',
+                        // Without this, a narrow (phone) header squeezes each action button
+                        // to min-content and its label renders one letter per line.
+                        whiteSpace: 'nowrap',
                     }}>
                         {actions}
                     </div>

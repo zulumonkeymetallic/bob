@@ -93,7 +93,7 @@ const StoryBacklog: React.FC = () => {
 
   // Filter stories based on current filters
   const filteredStories = stories.filter(story => {
-    if (filters.status && !isStatus(story.status, filters.status)) return false;
+    if (filters.status && !isStatus(story.status, filters.status, 'story')) return false;
     if (filters.goal && story.goalId !== filters.goal) return false;
     if (filters.priority && !isPriority(story.priority, filters.priority)) return false;
     if (filters.sprint) {
@@ -115,7 +115,7 @@ const StoryBacklog: React.FC = () => {
                 {filteredStories.length} Total Stories
               </Badge>
               <Badge bg="secondary">
-                {filteredStories.filter(s => isStatus(s.status, 'backlog')).length} In Backlog
+                {filteredStories.filter(s => isStatus(s.status, 'backlog', 'story')).length} In Backlog
               </Badge>
             </div>
           </div>
@@ -251,8 +251,8 @@ const StoryBacklog: React.FC = () => {
                           </td>
                           <td onClick={(e) => e.stopPropagation()}>
                             <Dropdown>
-                              <Dropdown.Toggle as={Badge} bg={isStatus(story.status, 'done') ? 'success' : 
-                                  isStatus(story.status, 'in-progress') ? 'warning' : 'secondary'} style={{ cursor: 'pointer' }}>
+                              <Dropdown.Toggle as={Badge} bg={isStatus(story.status, 'done', 'story') ? 'success' : 
+                                  isStatus(story.status, 'in-progress', 'story') ? 'warning' : 'secondary'} style={{ cursor: 'pointer' }}>
                                 {storyStatusText(story.status)}
                               </Dropdown.Toggle>
                               <Dropdown.Menu>
@@ -278,7 +278,7 @@ const StoryBacklog: React.FC = () => {
                               >
                                 <i className="fas fa-edit"></i>
                               </Button>
-                              {!isStatus(story.status, 'backlog') && (
+                              {!isStatus(story.status, 'backlog', 'story') && (
                                 <Button 
                                   size="sm" 
                                   variant="outline-secondary"
@@ -287,7 +287,7 @@ const StoryBacklog: React.FC = () => {
                                   → Backlog
                                 </Button>
                               )}
-                              {!isStatus(story.status, 'in-progress') && (
+                              {!isStatus(story.status, 'in-progress', 'story') && (
                                 <Button 
                                   size="sm" 
                                   variant="outline-warning"
@@ -296,7 +296,7 @@ const StoryBacklog: React.FC = () => {
                                   → Active
                                 </Button>
                               )}
-                              {!isStatus(story.status, 'done') && (
+                              {!isStatus(story.status, 'done', 'story') && (
                                 <Button 
                                   size="sm" 
                                   variant="outline-success"

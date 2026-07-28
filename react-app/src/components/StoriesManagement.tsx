@@ -12,6 +12,9 @@ import EditStoryModal from './EditStoryModal';
 import ImportModal from './ImportModal';
 import ModernTaskTable from './ModernTaskTable';
 import StoriesCardView from './StoriesCardView';
+import MobileEntityList, { type MobileEntityViewType } from './MobileEntityList';
+import MobileViewToggle, { readStoredMobileView } from './MobileViewToggle';
+import { useDeviceInfo } from '../utils/deviceDetection';
 import { isStatus, isTheme } from '../utils/statusHelpers';
 import { generateRef } from '../utils/referenceGenerator';
 import { themeVars } from '../utils/themeVars';
@@ -50,6 +53,15 @@ const StoriesManagement: React.FC = () => {
   const [selectedStory, setSelectedStory] = useState<Story | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; title: string } | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'cards'>('list');
+  const deviceInfo = useDeviceInfo();
+  // Filter card collapsed by default on a phone — otherwise the stories themselves start
+  // below the fold. Jim, 2026-07-28.
+  const [showMobileFilters, setShowMobileFilters] = useState(false);
+  // Phones get the compact List/Detail pair instead of ModernStoriesTable's wide grid.
+  // Jim, 2026-07-28.
+  const [mobileViewType, setMobileViewType] = useState<MobileEntityViewType>(
+    () => readStoredMobileView('mobile_stories_view_type'),
+  );
   const [activeSprintId, setActiveSprintId] = useState<string | null>(null);
   const [applyActiveSprintFilter, setApplyActiveSprintFilter] = useState(true); // default on
   const [goalSearch, setGoalSearch] = useState('');
@@ -398,8 +410,8 @@ const StoriesManagement: React.FC = () => {
   ));
   const filteredStories = stories.filter(story => {
     if (applyActiveSprintFilter && resolvedSprintId && story.sprintId !== resolvedSprintId) return false;
-    if (filterStatus === 'not_done' && isStatus(story.status, 'done')) return false;
-    else if (filterStatus !== 'all' && filterStatus !== 'not_done' && !isStatus(story.status, filterStatus)) return false;
+    if (filterStatus === 'not_done' && isStatus(story.status, 'done', 'story')) return false;
+    else if (filterStatus !== 'all' && filterStatus !== 'not_done' && !isStatus(story.status, filterStatus, 'story')) return false;
     if (filterTheme !== 'all' && String(story.theme ?? '') !== filterTheme) return false;
     if (top3Only && (story as any).aiTop3ForDay !== true) return false;
     if (focusOnly) {
@@ -427,14 +439,14 @@ const StoriesManagement: React.FC = () => {
   // Get counts for dashboard cards
   const storyCounts = {
     total: sprintScopedStories.length,
-    backlog: sprintScopedStories.filter(s => isStatus(s.status, 'backlog')).length,
-    active: sprintScopedStories.filter(s => isStatus(s.status, 'active')).length,
-    done: sprintScopedStories.filter(s => isStatus(s.status, 'done')).length
+    backlog: sprintScopedStories.filter(s => isStatus(s.status, 'backlog', 'story')).length,
+    active: sprintScopedStories.filter(s => isStatus(s.status, 'active', 'story')).length,
+    done: sprintScopedStories.filter(s => isStatus(s.status, 'done', 'story')).length
   };
 
   return (
     <div style={{
-      padding: '24px',
+      padding: deviceInfo.isMobile ? '12px' : '24px',
       backgroundColor: themeVars.bg as string,
       minHeight: '100vh',
       width: '100%'
@@ -451,10 +463,12 @@ const StoriesManagement: React.FC = () => {
               {/* Lightweight WorkSurfaceNav moved onto this row, to the left of the
                   Import/List/Cards/Add buttons — was its own row above, wasting vertical
                   space. Per Jim, 2026-07-23. */}
-              <WorkSurfaceNav inline />
+              {!deviceInfo.isMobile && <WorkSurfaceNav inline />}
               {/* Import + View Mode Toggle sit to the left of the primary Add Story button,
                   which stays rightmost as the primary CTA — consistent with Goals/Tasks.
-                  Per Jim, 2026-07-23. */}
+                  Per Jim, 2026-07-23. Import is desktop-only: it opens a file picker and a
+                  column-mapping grid that is unusable at phone width. */}
+              {!deviceInfo.isMobile && (
               <Button
                 variant="outline-secondary"
                 onClick={() => setShowImportModal(true)}
@@ -463,6 +477,24 @@ const StoriesManagement: React.FC = () => {
                 <Upload size={16} />
                 Import
               </Button>
+              )}
+              {deviceInfo.isMobile && (
+                <Button
+                  size="sm"
+                  variant={showMobileFilters ? 'secondary' : 'outline-secondary'}
+                  onClick={() => setShowMobileFilters((v) => !v)}
+                  style={{ whiteSpace: 'nowrap', flexShrink: 0 }}
+                >
+                  Filters
+                </Button>
+              )}
+              {deviceInfo.isMobile ? (
+                <MobileViewToggle
+                  value={mobileViewType}
+                  onChange={setMobileViewType}
+                  storageKey="mobile_stories_view_type"
+                />
+              ) : (
               <div style={{ display: 'flex', border: `1px solid ${themeVars.border}`, borderRadius: '6px', overflow: 'hidden' }}>
                 <Button
                   variant={viewMode === 'list' ? 'primary' : 'outline-secondary'}
@@ -494,10 +526,12 @@ const StoriesManagement: React.FC = () => {
                   Cards
                 </Button>
               </div>
+              )}
               <Button
                 variant="primary"
+                size={deviceInfo.isMobile ? 'sm' : undefined}
                 onClick={() => setShowAddStoryModal(true)}
-                style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap', flexShrink: 0 }}
               >
                 <Plus size={16} />
                 Add Story
@@ -525,6 +559,7 @@ const StoriesManagement: React.FC = () => {
         )}
 
         {/* Filters */}
+        {(!deviceInfo.isMobile || showMobileFilters) && (
         <Card style={{ marginBottom: '12px', border: 'none', boxShadow: 'var(--glass-shadow, 0 2px 4px var(--glass-shadow-color))' }}>
           <Card.Body style={{ padding: '6px' }}>
             <Row>
@@ -621,6 +656,7 @@ const StoriesManagement: React.FC = () => {
             </Row>
           </Card.Body>
         </Card>
+        )}
 
         {/* Modern Stories Table - Full Width */}
         <Card style={{ border: 'none', boxShadow: 'var(--glass-shadow, 0 2px 4px var(--glass-shadow-color))', minHeight: '600px' }}>
@@ -658,8 +694,18 @@ const StoriesManagement: React.FC = () => {
                 }}
               />
             ) : (
-              <div style={{ height: '600px', overflow: 'auto' }} data-component="StoriesManagement">
-                {viewMode === 'list' ? (
+              <div style={{ height: deviceInfo.isMobile ? 'auto' : '600px', overflow: 'auto' }} data-component="StoriesManagement">
+                {deviceInfo.isMobile ? (
+                  <MobileEntityList
+                    kind="story"
+                    items={orderedFilteredStories}
+                    viewType={mobileViewType}
+                    parentLabel={(item) => goals.find((g) => g.id === (item as any).goalId)?.title || 'No goal'}
+                    onEdit={openEditStory}
+                    onDelete={handleStoryDelete}
+                    emptyMessage="No stories match the current filters."
+                  />
+                ) : viewMode === 'list' ? (
                   <ModernStoriesTable
                     stories={orderedFilteredStories}
                     goals={goals}

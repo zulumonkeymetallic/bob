@@ -8,6 +8,9 @@ import { db } from '../firebase';
 import { Goal, Story } from '../types';
 import ModernGoalsTable from './ModernGoalsTable';
 import GoalsCardView from './GoalsCardView';
+import { useDeviceInfo } from '../utils/deviceDetection';
+import MobileEntityList, { type MobileEntityViewType } from './MobileEntityList';
+import MobileViewToggle, { readStoredMobileView } from './MobileViewToggle';
 import AddGoalModal from './AddGoalModal';
 import EditGoalModal from './EditGoalModal';
 import GoalPlanningWorkspaceModal from './GoalPlanningWorkspaceModal';
@@ -45,7 +48,16 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
   const [allYears, setAllYears] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(true);
+  const deviceInfo = useDeviceInfo();
+  // The filter card is ~7 stacked controls tall; on a phone it pushes the actual goals
+  // entirely below the fold. Collapsed by default there, expanded on desktop. Jim, 2026-07-28.
+  const [showMobileFilters, setShowMobileFilters] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'cards'>('cards');
+  // Phones get the compact List/Detail pair instead of ModernGoalsTable, which renders one
+  // letter per column header at phone width. Jim, 2026-07-28.
+  const [mobileViewType, setMobileViewType] = useState<MobileEntityViewType>(
+    () => readStoredMobileView('mobile_goals_view_type'),
+  );
   const [showAddGoal, setShowAddGoal] = useState(false);
   const [goalsDetailLevel, setGoalsDetailLevel] = useState<'minimal' | 'medium' | 'full'>(() => {
     try {
@@ -698,25 +710,33 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
     }}>
       <div style={{ maxWidth: '100%', margin: '0', display: 'flex', flexDirection: 'column', gap: '10px', height: embedded ? '100%' : 'calc(100vh - 32px)' }}>
         {/* Header */}
+        {/* Phone: stack the header and let the action row wrap. Side by side at 375px the
+            flex row squeezed every button to min-content width, which renders their labels
+            one letter per line — the "Add Goal"/"List"/"Detail" columns Jim saw. */}
         <div style={{
           display: 'flex',
+          flexDirection: deviceInfo.isMobile ? 'column' : 'row',
           justifyContent: 'space-between',
-          alignItems: 'center',
+          alignItems: deviceInfo.isMobile ? 'stretch' : 'center',
+          gap: deviceInfo.isMobile ? 8 : 0,
           marginBottom: '8px'
         }}>
           <div>
             <h2 style={{ margin: '0 0 4px 0', fontSize: '20px', fontWeight: '700' }}>
               Goals
             </h2>
-            <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '13px' }}>
-              Manage your life goals across different themes
-            </p>
+            {!deviceInfo.isMobile && (
+              <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '13px' }}>
+                Manage your life goals across different themes
+              </p>
+            )}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: deviceInfo.isMobile ? 8 : 12, flexWrap: 'wrap' }}>
             {/* Lightweight WorkSurfaceNav moved onto this row, to the left of the
                 collapse/List/Cards/Add buttons — was its own row above, wasting vertical
                 space. Per Jim, 2026-07-23. */}
-            {!embedded && <WorkSurfaceNav inline />}
+            {!embedded && !deviceInfo.isMobile && <WorkSurfaceNav inline />}
+            {!deviceInfo.isMobile && (
             <Button
               size="sm"
               variant="outline-secondary"
@@ -725,8 +745,26 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
             >
               {isCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
             </Button>
+            )}
             {/* View Mode Toggle — sits to the left of the primary Add button, which stays
                 rightmost as the primary CTA. Per Jim, 2026-07-23. */}
+            {deviceInfo.isMobile && (
+              <Button
+                size="sm"
+                variant={showMobileFilters ? 'secondary' : 'outline-secondary'}
+                onClick={() => setShowMobileFilters((v) => !v)}
+                style={{ whiteSpace: 'nowrap', flexShrink: 0 }}
+              >
+                Filters
+              </Button>
+            )}
+            {deviceInfo.isMobile ? (
+              <MobileViewToggle
+                value={mobileViewType}
+                onChange={setMobileViewType}
+                storageKey="mobile_goals_view_type"
+              />
+            ) : (
             <div style={{ display: 'flex', border: '1px solid var(--notion-border)', borderRadius: 6, overflow: 'hidden' }}>
               <Button
                 size="sm"
@@ -747,7 +785,8 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
                 Cards
               </Button>
             </div>
-            <Button variant="primary" onClick={() => setShowAddGoal(true)} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            )}
+            <Button variant="primary" size={deviceInfo.isMobile ? 'sm' : undefined} onClick={() => setShowAddGoal(true)} style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap', flexShrink: 0 }}>
               <Plus size={16} />
               Add Goal
             </Button>
@@ -771,6 +810,7 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
         </div>
 
         {/* Filters */}
+        {(!deviceInfo.isMobile || showMobileFilters) && (
         <Card style={{ marginBottom: '8px', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
           <Card.Body style={{ padding: '6px', color: 'var(--notion-text)' }}>
             <Row className="g-2 align-items-end">
@@ -861,7 +901,7 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
                 </Form.Group>
               </Col>
               <Col md="auto">
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                   <Button
                     size="sm"
                     variant="outline-secondary"
@@ -873,7 +913,7 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
                       setShowNoPotOnly(false);
                       setApplyFocusOnlyFilter(false);
                     }}
-                    style={{ borderColor: 'var(--notion-border)', color: 'var(--notion-text)' }}
+                    style={{ borderColor: 'var(--notion-border)', color: 'var(--notion-text)', whiteSpace: 'nowrap', flexShrink: 0 }}
                   >
                     Clear Filters
                   </Button>
@@ -907,6 +947,7 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
             </Row>
           </Card.Body>
         </Card>
+        )}
 
         {/* Modern Goals Table - Full Width */}
         <Card style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', flex: 1, minHeight: '70vh', display: 'flex', flexDirection: 'column' }}>
@@ -934,7 +975,20 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
               </div>
             ) : (
               <div style={{ height: '100%', overflow: 'auto' }}>
-                {viewMode === 'list' ? (
+                {deviceInfo.isMobile ? (
+                  <MobileEntityList
+                    kind="goal"
+                    items={orderedFilteredGoals}
+                    viewType={mobileViewType}
+                    parentLabel={(item) => {
+                      const parent = goals.find((g) => g.id === (item as any).parentGoalId);
+                      return parent ? parent.title : null;
+                    }}
+                    onEdit={(goal) => setEditGoal(goal)}
+                    onDelete={handleGoalDelete}
+                    emptyMessage="No goals match the current filters."
+                  />
+                ) : viewMode === 'list' ? (
                   <ModernGoalsTable
                     goals={orderedFilteredGoals}
                     onGoalUpdate={handleGoalUpdate}

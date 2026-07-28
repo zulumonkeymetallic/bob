@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Spinner } from 'react-bootstrap';
 import { Activity, Clock3, Wand2, Pencil, Trash2, ExternalLink, ChevronUp, ChevronDown } from 'lucide-react';
@@ -16,6 +16,7 @@ import { findItemWithManualPriorityRank, getManualPriorityLabel, getManualPriori
 import DeferItemModal from './DeferItemModal';
 import { useAuth } from '../contexts/AuthContext';
 import { useSidebar } from '../contexts/SidebarContext';
+import { canonicalStatusValue, isDoneStatus, laneFor, statusLabel, statusOptions } from '../utils/workStatus';
 
 const BASE_URL = 'https://bob.jc1.tech';
 const EXCLUDED_TASK_TYPES = new Set(['chore', 'routine', 'habit', 'core', 'read', 'watch']);
@@ -39,19 +40,16 @@ interface SprintTriageTableProps {
     compactColumns?: boolean;
 }
 
-// Canonical status labels — 0=Backlog, 1=In Progress, 2=Review(stories)/Done(tasks), 4=Done
-// (raw value 4 is what KanbanBoardV2 actually writes when a story card is dragged to its
-// Done column — labelling it "Bin" here was wrong: this dropdown changes workflow status,
-// not archival. Real deletion already has its own dedicated Delete/Trash2 button below.)
-const STORY_STATUS: Record<number, string> = { 0: 'Backlog', 1: 'In Progress', 2: 'Review', 4: 'Done' };
-const TASK_STATUS: Record<number, string> = { 0: 'Backlog', 1: 'In Progress', 2: 'Done' };
-// "done" threshold per entity type (used for hide-done filter)
-const isDone = (status: number, type: RowType) => type === 'story' ? status >= 4 : status >= 2;
+// Three canonical lanes only — see utils/workStatus.ts. This dropdown previously offered a
+// "Review" option for stories (raw 2) which nothing else in the app had a lane for, and
+// statusColor painted it the same green as Done, so a story parked in Review read as
+// finished. Removed per Jim, 2026-07-28.
+const isDone = (status: number, type: RowType) => isDoneStatus(status, type);
 
 function statusColor(status: number, type: RowType) {
-    if (status === 1) return '#0d6efd';
-    if (status === 2) return '#198754';
-    if (status === 4) return '#198754'; // Done (stories) — same green as Done (tasks/status 2)
+    const lane = laneFor(status, type);
+    if (lane === 'in-progress') return '#0d6efd';
+    if (lane === 'done') return '#198754';
     return themeVars.muted as string;
 }
 
@@ -122,6 +120,41 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
     const [latestNotes, setLatestNotes] = useState<Record<string, string>>({});
     const [hideDone, setHideDone] = useState(true);
     const [flaggingPriorityId, setFlaggingPriorityId] = useState<string | null>(null);
+    // Optimistic overlay. Tasks on this table come from `sprint_task_index`, a materialised
+    // copy that a Cloud Function re-mirrors from `tasks/{id}` after a write — so a status
+    // change lands in Firestore but the row on screen keeps its old value until the trigger
+    // catches up, which reads as "the change didn't take". These two hold the intended state
+    // until the listener agrees. Confirmed by Jim, 2026-07-28.
+    const [pendingPatches, setPendingPatches] = useState<Record<string, Record<string, any>>>({});
+    const [hiddenRowIds, setHiddenRowIds] = useState<Set<string>>(new Set());
+
+    const applyPatch = useCallback(<T extends Story | Task>(item: T): T => {
+        const patch = pendingPatches[item.id];
+        return patch ? ({ ...item, ...patch } as T) : item;
+    }, [pendingPatches]);
+
+    // Drop an overlay once the incoming props actually carry the value we wrote, otherwise
+    // a later legitimate change made elsewhere would be masked by a stale local patch.
+    useEffect(() => {
+        setPendingPatches((prev) => {
+            const ids = Object.keys(prev);
+            if (ids.length === 0) return prev;
+            const byId = new Map<string, any>([
+                ...stories.map((s) => [s.id, s] as [string, any]),
+                ...tasks.map((t) => [t.id, t] as [string, any]),
+            ]);
+            let changed = false;
+            const next: Record<string, Record<string, any>> = {};
+            for (const id of ids) {
+                const live = byId.get(id);
+                if (!live) { next[id] = prev[id]; continue; } // row gone entirely — keep until it disappears
+                const settled = Object.entries(prev[id]).every(([k, v]) => live[k] === v);
+                if (settled) changed = true;
+                else next[id] = prev[id];
+            }
+            return changed ? next : prev;
+        });
+    }, [stories, tasks]);
 
     const handleFlagPriority = async (story: Story) => {
         if (!currentUser) return;
@@ -154,19 +187,22 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
         }
     };
 
-    // Sprint-scoped data
+    // Sprint-scoped data (with the optimistic overlay applied, and rows the user has just
+    // deleted removed immediately rather than waiting on the index listener)
     const sprintStories = useMemo(() =>
-        filterSprintId
-            ? stories.filter(s => (s as any).sprintId === filterSprintId && (s as any).status !== 4)
-            : stories.filter(s => (s as any).status !== 4),
-    [stories, filterSprintId]);
+        stories
+            .filter(s => !hiddenRowIds.has(s.id))
+            .map(applyPatch)
+            .filter(s => !filterSprintId || (s as any).sprintId === filterSprintId),
+    [stories, filterSprintId, hiddenRowIds, applyPatch]);
 
     const sprintTasks = useMemo(() =>
-        (filterSprintId
-            ? tasks.filter(t => (t as any).sprintId === filterSprintId && (t as any).status !== 4)
-            : tasks.filter(t => (t as any).status !== 4)
-        ).filter(t => !EXCLUDED_TASK_TYPES.has(String((t as any).type || '').toLowerCase())),
-    [tasks, filterSprintId]);
+        tasks
+            .filter(t => !hiddenRowIds.has(t.id))
+            .map(applyPatch)
+            .filter(t => !filterSprintId || (t as any).sprintId === filterSprintId)
+            .filter(t => !EXCLUDED_TASK_TYPES.has(String((t as any).type || '').toLowerCase())),
+    [tasks, filterSprintId, hiddenRowIds, applyPatch]);
 
     // Activity stream subscription for latest notes
     useEffect(() => {
@@ -227,17 +263,26 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
 
     const saveItem = async (id: string, collection_: 'stories' | 'tasks', updates: Record<string, any>) => {
         addSaving(id);
+        setPendingPatches((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), ...updates } }));
+        const rollback = () => setPendingPatches((prev) => {
+            const next = { ...prev };
+            delete next[id];
+            return next;
+        });
         try {
             await updateDoc(doc(db, collection_, id), { ...updates, updatedAt: serverTimestamp() });
         } catch (err: any) {
+            rollback();
             // The row's own doc was already deleted but a stale sprint_task_index/materialized
             // entry kept it visible here (orphaned index row — see onTaskWritten's delete-cleanup
             // in functions/index.js, which doesn't always run for pre-existing legacy orphans).
-            // Not worth alarming Jim over with a popup; the live listener will drop the row once
-            // the index self-heals. Confirmed live 2026-07-23: TK-OO1ZBB's index row pointed at a
-            // tasks/{id} doc that no longer exists, throwing not-found on every inline edit.
+            // The listener can't drop it on its own — sprint_task_index is server-write-only —
+            // so hide it here instead of leaving a row that silently swallows every edit.
+            // Confirmed live 2026-07-23: TK-OO1ZBB's index row pointed at a tasks/{id} doc that
+            // no longer exists, throwing not-found on every inline edit.
             if (err?.code === 'not-found') {
-                console.warn(`[SprintTriageTable] save ${collection_}/${id} skipped — doc no longer exists (stale index row)`);
+                console.warn(`[SprintTriageTable] save ${collection_}/${id} skipped — doc no longer exists (stale index row); hiding it`);
+                setHiddenRowIds((prev) => new Set(prev).add(id));
                 return;
             }
             // Legacy guardrail: docs with a missing/mismatched ownerUid can fail Firestore's
@@ -312,17 +357,33 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
     const handleDelete = async (id: string, type: RowType) => {
         if (!window.confirm(`Delete this ${type}? Cannot be undone.`)) return;
         const col = type === 'story' ? 'stories' : 'tasks';
+        addSaving(id);
         try {
-            // Claim ownership first so docs without ownerUid can be deleted
+            // Claim ownership first so docs without ownerUid can be deleted. This is a
+            // best-effort step: if the doc is already gone the claim throws not-found, and the
+            // old code bailed out of the whole function on that error — so a row backed by an
+            // orphaned sprint_task_index entry could never be removed, and the Delete button
+            // looked broken. Swallow the claim failure and still attempt the delete.
             if (currentUser?.uid) {
-                await updateDoc(doc(db, col, id), { ownerUid: currentUser.uid, updatedAt: serverTimestamp() });
+                try {
+                    await updateDoc(doc(db, col, id), { ownerUid: currentUser.uid, updatedAt: serverTimestamp() });
+                } catch (claimErr: any) {
+                    if (claimErr?.code !== 'not-found') throw claimErr;
+                }
             }
             await deleteDoc(doc(db, col, id));
+            setHiddenRowIds((prev) => new Set(prev).add(id));
         } catch (err: any) {
-            // Already gone (e.g. a stale index row pointing at a deleted doc) — nothing to do.
-            if (err?.code === 'not-found') return;
+            // Already gone (e.g. a stale index row pointing at a deleted doc) — the underlying
+            // doc is deleted as far as the user is concerned, so drop the row from the table.
+            if (err?.code === 'not-found') {
+                setHiddenRowIds((prev) => new Set(prev).add(id));
+                return;
+            }
             console.error(`[SprintTriageTable] delete ${type} failed`, err);
             alert(`Failed to delete ${type}: ${err?.message || 'permission denied'}`);
+        } finally {
+            rmSaving(id);
         }
     };
 
@@ -404,31 +465,35 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
         );
     };
 
+    // Always-live select rather than a click-to-edit cell. The old version rendered a chip
+    // that swapped to a <select> on click, with onBlur={cancelEdit}: on Safari the blur fired
+    // before the change event, so cancelEdit() unmounted the select and the change never
+    // committed — "marking a task Done on the Kanban table does nothing". Confirmed by Jim,
+    // 2026-07-28. A permanently-mounted select has no edit mode to lose.
     const inlineStatus = (item: Story | Task, type: RowType) => {
-        const status = Number((item as any).status ?? 0);
-        const labels = type === 'story' ? STORY_STATUS : TASK_STATUS;
-        const statuses = type === 'story' ? [0, 1, 2, 4] : [0, 1, 2];
-        const editing = editCell?.id === item.id && editCell?.field === 'status';
-        if (editing) {
-            return (
-                <select autoFocus className="form-select form-select-sm" value={editVal}
-                    style={{ fontSize: 12, padding: '2px 6px' }}
-                    onChange={e => { setEditVal(e.target.value); commitEdit(item, type, e.target.value); }}
-                    onBlur={() => cancelEdit()}
-                    onKeyDown={e => { if (e.key === 'Escape') cancelEdit(); }}
-                >
-                    {statuses.map(s => <option key={s} value={s}>{labels[s]}</option>)}
-                </select>
-            );
-        }
-        const col = statusColor(status, type);
+        const raw = (item as any).status;
+        const value = canonicalStatusValue(raw, type);
+        const col = statusColor(value, type);
         return (
-            <span
-                onClick={() => startEdit(item.id, 'status', String(status))}
-                style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 600, cursor: 'pointer', backgroundColor: col + '22', color: col, border: `1px solid ${col}44` }}
+            <select
+                className="form-select form-select-sm"
+                value={value}
+                disabled={saving.has(item.id)}
+                onChange={(e) => {
+                    const next = Number(e.target.value);
+                    if (next === canonicalStatusValue(raw, type)) return;
+                    saveItem(item.id, type === 'story' ? 'stories' : 'tasks', { status: next });
+                }}
+                title={statusLabel(raw, type)}
+                style={{
+                    fontSize: 11, fontWeight: 600, padding: '2px 6px', width: 'auto', minWidth: 104,
+                    backgroundColor: col + '22', color: col, borderColor: col + '44',
+                }}
             >
-                {labels[status] ?? status}
-            </span>
+                {statusOptions(type).map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+            </select>
         );
     };
 

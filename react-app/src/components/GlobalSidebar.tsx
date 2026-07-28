@@ -22,6 +22,7 @@ import { ChoiceHelper } from '../config/choices';
 import { EntitySummary, searchEntities, loadEntitySummary, formatEntityLabel } from '../utils/entityLookup';
 import { useNavigate } from 'react-router-dom';
 import { isStatus, getPriorityBadge } from '../utils/statusHelpers';
+import { LANE_LABELS, LANE_VARIANTS, laneFor } from '../utils/workStatus';
 import { normalizePriorityValue } from '../utils/priorityUtils';
 import { resolveThemeFromValue } from '../utils/themeResolver';
 import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
@@ -261,28 +262,18 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
 
     // Story status mapping (numeric and string)
     if (type === 'story') {
-      // Numeric mapping used in Kanban: 0=backlog,1=planned,2=active/in-progress,3=testing,4=done
+      // Three canonical lanes only — see utils/workStatus.ts. Legacy 1/2/3 all read as
+      // In Progress rather than "Planned"/"Active"/"Review", which were three different
+      // words for the same lane on three different screens.
       if (typeof status === 'number') {
-        switch (status) {
-          case 4: return { label: 'Done', variant: 'success' };
-          case 3: return { label: 'Review', variant: 'warning' };
-          case 2: return { label: 'Active', variant: 'primary' };
-          case 1: return { label: 'Planned', variant: 'secondary' };
-          case 0: return { label: 'Backlog', variant: 'secondary' };
-          default: return { label: 'Unknown', variant: 'light' };
-        }
+        const lane = laneFor(status, 'story');
+        return { label: LANE_LABELS[lane], variant: LANE_VARIANTS[lane] };
       }
       // String mapping fallback
-      const map: Record<string, { label: string; variant: string }> = {
-        backlog: { label: 'Backlog', variant: 'secondary' },
-        planned: { label: 'Planned', variant: 'secondary' },
-        active: { label: 'Active', variant: 'primary' },
-        'in-progress': { label: 'Active', variant: 'primary' },
-        testing: { label: 'Review', variant: 'warning' },
-        done: { label: 'Done', variant: 'success' },
-        defect: { label: 'Defect', variant: 'danger' },
-      };
-      return map[String(status) as keyof typeof map] || { label: cap(String(status || 'Unknown')), variant: 'light' };
+      if (String(status).toLowerCase() === 'defect') return { label: 'Defect', variant: 'danger' };
+      const strLane = laneFor(status, 'story');
+      if (String(status || '').trim()) return { label: LANE_LABELS[strLane], variant: LANE_VARIANTS[strLane] };
+      return { label: cap(String(status || 'Unknown')), variant: 'light' };
     }
 
     // Task status mapping (primarily string-based today)

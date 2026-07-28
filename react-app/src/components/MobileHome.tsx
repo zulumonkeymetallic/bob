@@ -15,6 +15,7 @@ import { taskStatusText } from '../utils/storyCardFormatting';
 import { extractWeatherSummary, extractWeatherTemp, formatWeatherLine } from '../utils/weatherFormat';
 import { isRecurringDueOnDate, resolveRecurringDueMs, resolveTaskDueMs } from '../utils/recurringTaskDue';
 import { getChoreKind as getChoreKindShared } from '../utils/choreKind';
+import { dedupeTasks } from '../utils/taskDedupe';
 import { Wand2, AlertCircle, RefreshCw, Sparkles, Clock3, Pencil, Home, CalendarDays, ListChecks, BookOpen, Target, CheckSquare, Wallet, Brain, type LucideIcon } from 'lucide-react';
 import EditTaskModal from './EditTaskModal';
 import EditStoryModal from './EditStoryModal';
@@ -40,7 +41,7 @@ import {
 import { compareTop3Stories, compareTop3Tasks, isTop3Story, isTop3Task, top3DateForToday } from '../utils/top3';
 import { useFocusGoals } from '../hooks/useFocusGoals';
 import { useDashboardData } from '../hooks/useDashboardData';
-import { bucketFromTime, useDailyPlanTimeline, type DailyPlanBucket } from '../hooks/useDailyPlanTimeline';
+import { bucketFromTime, isTaskDueToday, useDailyPlanTimeline, type DailyPlanBucket } from '../hooks/useDailyPlanTimeline';
 import DailyPlanList from './dashboard/DailyPlanList';
 import { getProtectedFocusGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
 import { schedulePlannerItem as schedulePlannerItemMutation } from '../utils/plannerScheduling';
@@ -956,22 +957,14 @@ const MobileHome: React.FC = () => {
       .slice(0, 3);
   }, [stories, isStoryInTop3]);
 
-  const tasksDueTodayForMobile = useMemo(() => {
-    const today = new Date();
-    const start = new Date(today);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(today);
-    end.setHours(23, 59, 59, 999);
-    return sortedPendingTasks.filter((task) => {
-      const due = resolveRecurringDueMs(task, today, start.getTime()) ?? getTaskDueMs(task);
-      if (due) return due >= start.getTime() && due <= end.getTime();
-      // No due date, but tagged for a time-of-day bucket (Morning/Afternoon/Evening) —
-      // that's exactly what the same list shows on the default "All" tab as "today's"
-      // work, so "due today" should include it too instead of silently disagreeing with
-      // itself. Confirmed by Jim, 2026-07-24.
-      return !!(task as any).timeOfDay;
-    });
-  }, [sortedPendingTasks, getTaskDueMs]);
+  // Same predicate the desktop Daily Plan uses — see isTaskDueToday's comment. Mobile used
+  // to keep its own copy with an extra `!!timeOfDay` fallback, which put the whole undated
+  // backlog on the phone's plan and checklist while the full app showed only genuinely
+  // scheduled work. Unified 2026-07-28 per Jim.
+  const tasksDueTodayForMobile = useMemo(
+    () => sortedPendingTasks.filter((task) => isTaskDueToday(task)),
+    [sortedPendingTasks],
+  );
 
   const tasksOverdueForMobile = useMemo(() => {
     const today = new Date();
@@ -994,7 +987,7 @@ const MobileHome: React.FC = () => {
     } else {
       rows = sortedPendingTasks;
     }
-    return rows.filter(matchesTaskSharedFilters);
+    return dedupeTasks(rows.filter(matchesTaskSharedFilters));
   }, [tasksViewFilter, sortedPendingTasks, isTaskInTop3, tasksDueTodayForMobile, tasksOverdueForMobile, matchesTaskSharedFilters]);
 
   const visibleStoryRows = useMemo(
@@ -1010,10 +1003,14 @@ const MobileHome: React.FC = () => {
   // Daily Checklist = chores/habits/routines (visibleChoreRows) + regular due-today tasks
   // that aren't already one of those kinds — per Jim 2026-07-23, one combined checklist
   // rather than chores/habits living apart from today's plain tasks.
+  //
+  // dedupeTasks collapses the reminder-import multiplication: a repeating Apple reminder
+  // arrives as one BOB task per completed occurrence, which is what put 36 copies of
+  // "Program 100 bicep curls" on this checklist. See utils/taskDedupe.ts.
   const dailyChecklistRows = useMemo(() => {
     const choreIds = new Set(visibleChoreRows.map((t) => t.id));
     const extraTasks = tasksDueTodayForMobile.filter((t) => !choreIds.has(t.id) && !getChoreKind(t));
-    return [...visibleChoreRows, ...extraTasks.filter(matchesTaskSharedFilters)];
+    return dedupeTasks([...visibleChoreRows, ...extraTasks.filter(matchesTaskSharedFilters)]);
   }, [visibleChoreRows, tasksDueTodayForMobile, getChoreKind, matchesTaskSharedFilters]);
 
   const filteredGoalsForMobile = useMemo(() => {
@@ -1930,9 +1927,9 @@ const MobileHome: React.FC = () => {
               const storyStatusNum = typeof story.status === 'number' ? story.status : 0;
               const statusChip = ({
                 0: { bg: 'secondary', text: 'Backlog' },
-                1: { bg: 'info',      text: 'Planned' },
-                2: { bg: 'primary',   text: 'In progress' },
-                3: { bg: 'warning',   text: 'Review' },
+                1: { bg: 'primary',   text: 'In Progress' },
+                2: { bg: 'primary',   text: 'In Progress' },
+                3: { bg: 'primary',   text: 'In Progress' },
                 4: { bg: 'success',   text: 'Done' },
               } as Record<number, { bg: string; text: string }>)[storyStatusNum >= 4 ? 4 : storyStatusNum]
                 ?? { bg: 'secondary', text: 'Backlog' };
@@ -1971,9 +1968,7 @@ const MobileHome: React.FC = () => {
                     <Dropdown.Menu align="end">
                       {([
                         { value: 0, bg: 'secondary', text: 'Backlog' },
-                        { value: 1, bg: 'info',      text: 'Planned' },
-                        { value: 2, bg: 'primary',   text: 'In progress' },
-                        { value: 3, bg: 'warning',   text: 'Review' },
+                        { value: 1, bg: 'primary',   text: 'In Progress' },
                         { value: 4, bg: 'success',   text: 'Done' },
                       ] as { value: number; bg: string; text: string }[]).map(opt => (
                         <Dropdown.Item

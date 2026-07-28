@@ -2,8 +2,39 @@
 // This allows the build to work while we transition from strings to numbers
 import { GLOBAL_THEMES } from '../constants/globalThemes';
 import { normalizePriorityValue } from './priorityUtils';
+import { laneFor, type WorkLane } from './workStatus';
 
-export const isStatus = (actualStatus: any, expectedStatus: string): boolean => {
+/** Expected-status words that name one of the three canonical lanes. */
+const LANE_WORDS: Record<string, WorkLane> = {
+  'backlog': 'backlog', 'todo': 'backlog', 'to-do': 'backlog', 'new': 'backlog', 'planned': 'backlog',
+  'in-progress': 'in-progress', 'in progress': 'in-progress', 'active': 'in-progress',
+  'wip': 'in-progress', 'doing': 'in-progress', 'testing': 'in-progress', 'qa': 'in-progress',
+  'done': 'done', 'complete': 'done', 'completed': 'done', 'finished': 'done', 'closed': 'done',
+};
+
+/**
+ * `kind` disambiguates the numeric scales, which overlap: story 2 is legacy Review
+ * (reads as In Progress) while task 2 is Done. Without it this function has to guess
+ * from the expected-status word alone and gets one of the two wrong — pass it from
+ * any call site where the entity type is known. Omitting it keeps the historic
+ * story-first ordering.
+ */
+export const isStatus = (
+  actualStatus: any,
+  expectedStatus: string,
+  kind?: 'story' | 'task' | 'goal' | 'sprint',
+): boolean => {
+  // Type-aware fast path: three canonical lanes, no Review. See utils/workStatus.ts.
+  if (kind === 'story' || kind === 'task') {
+    const expected = String(expectedStatus || '').trim().toLowerCase().replace(/_/g, '-');
+    if (expected === 'review' || expected === 'review-gate') return false; // lane removed
+    // Only words that name a lane take this path. Anything else (e.g. 'blocked', which
+    // is a task flag rather than a lane) falls through, because laneFor() answers
+    // 'backlog' for everything it doesn't recognise and would match far too much.
+    const expectedLane = LANE_WORDS[expected];
+    if (expectedLane) return laneFor(actualStatus, kind) === expectedLane;
+  }
+
   // Handle numeric status values (legacy, mixed across entities)
   if (typeof actualStatus === 'number') {
     // Goal status mapping
@@ -13,12 +44,13 @@ export const isStatus = (actualStatus: any, expectedStatus: string): boolean => 
     if (expectedStatus === 'Blocked') return actualStatus === 3;
     if (expectedStatus === 'Deferred') return actualStatus === 4;
 
-    // Story status mapping — 0=Backlog, 1=In Progress, 2=Review, 4=Bin/Done
+    // Story status mapping — 0=Backlog, 1=In Progress, 4=Done (utils/workStatus.ts).
+    // There is no Review lane; 'review'/'review_gate' no longer match anything.
     if (expectedStatus === 'backlog') return actualStatus === 0;
     if (expectedStatus === 'in-progress' || expectedStatus === 'in_progress') return actualStatus === 1;
     if (expectedStatus === 'planned') return actualStatus === 1; // legacy alias kept for compat
-    if (expectedStatus === 'active' || expectedStatus === 'review') return actualStatus === 2;
-    if (expectedStatus === 'review_gate') return actualStatus === 3;
+    if (expectedStatus === 'active') return actualStatus === 1;
+    if (expectedStatus === 'review' || expectedStatus === 'review_gate') return false;
     if (expectedStatus === 'done') return actualStatus === 4;
 
     // Task status mapping
@@ -169,6 +201,7 @@ export const getStatusName = (status: any): string => {
   if (!raw) return 'Unknown';
   const v = raw.toLowerCase().replace(/_/g, '-');
   if (['backlog', 'todo', 'planned', 'new'].includes(v)) return 'Backlog';
+  // 'review' and 'testing' fold into In Progress — there is no Review lane. Jim, 2026-07-28.
   if (['in-progress', 'in progress', 'active', 'wip', 'testing', 'qa', 'review'].includes(v)) return 'In Progress';
   if (['blocked', 'paused', 'on-hold', 'onhold', 'stalled', 'waiting'].includes(v)) return 'Blocked';
   if (['done', 'complete', 'completed', 'closed', 'finished'].includes(v)) return 'Done';

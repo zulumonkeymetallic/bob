@@ -45,11 +45,10 @@ export interface DailyPlanListProps {
   onEdit?: (item: DailyPlanTimelineItem) => void;
 }
 
-// Canonical numeric mapping — matches statusHelpers.ts's isStatus(), SprintTriageTable's
-// STORY_STATUS/TASK_STATUS, and KanbanCardV2/KanbanBoardV2: stories 0=Backlog, 1=In Progress,
-// 2=Review, 4=Done; tasks 0=Backlog, 1=In Progress, 2=Done, 3=Blocked. Previously this chip
-// used a different scheme (2=In progress, 3=Review, extra "Planned"=1 tier) — same numeric
-// status showed a different label here than on the Stories list. Confirmed by Jim, 2026-07-23.
+// Canonical numeric mapping — matches utils/workStatus.ts, statusHelpers.ts's isStatus(),
+// SprintTriageTable's STORY_STATUS/TASK_STATUS, and KanbanCardV2/KanbanBoardV2: stories
+// 0=Backlog, 1=In Progress, 4=Done; tasks 0=Backlog, 1=In Progress, 2=Done, 3=Blocked.
+// There is no Review lane — legacy story 2/3 read as In Progress and are never written.
 const normalizeStatusValue = (rawStatus: any, entityType: 'story' | 'task'): number => {
   if (typeof rawStatus === 'number' && Number.isFinite(rawStatus)) return rawStatus;
   const status = String(rawStatus || '').toLowerCase();
@@ -68,10 +67,12 @@ const normalizeStatusValue = (rawStatus: any, entityType: 'story' | 'task'): num
 // Mirrors KanbanCardV2's statusBadge map exactly, so a story/task reads the same colour
 // wherever it's shown.
 const STATUS_BADGE: Record<'story' | 'task', Record<number, { bg: string; text: string }>> = {
+  // Three lanes only — legacy 2/3 read as In Progress. See utils/workStatus.ts.
   story: {
     0: { bg: 'secondary', text: 'Backlog' },
-    1: { bg: 'primary', text: 'In progress' },
-    2: { bg: 'warning', text: 'Review' },
+    1: { bg: 'primary', text: 'In Progress' },
+    2: { bg: 'primary', text: 'In Progress' },
+    3: { bg: 'primary', text: 'In Progress' },
     4: { bg: 'success', text: 'Done' },
   },
   task: {
@@ -160,8 +161,7 @@ const DailyPlanEntityControls: React.FC<{
         {entityType === 'story' ? (
           <>
             <option value={0}>Backlog</option>
-            <option value={1}>In progress</option>
-            <option value={2}>Review</option>
+            <option value={1}>In Progress</option>
             <option value={4}>Done</option>
           </>
         ) : (

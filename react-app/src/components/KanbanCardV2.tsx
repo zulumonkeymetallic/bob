@@ -9,6 +9,7 @@ import { useSidebar } from '../contexts/SidebarContext';
 import { displayRefForEntity, validateRef } from '../utils/referenceGenerator';
 import { colorWithAlpha, goalThemeColor } from '../utils/storyCardFormatting';
 import { getPriorityBadge } from '../utils/statusHelpers';
+import { LANE_VARIANTS, canonicalStatusValue, laneFor, statusLabel, statusOptions } from '../utils/workStatus';
 import { themeVars } from '../utils/themeVars';
 import type { GlobalTheme } from '../constants/globalThemes';
 import { resolveThemeFromValue } from '../utils/themeResolver';
@@ -173,19 +174,13 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     // Previously this card's own chip used a different scheme (2=In progress, 3=Review, with
     // an extra "Planned"=1 tier) — same numeric status showed a different label here than on
     // the Stories list or the sprint triage table. Confirmed by Jim, 2026-07-23.
+    // Blocked (task 3) is the one value kept as-is — it is a real task state with its own
+    // option below. Everything else collapses onto the three canonical lanes so a story
+    // stored on the legacy Review value (2) selects "In Progress" instead of falling
+    // through to the first option and silently demoting itself to Backlog on next save.
     const normalizeStatusValue = (rawStatus: any, entityType: 'story' | 'task') => {
-        if (typeof rawStatus === 'number' && Number.isFinite(rawStatus)) return rawStatus;
-        const status = String(rawStatus || '').toLowerCase();
-        if (entityType === 'story') {
-            if (['done', 'complete', 'completed', 'finished'].includes(status)) return 4;
-            if (['testing', 'qa', 'review'].includes(status)) return 2;
-            if (['in-progress', 'active', 'doing', 'blocked', 'in progress', 'planned', 'ready'].includes(status)) return 1;
-            return 0;
-        }
-        if (['done', 'complete', 'completed', 'finished'].includes(status)) return 2;
-        if (['blocked'].includes(status)) return 3;
-        if (['in-progress', 'active', 'doing', 'in progress'].includes(status)) return 1;
-        return 0;
+        if (entityType === 'task' && Number(rawStatus) === 3) return 3;
+        return canonicalStatusValue(rawStatus, entityType);
     };
 
     const toDateInputValue = (value: number | null) => {
@@ -264,19 +259,9 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
     const [dueInputValue, setDueInputValue] = useState<string>(toDateInputValue(dueDateMs));
     const [updatingField, setUpdatingField] = useState<'priority' | 'status' | 'dueDate' | null>(null);
     const priorityBadge = getPriorityBadge(priorityValue);
-    const statusBadge = type === 'story'
-        ? ({
-            0: { bg: 'secondary', text: 'Backlog' },
-            1: { bg: 'primary', text: 'In progress' },
-            2: { bg: 'warning', text: 'Review' },
-            4: { bg: 'success', text: 'Done' },
-        } as Record<number, { bg: string; text: string }>)[statusValue] || { bg: 'secondary', text: 'Backlog' }
-        : ({
-            0: { bg: 'secondary', text: 'To do' },
-            1: { bg: 'primary', text: 'Doing' },
-            2: { bg: 'success', text: 'Done' },
-            3: { bg: 'danger', text: 'Blocked' },
-        } as Record<number, { bg: string; text: string }>)[statusValue] || { bg: 'secondary', text: 'To do' };
+    const statusBadge = type === 'task' && statusValue === 3
+        ? { bg: 'danger', text: 'Blocked' }
+        : { bg: LANE_VARIANTS[laneFor(statusValue, type)], text: statusLabel(statusValue, type) };
 
     useEffect(() => {
         setPriorityValue(Number((item as any).priority ?? 0));
@@ -1101,15 +1086,14 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                     >
                         {type === 'story' ? (
                             <>
-                                <option value={0}>Backlog</option>
-                                <option value={1}>In progress</option>
-                                <option value={2}>Review</option>
-                                <option value={4}>Done</option>
+                                {statusOptions('story').map((o) => (
+                                    <option key={o.value} value={o.value}>{o.label}</option>
+                                ))}
                             </>
                         ) : (
                             <>
-                                <option value={0}>To do</option>
-                                <option value={1}>Doing</option>
+                                <option value={0}>Backlog</option>
+                                <option value={1}>In Progress</option>
                                 <option value={3}>Blocked</option>
                                 <option value={2}>Done</option>
                             </>

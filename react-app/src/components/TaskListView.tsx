@@ -17,6 +17,9 @@ import { useSprint } from '../contexts/SprintContext';
 import WorkSurfaceNav from './common/WorkSurfaceNav';
 import { getActiveFocusLeafGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
 import { getChoreKind as getChoreKindShared } from '../utils/choreKind';
+import { useDeviceInfo } from '../utils/deviceDetection';
+import MobileEntityList, { type MobileEntityViewType } from './MobileEntityList';
+import MobileViewToggle, { readStoredMobileView } from './MobileViewToggle';
 import { FocusGoal } from '../types';
 
 const TaskListView: React.FC = () => {
@@ -44,6 +47,15 @@ const TaskListView: React.FC = () => {
   const { themes: globalThemes } = useGlobalThemes();
   const location = useLocation();
   const navigate = useNavigate();
+  const deviceInfo = useDeviceInfo();
+  // Phones get the compact List/Detail pair instead of ModernTaskTable's 12 columns, which
+  // squeeze to one letter per header at phone width. Jim, 2026-07-28.
+  const [mobileViewType, setMobileViewType] = useState<MobileEntityViewType>(
+    () => readStoredMobileView('mobile_tasks_view_type'),
+  );
+  // Filter card collapsed by default on a phone — otherwise the tasks themselves start
+  // below the fold. Jim, 2026-07-28.
+  const [showMobileFilters, setShowMobileFilters] = useState(false);
 
   const sprints = useMemo<Sprint[]>(() => {
     return rawSprints.map((s) => {
@@ -371,57 +383,83 @@ const TaskListView: React.FC = () => {
   };
 
   return (
-    <div style={{ 
-      padding: '24px', 
+    <div style={{
+      padding: deviceInfo.isMobile ? '12px' : '24px',
       backgroundColor: 'var(--bg)',
       minHeight: '100vh',
       width: '100%'
     }}>
       <div style={{ maxWidth: '100%', margin: '0' }}>
         {/* Header */}
+        {/* Phone: stack the header so the action row gets the full width — side by side at
+            375px the buttons squeeze to min-content and their labels break per character. */}
         <div style={{
           display: 'flex',
+          flexDirection: deviceInfo.isMobile ? 'column' : 'row',
           justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: '24px'
+          alignItems: deviceInfo.isMobile ? 'stretch' : 'center',
+          gap: deviceInfo.isMobile ? 8 : 0,
+          marginBottom: deviceInfo.isMobile ? '12px' : '24px'
         }}>
           <div>
             <h2 style={{ margin: '0 0 4px 0', fontSize: '20px', fontWeight: '700' }}>
               Tasks
             </h2>
-            <p style={{ margin: 0, color: 'var(--muted)', fontSize: '13px' }}>
-              Manage all your tasks with modern table interface
-            </p>
+            {!deviceInfo.isMobile && (
+              <p style={{ margin: 0, color: 'var(--muted)', fontSize: '13px' }}>
+                Manage all your tasks with modern table interface
+              </p>
+            )}
           </div>
           {/* Lightweight WorkSurfaceNav moved onto this row, to the left of List/Cards/
               Switch-to-Kanban/Add — was its own row above, wasting vertical space. List/Cards
               toggle + Switch to Kanban sit to the left of the primary Add task button, which
               stays rightmost as the primary CTA — consistent with Goals/Stories.
               Per Jim, 2026-07-23. */}
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <WorkSurfaceNav inline />
-            <Button
-              size="sm"
-              variant={viewMode === 'list' ? 'primary' : 'outline-secondary'}
-              onClick={() => setViewMode('list')}
-            >
-              List
-            </Button>
-            <Button
-              size="sm"
-              variant={viewMode === 'cards' ? 'primary' : 'outline-secondary'}
-              onClick={() => setViewMode('cards')}
-            >
-              Cards
-            </Button>
-            <Button variant="outline-primary" href="#" disabled>
-              Switch to Kanban
-            </Button>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+            {!deviceInfo.isMobile && <WorkSurfaceNav inline />}
+            {deviceInfo.isMobile && (
+              <Button
+                size="sm"
+                variant={showMobileFilters ? 'secondary' : 'outline-secondary'}
+                onClick={() => setShowMobileFilters((v) => !v)}
+                style={{ whiteSpace: 'nowrap', flexShrink: 0 }}
+              >
+                Filters
+              </Button>
+            )}
+            {deviceInfo.isMobile ? (
+              <MobileViewToggle
+                value={mobileViewType}
+                onChange={setMobileViewType}
+                storageKey="mobile_tasks_view_type"
+              />
+            ) : (
+              <>
+                <Button
+                  size="sm"
+                  variant={viewMode === 'list' ? 'primary' : 'outline-secondary'}
+                  onClick={() => setViewMode('list')}
+                >
+                  List
+                </Button>
+                <Button
+                  size="sm"
+                  variant={viewMode === 'cards' ? 'primary' : 'outline-secondary'}
+                  onClick={() => setViewMode('cards')}
+                >
+                  Cards
+                </Button>
+                <Button variant="outline-primary" href="#" disabled>
+                  Switch to Kanban
+                </Button>
+              </>
+            )}
             <Button
               size="sm"
               variant="primary"
               onClick={() => setShowAddTaskModal(true)}
-              style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap', flexShrink: 0 }}
             >
               <Plus size={16} />
               Add Task
@@ -442,6 +480,7 @@ const TaskListView: React.FC = () => {
         </div>
 
         {/* Filters */}
+        {(!deviceInfo.isMobile || showMobileFilters) && (
         <Card style={{ marginBottom: '12px', border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
           <Card.Body style={{ padding: '6px' }}>
             <Row>
@@ -598,6 +637,7 @@ const TaskListView: React.FC = () => {
             </Row>
           </Card.Body>
         </Card>
+        )}
 
         {/* Modern Task Table - Full Width */}
         <Card style={{ border: 'none', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', minHeight: '600px' }}>
@@ -636,6 +676,22 @@ const TaskListView: React.FC = () => {
                   No tasks found. Create your first task to get started!
                 </p>
               </div>
+            ) : deviceInfo.isMobile ? (
+              <MobileEntityList
+                kind="task"
+                items={filteredTasks}
+                viewType={mobileViewType}
+                parentLabel={(item) => {
+                  const parentStoryId = String((item as any).storyId || (item as any).parentId || '');
+                  const story = stories.find((s) => s.id === parentStoryId);
+                  const goal = goals.find((g) => g.id === (story?.goalId || (item as any).goalId));
+                  return [story?.ref, goal?.title].filter(Boolean).join(' · ') || null;
+                }}
+                onEdit={setEditTask}
+                onDelete={handleTaskDelete}
+                onToggleComplete={(task, done) => handleTaskUpdate(task.id, { status: done ? 2 : 0 } as Partial<Task>)}
+                emptyMessage="No tasks match the current filters."
+              />
             ) : viewMode === 'cards' ? (
               <TasksCardView
                 tasks={filteredTasks}

@@ -27,6 +27,7 @@ import { db, functions } from '../firebase';
 import type { Story, Task } from '../types';
 import { isRecurringDueOnDate, resolveRecurringDueMs, resolveTaskDueMs } from '../utils/recurringTaskDue';
 import { isTop3Story, isTop3Task, top3DateForToday } from '../utils/top3';
+import { dedupeTasks } from '../utils/taskDedupe';
 
 export type DailyPlanBucket = 'morning' | 'afternoon' | 'evening';
 
@@ -112,6 +113,27 @@ const timelineTimeLabel = (startMs: number | null | undefined, endMs?: number | 
 
 // Mirrors MobileHome's overviewCalendarEvents: reads raw GCal events from whichever field the
 // daily summary doc happens to populate.
+/**
+ * The single "is this task due today" test, shared by the desktop Daily Plan and
+ * MobileHome so the two surfaces cannot disagree about what today holds.
+ *
+ * A task counts when its (possibly recurring) due date lands today, or when it has no
+ * due date but the scheduler has matched it to a calendar block starting today. It
+ * deliberately does NOT count a bare `timeOfDay` tag: that is a preference field set on
+ * almost every task, not a schedule, so treating it as "due today" pulled the entire
+ * undated backlog onto the plan. Mobile carried that `!!timeOfDay` fallback on its own
+ * after the desktop dropped it on 2026-07-25, which is why the phone's Daily Plan and
+ * Checklist stopped matching the full app's overview. Unified 2026-07-28 per Jim.
+ */
+export const isTaskDueToday = (task: Task, now: Date = new Date()): boolean => {
+  const start = new Date(now); start.setHours(0, 0, 0, 0);
+  const end = new Date(now); end.setHours(23, 59, 59, 999);
+  const due = resolveRecurringDueMs(task, now, start.getTime()) ?? resolveTaskDueMs(task);
+  if (due) return due >= start.getTime() && due <= end.getTime();
+  const matchedStart = resolveDateValue((task as any).calendarMatchedStart);
+  return matchedStart !== null && matchedStart >= start.getTime() && matchedStart <= end.getTime();
+};
+
 export const extractCalendarEventsFromSummary = (summary: any): DailyPlanCalendarEvent[] => {
   const candidates = [
     summary?.calendar?.events,
@@ -312,19 +334,10 @@ export function useDailyPlanTimeline(params: UseDailyPlanTimelineParams = {}): U
 
   const selfTasksDueToday = useMemo(() => {
     if (!selfContained) return [];
-    const today = new Date();
-    const start = new Date(today); start.setHours(0, 0, 0, 0);
-    const end = new Date(today); end.setHours(23, 59, 59, 999);
     return fetchedTasks
       .filter((t) => !(t as any).deleted)
       .filter((t) => (t.status ?? 0) !== 2)
-      .filter((t) => {
-        const due = resolveRecurringDueMs(t, today, start.getTime()) ?? resolveTaskDueMs(t);
-        if (due) return due >= start.getTime() && due <= end.getTime();
-        // No due date, but tagged for a time-of-day bucket — matches MobileHome's
-        // controlled-mode tasksDueTodayForMobile fix. Confirmed by Jim, 2026-07-24.
-        return !!(t as any).timeOfDay;
-      });
+      .filter((t) => isTaskDueToday(t));
   }, [selfContained, fetchedTasks]);
 
   const selfChoresDueToday = useMemo(() => {
@@ -383,8 +396,12 @@ export function useDailyPlanTimeline(params: UseDailyPlanTimelineParams = {}): U
   }, [selfContained, fetchedTasks]);
 
   const items = useMemo<DailyPlanTimelineItem[]>(() => {
-    const tasksDueToday = externalTasksDueToday ?? selfTasksDueToday;
-    const chores = externalChoresDueToday ?? selfChoresDueToday;
+    // dedupeTasks collapses the reminder-import multiplication before anything is bucketed —
+    // a repeating Apple reminder lands as one BOB task per completed occurrence. The `add()`
+    // helper below also dedupes, but only on title+timeLabel, so copies that landed in
+    // different buckets still got through. See utils/taskDedupe.ts.
+    const tasksDueToday = dedupeTasks(externalTasksDueToday ?? selfTasksDueToday);
+    const chores = dedupeTasks(externalChoresDueToday ?? selfChoresDueToday);
     const storiesSrc = externalStoryCandidates ?? selfStoryCandidates;
     const summarySrc = externalSummary !== undefined ? externalSummary : fetchedSummary;
     // Prefer the live subscription; only fall back to the once-a-day summary snapshot when no

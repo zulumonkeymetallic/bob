@@ -48,9 +48,12 @@ export const CHOICES: ChoiceTable = {
   // Story choices
   story: {
     status: [
-      // Canonical lanes only: Backlog, In Progress, Done
+      // Canonical lanes only: Backlog, In Progress, Done — see utils/workStatus.ts.
+      // In Progress is 1, not 2: that is what the Kanban drag has always written and
+      // what statusHelpers/nightlyOrchestration read. Legacy 2 and 3 still read as
+      // In Progress, they are just no longer offered or written.
       { value: 0, label: 'Backlog', color: themeVars.muted as string, description: 'Not yet planned' },
-      { value: 2, label: 'In Progress', color: 'var(--orange)', description: 'Currently being worked' },
+      { value: 1, label: 'In Progress', color: 'var(--orange)', description: 'Currently being worked' },
       { value: 4, label: 'Done', color: 'var(--green)', description: 'Completed successfully' }
     ],
     priority: [
@@ -152,10 +155,11 @@ export const StoryStatus = {
   BACKLOG: 0,
   // Map removed states to nearest canonical bucket
   PLANNED: 0,
-  IN_PROGRESS: 2,
-  TESTING: 2,
+  IN_PROGRESS: 1,
+  TESTING: 1,
+  REVIEW: 1,
   DONE: 4,
-  
+
   getLabel: (value: number) => ChoiceHelper.getLabel('story', 'status', value),
   getColor: (value: number) => ChoiceHelper.getColor('story', 'status', value),
   getOptions: () => ChoiceHelper.getOptions('story', 'status')

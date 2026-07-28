@@ -7,6 +7,7 @@ import { functions, db } from '../firebase';
 import { Story } from '../types';
 import { useSidebar } from '../contexts/SidebarContext';
 import { getPriorityBadge } from '../utils/statusHelpers';
+import { statusOptions } from '../utils/workStatus';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
 import { themeVars } from '../utils/themeVars';
 import { colorWithAlpha } from '../utils/storyCardFormatting';
@@ -18,11 +19,13 @@ interface StoryCardProps {
   index: number;
 }
 
+// Three lanes only — legacy 2 (Review) and 3 (review_gate) render as In Progress.
+// See utils/workStatus.ts.
 const statusBadgeMap: Record<number, { bg: string; text: string }> = {
   0: { bg: 'secondary', text: 'Backlog' },
-  1: { bg: 'info', text: 'Planned' },
-  2: { bg: 'primary', text: 'In progress' },
-  3: { bg: 'warning', text: 'Review' },
+  1: { bg: 'primary', text: 'In Progress' },
+  2: { bg: 'primary', text: 'In Progress' },
+  3: { bg: 'primary', text: 'In Progress' },
   4: { bg: 'success', text: 'Done' },
 };
 
@@ -258,11 +261,9 @@ const StoryCard: React.FC<StoryCardProps> = ({ story, index }) => {
                 color: statusBadge.bg === 'warning' || statusBadge.bg === 'light' ? '#000' : '#fff',
               }}
             >
-              <option value={0}>Backlog</option>
-              <option value={1}>Planned</option>
-              <option value={2}>In progress</option>
-              <option value={3}>Review</option>
-              <option value={4}>Done</option>
+              {statusOptions('story').map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
             </select>
           </div>
 

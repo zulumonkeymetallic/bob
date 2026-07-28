@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
+import { ExternalLink, Target } from 'lucide-react';
 import { monitorForElements } from '@atlaskit/pragmatic-drag-and-drop/element/adapter';
 import { collection, query, where, onSnapshot, orderBy, limit, updateDoc, doc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -11,6 +12,7 @@ import KanbanColumnV2 from './KanbanColumnV2';
 import KanbanCardV2 from './KanbanCardV2';
 import { themeVars } from '../utils/themeVars';
 import { isStatus } from '../utils/statusHelpers';
+import { statusValueForLane, storyLane, taskLane, type WorkLane } from '../utils/workStatus';
 import { isCriticalPriority } from '../utils/priorityUtils';
 import { getManualPriorityRank } from '../utils/manualPriority';
 import { useActivityTracking } from '../hooks/useActivityTracking';
@@ -38,6 +40,10 @@ interface KanbanBoardV2Props {
     showAiScoredOnly?: boolean;
     showDelegatedOnly?: boolean;
     detailLevel?: 'full' | 'compact' | 'minimal';
+    /** Goals become horizontal swimlanes: the goal on the left, its three status columns
+     * beneath it. Off, the board is the flat three-column layout. Mirrors the iOS board's
+     * `groupByGoal` (bob-ios KanbanBoardView.swift). */
+    groupByGoal?: boolean;
 }
 
 interface ScheduledBlockInfo {
@@ -68,6 +74,7 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     showAiScoredOnly = false,
     showDelegatedOnly = false,
     detailLevel = 'full',
+    groupByGoal = false,
     }) => {
     const { currentUser } = useAuth();
     const { currentPersona } = usePersona();
@@ -326,27 +333,13 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
                         return;
                     }
 
-                    // Map column status to actual status value. Canonical numeric mapping
-                    // (matches statusHelpers.ts's isStatus(), SprintTriageTable's STORY_STATUS/
-                    // TASK_STATUS labels, and nightlyOrchestration.js's isStoryDoneStatus):
-                    // stories: 0=Backlog, 1=In Progress, 2=Review, 4=Done.
-                    // tasks:   0=Backlog, 1=In Progress, 2=Done.
-                    // This used to write 2 for a story dropped on "in-progress" — the board's own
-                    // column grouping (getStoryColumn) treats both 1 and 2 as "in-progress" so it
-                    // looked fine here, but every other surface (Stories list, triage table) reads
-                    // 2 as "Review", not "In Progress" — so a card dragged here showed a different
-                    // status label everywhere else. Confirmed by Jim, 2026-07-23.
-                    let actualStatus: string | number = newStatus;
-
-                    // If the item uses numeric status, map it
-                    if (typeof (item as any).status === 'number') {
-                        if (newStatus === 'backlog') actualStatus = 0;
-                        else if (newStatus === 'in-progress') actualStatus = 1;
-                        else if (newStatus === 'done') actualStatus = type === 'story' ? 4 : 2;
-                    } else {
-                        // String status
-                        actualStatus = newStatus;
-                    }
+                    // Map column status to the canonical numeric value — see utils/workStatus.ts,
+                    // the single source of truth shared with the triage table, the card status
+                    // chips and the choice config. Stories 0/1/4, tasks 0/1/2; there is no
+                    // Review lane. Docs that still hold a string status keep one.
+                    const actualStatus: string | number = typeof (item as any).status === 'number'
+                        ? statusValueForLane(newStatus as WorkLane, type)
+                        : newStatus;
 
                     if ((item as any).status === actualStatus) return;
 
@@ -612,50 +605,12 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
         );
     }, [showLatestNotes, currentUser?.uid, visibleEntityIds]);
 
-    // Helper to determine column for an item
-    const getColumnForStatus = (status: string | number): 'backlog' | 'in-progress' | 'done' => {
-        if (typeof status === 'number') {
-            if (status >= 4) return 'done'; // Story done
-            if (status === 2 || status === 3) return 'in-progress'; // Story active/testing or Task done(2) wait.. task done is 2?
-            // Let's check ModernKanbanBoard logic
-            // Story: 0=backlog, 1=ready, 2=active, 3=testing, 4=done
-            // Task: 0=backlog, 1=active, 2=done, 3=blocked
+    // Column placement is type-aware — the two numeric scales overlap (story 2 is the legacy
+    // Review value and belongs In Progress; task 2 is Done). See utils/workStatus.ts.
+    const getStoryColumn = (s: Story) => storyLane((s as any).status);
+    const getTaskColumn = (t: Task) => taskLane((t as any).status);
 
-            // Wait, if I pass a task with status 2 (done), it should go to done.
-            // If I pass a story with status 2 (active), it goes to in-progress.
-
-            // I need to know the type to be precise, but let's try to infer or pass type.
-            // Actually, I process stories and tasks separately below.
-            return 'backlog';
-        }
-
-        const s = String(status).toLowerCase();
-        if (['done', 'complete', 'completed', 'finished'].includes(s)) return 'done';
-        if (['in-progress', 'active', 'doing', 'testing', 'qa', 'review', 'blocked'].includes(s)) return 'in-progress';
-        return 'backlog';
-    };
-
-    const getStoryColumn = (s: Story) => {
-        const raw = (s as any).status;
-        const status = (typeof raw === 'string' && /^\d+$/.test(raw)) ? Number(raw) : raw;
-        if (typeof status === 'number') {
-            if (status >= 4) return 'done';
-            if (status >= 1) return 'in-progress'; // 1=ready, 2=active, 3=testing.
-            return 'backlog';
-        }
-        return getColumnForStatus(status);
-    };
-
-    const getTaskColumn = (t: Task) => {
-        const raw = (t as any).status;
-        const status = (typeof raw === 'string' && /^\d+$/.test(raw)) ? Number(raw) : raw;
-        if (typeof status === 'number') {
-            if (status === 2 || status === 4) return 'done';
-            if (status === 1 || status === 3) return 'in-progress'; // 1=active, 3=blocked
-            return 'backlog';
-        }
-        return getColumnForStatus(status);
-    };
+    type ColumnKey = 'backlog' | 'in-progress' | 'done';
 
     const columns = {
         backlog: {
@@ -740,96 +695,214 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
 
     applySorting();
 
+    // Swimlanes — one band per goal, mirroring the iOS board (KanbanBoardView.swift).
+    // A task usually has no goalId of its own: it inherits one through its parent story,
+    // so grouping on the raw field alone would file most of the board under Unassigned.
+    const swimlanes = useMemo(() => {
+        if (!groupByGoal) return [];
+
+        const storiesById = new Map(stories.map((s) => [s.id, s]));
+        const resolveGoalId = (item: Story | Task, type: 'story' | 'task'): string => {
+            const direct = String((item as any).goalId || '').trim();
+            if (direct) return direct;
+            if (type === 'story') return '';
+            const parentStoryId = String((item as any).storyId || (item as any).parentId || '').trim();
+            if (!parentStoryId) return '';
+            return String(storiesById.get(parentStoryId)?.goalId || '').trim();
+        };
+
+        const empty = (): Record<ColumnKey, (Story | Task)[]> => ({ 'backlog': [], 'in-progress': [], 'done': [] });
+        const buckets = new Map<string, Record<ColumnKey, (Story | Task)[]>>();
+        const push = (key: string, column: ColumnKey, item: Story | Task) => {
+            if (!buckets.has(key)) buckets.set(key, empty());
+            buckets.get(key)![column].push(item);
+        };
+
+        // Reuse the already-sorted column arrays so bands inherit the board's sort order.
+        (Object.keys(columns) as ColumnKey[]).forEach((column) => {
+            columns[column].items.forEach((item) => {
+                const type = stories.some((s) => s.id === item.id) ? 'story' : 'task';
+                const goalId = resolveGoalId(item, type);
+                // A goalId that no longer resolves to a live goal falls in with the unassigned
+                // rather than vanishing — work with no goal is still work.
+                push(goals.some((g) => g.id === goalId) ? goalId : '', column, item);
+            });
+        });
+
+        const bands = Array.from(buckets.entries()).map(([goalId, itemsByColumn]) => {
+            const goal = goalId ? goals.find((g) => g.id === goalId) : undefined;
+            return {
+                id: goalId || '__unassigned__',
+                goal,
+                title: goal?.title || 'Unassigned',
+                isFocus: !!goalId && focusGoalIds.has(goalId),
+                itemsByColumn,
+                count: (Object.values(itemsByColumn) as (Story | Task)[][]).reduce((n, list) => n + list.length, 0),
+            };
+        });
+
+        // Focus goals first, then the rest by title, then Unassigned — and drop any band
+        // whose items were all filtered out.
+        return bands
+            .filter((band) => band.count > 0)
+            .sort((a, b) => {
+                if (!a.goal !== !b.goal) return a.goal ? -1 : 1; // Unassigned always last
+                if (a.isFocus !== b.isFocus) return a.isFocus ? -1 : 1;
+                return a.title.localeCompare(b.title, undefined, { sensitivity: 'base' });
+            });
+    }, [groupByGoal, stories, goals, focusGoalIds, filteredStories, filteredTasks, sortBy]);
+
+    const renderCard = (item: Story | Task) => {
+        const type = stories.some(s => s.id === item.id) ? 'story' : 'task';
+
+        let itemGoal: Goal | undefined;
+        let parentStory: Story | undefined;
+        let isFocusAligned = false;
+
+        if (type === 'story') {
+            itemGoal = goals.find(g => g.id === (item as any).goalId);
+            const sGoalId = String((item as any).goalId || '').trim();
+            if (sGoalId && focusGoalIds.size > 0) {
+                isFocusAligned = isGoalInHierarchySet(sGoalId, goals, focusGoalIds);
+            }
+        } else {
+            // Task
+            parentStory = stories.find(s => s.id === (item as any).parentId);
+            if (parentStory) {
+                itemGoal = goals.find(g => g.id === parentStory.goalId);
+                const pgId = String((parentStory as any).goalId || '').trim();
+                if (pgId && focusGoalIds.size > 0) isFocusAligned = isGoalInHierarchySet(pgId, goals, focusGoalIds);
+            } else if ((item as any).goalId) {
+                itemGoal = goals.find(g => g.id === (item as any).goalId);
+                const tgId = String((item as any).goalId || '').trim();
+                if (tgId && focusGoalIds.size > 0) isFocusAligned = isGoalInHierarchySet(tgId, goals, focusGoalIds);
+            }
+        }
+
+        let steamMeta: { playtimeMinutes?: number; lastPlayedAt?: number; lastSyncAt?: any; appId?: string | number } | undefined;
+        if (type === 'story' && isSteamStory(item as Story)) {
+            const appId = getSteamAppId(item as Story);
+            if (appId != null) {
+                const steamEntry = steamByAppId[String(appId)];
+                if (steamEntry) {
+                    steamMeta = {
+                        appId,
+                        playtimeMinutes: steamEntry.playtime_forever ?? steamEntry.playtimeForever ?? steamEntry.playtime ?? null,
+                        lastPlayedAt: steamEntry.rtime_last_played ? steamEntry.rtime_last_played * 1000 : (steamEntry.last_played ? steamEntry.last_played * 1000 : null),
+                        lastSyncAt: steamLastSyncAt ?? steamEntry.updatedAt ?? null
+                    };
+                } else {
+                    steamMeta = {
+                        appId,
+                        lastSyncAt: steamLastSyncAt ?? null
+                    };
+                }
+            }
+        }
+
+        return (
+            <KanbanCardV2
+                key={item.id}
+                item={item}
+                type={type}
+                goal={itemGoal}
+                story={parentStory}
+                taskCount={type === 'story' ? tasks.filter(t => t.parentId === item.id).length : 0}
+                onItemSelect={onItemSelect}
+                showDescription={showDescriptions}
+                showLatestNote={showLatestNotes}
+                latestNote={latestNotesById[item.id]}
+                scheduledBlock={scheduledBlocksByEntity[`${type}:${item.id}`]}
+                steamMeta={steamMeta}
+                onEdit={() => onEdit?.(item, type)}
+                onParentClick={onParentClick}
+                formatTag={formatTag}
+                themes={themes}
+                goals={goals}
+                focusGoalIds={focusGoalIds}
+                isFocusAligned={isFocusAligned}
+                detailLevel={detailLevel}
+            />
+        );
+    };
+
+    // "Show completed" off hides the Done column entirely (not just its cards) so
+    // Backlog/In Progress get the reclaimed width — matters most on iPad landscape,
+    // where showCompletedItems defaults to false for exactly this reason. Confirmed
+    // by Jim, 2026-07-24. Status can still be changed via a card's own status chip.
+    const visibleColumnKeys = (Object.keys(columns) as ColumnKey[])
+        .filter((key) => key !== 'done' || showCompletedItems);
+
     if (loading) {
         return <div>Loading board...</div>;
     }
 
+    if (groupByGoal) {
+        return (
+            <div ref={boardWrapperRef} className="kanban-board-v2 kanban-board-v2--swimlanes" style={{ display: 'flex', flexDirection: 'column', gap: '20px', height: '100%', overflowY: 'auto', paddingBottom: '16px' }}>
+                {swimlanes.length === 0 && (
+                    <div style={{ color: themeVars.muted as string, fontSize: 13, padding: '32px 8px', textAlign: 'center' }}>
+                        Nothing on the board for the current filters.
+                    </div>
+                )}
+                {swimlanes.map((lane) => (
+                    <div key={lane.id}>
+                        {/* Goal band header — the goal on the left, its item count on the right */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 4px 8px', flexWrap: 'wrap' }}>
+                            {lane.goal ? (
+                                <button
+                                    type="button"
+                                    onClick={() => onParentClick?.(lane.goal!.id, 'goal')}
+                                    style={{
+                                        display: 'inline-flex', alignItems: 'center', gap: 6, background: 'transparent',
+                                        border: 'none', padding: 0, cursor: 'pointer', color: 'var(--text)',
+                                        fontSize: 16, fontWeight: 600,
+                                    }}
+                                    title="Open goal"
+                                >
+                                    <Target size={13} />
+                                    {lane.title}
+                                    <ExternalLink size={11} />
+                                </button>
+                            ) : (
+                                <span style={{ fontSize: 16, fontWeight: 600, color: themeVars.muted as string }}>{lane.title}</span>
+                            )}
+                            {lane.isFocus && (
+                                <span style={{ fontSize: 10, fontWeight: 600, padding: '2px 6px', borderRadius: 10, color: 'var(--orange, #fd7e14)', background: 'rgba(253, 126, 20, 0.14)' }}>
+                                    Focus
+                                </span>
+                            )}
+                            <span style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 600, color: themeVars.muted as string }}>{lane.count}</span>
+                        </div>
+
+                        {/* Columns inside a band do NOT scroll independently: the band is as tall
+                            as its fullest column and the page scrolls. A vertical scroller per
+                            cell would trap the outer gesture. Same rule as the iOS board. */}
+                        <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start' }}>
+                            {visibleColumnKeys.map((key) => (
+                                <KanbanColumnV2
+                                    key={key}
+                                    status={key}
+                                    scrollKey={`${lane.id}:${key}`}
+                                    scrolls={false}
+                                    title={columns[key].title}
+                                    color={columns[key].color as string}
+                                >
+                                    {lane.itemsByColumn[key].map(renderCard)}
+                                </KanbanColumnV2>
+                            ))}
+                        </div>
+                    </div>
+                ))}
+            </div>
+        );
+    }
+
     return (
         <div ref={boardWrapperRef} className="kanban-board-v2" style={{ display: 'flex', gap: '16px', height: '100%', overflowX: 'auto', paddingBottom: '16px' }}>
-            {Object.entries(columns)
-                // "Show completed" off hides the Done column entirely (not just its cards) so
-                // Backlog/In Progress get the reclaimed width — matters most on iPad landscape,
-                // where showCompletedItems defaults to false for exactly this reason. Confirmed
-                // by Jim, 2026-07-24. Status can still be changed via a card's own status chip.
-                .filter(([key]) => key !== 'done' || showCompletedItems)
-                .map(([key, col]) => (
-                <KanbanColumnV2 key={key} status={key} title={col.title} color={col.color as string} registerScrollEl={registerColumnScrollEl}>
-                    {col.items.map(item => {
-                        const isStory = 'points' in item || (item as any).storyId === undefined; // Rough check, better to check ID or something
-                        // Actually, my Task type has storyId, Story doesn't (usually). 
-                        // Better: check if it's in the stories array
-                        const type = stories.some(s => s.id === item.id) ? 'story' : 'task';
-
-                        let itemGoal: Goal | undefined;
-                        let parentStory: Story | undefined;
-                        let isFocusAligned = false;
-
-                        if (type === 'story') {
-                            itemGoal = goals.find(g => g.id === (item as any).goalId);
-                            const sGoalId = String((item as any).goalId || '').trim();
-                            if (sGoalId && focusGoalIds.size > 0) {
-                                isFocusAligned = isGoalInHierarchySet(sGoalId, goals, focusGoalIds);
-                            }
-                        } else {
-                            // Task
-                            parentStory = stories.find(s => s.id === (item as any).parentId);
-                            if (parentStory) {
-                                itemGoal = goals.find(g => g.id === parentStory.goalId);
-                                const pgId = String((parentStory as any).goalId || '').trim();
-                                if (pgId && focusGoalIds.size > 0) isFocusAligned = isGoalInHierarchySet(pgId, goals, focusGoalIds);
-                            } else if ((item as any).goalId) {
-                                itemGoal = goals.find(g => g.id === (item as any).goalId);
-                                const tgId = String((item as any).goalId || '').trim();
-                                if (tgId && focusGoalIds.size > 0) isFocusAligned = isGoalInHierarchySet(tgId, goals, focusGoalIds);
-                            }
-                        }
-
-                        let steamMeta: { playtimeMinutes?: number; lastPlayedAt?: number; lastSyncAt?: any; appId?: string | number } | undefined;
-                        if (type === 'story' && isSteamStory(item as Story)) {
-                            const appId = getSteamAppId(item as Story);
-                            if (appId != null) {
-                                const steamEntry = steamByAppId[String(appId)];
-                                if (steamEntry) {
-                                    steamMeta = {
-                                        appId,
-                                        playtimeMinutes: steamEntry.playtime_forever ?? steamEntry.playtimeForever ?? steamEntry.playtime ?? null,
-                                        lastPlayedAt: steamEntry.rtime_last_played ? steamEntry.rtime_last_played * 1000 : (steamEntry.last_played ? steamEntry.last_played * 1000 : null),
-                                        lastSyncAt: steamLastSyncAt ?? steamEntry.updatedAt ?? null
-                                    };
-                                } else {
-                                    steamMeta = {
-                                        appId,
-                                        lastSyncAt: steamLastSyncAt ?? null
-                                    };
-                                }
-                            }
-                        }
-
-                        return (
-                            <KanbanCardV2
-                                key={item.id}
-                                item={item}
-                                type={type}
-                                goal={itemGoal}
-                                story={parentStory}
-                                taskCount={type === 'story' ? tasks.filter(t => t.parentId === item.id).length : 0}
-                                onItemSelect={onItemSelect}
-                                showDescription={showDescriptions}
-                                showLatestNote={showLatestNotes}
-                                latestNote={latestNotesById[item.id]}
-                                scheduledBlock={scheduledBlocksByEntity[`${type}:${item.id}`]}
-                                steamMeta={steamMeta}
-                                onEdit={() => onEdit?.(item, type)}
-                                onParentClick={onParentClick}
-                                formatTag={formatTag}
-                                themes={themes}
-                                goals={goals}
-                                focusGoalIds={focusGoalIds}
-                                isFocusAligned={isFocusAligned}
-                                detailLevel={detailLevel}
-                            />
-                        );
-                    })}
+            {visibleColumnKeys.map((key) => (
+                <KanbanColumnV2 key={key} status={key} title={columns[key].title} color={columns[key].color as string} registerScrollEl={registerColumnScrollEl}>
+                    {columns[key].items.map(renderCard)}
                 </KanbanColumnV2>
             ))}
         </div>

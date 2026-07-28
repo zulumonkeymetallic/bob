@@ -7,7 +7,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import { Story, Task, Goal } from '../types';
 import KanbanBoardV2 from './KanbanBoardV2';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Maximize2, Minimize2, RefreshCw, Sparkles, LayoutList, Columns2, Plus, SlidersHorizontal } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Maximize2, Minimize2, RefreshCw, Sparkles, LayoutList, Columns2, Rows3, Plus, SlidersHorizontal } from 'lucide-react';
 import SprintTriageTable from './SprintTriageTable';
 import { displayRefForEntity } from '../utils/referenceGenerator';
 import { useSprint } from '../contexts/SprintContext';
@@ -34,6 +34,10 @@ import {
     normalizePlannerCallableError,
 } from '../utils/plannerOrchestration';
 import PlanActionBar from './planner/PlanActionBar';
+
+/** Board = flat three columns. Swimlanes = one band per goal (parity with the iOS
+ *  board's groupByGoal). Table = the triage list. */
+type ViewMode = 'board' | 'swimlanes' | 'table';
 
 const SprintKanbanPageV2: React.FC = () => {
     const navigate = useNavigate();
@@ -80,14 +84,18 @@ const SprintKanbanPageV2: React.FC = () => {
     // iPad landscape defaults to the Triage table (less horizontal scrolling than 3 Kanban
     // columns) unless the user has already picked a view explicitly, in which case that
     // sticks. Confirmed by Jim, 2026-07-24.
-    const [viewMode, setViewMode] = useState<'board' | 'table'>(() => {
+    const [viewMode, setViewMode] = useState<ViewMode>(() => {
         try {
             const stored = localStorage.getItem('kanban_view_mode');
-            if (stored === 'board' || stored === 'table') return stored;
+            if (stored === 'board' || stored === 'table' || stored === 'swimlanes') return stored;
         } catch { /* noop */ }
         const d = getDeviceInfo();
         return (d.isIPad && d.isTablet) ? 'table' : 'board';
     });
+    const selectViewMode = (mode: ViewMode) => {
+        setViewMode(mode);
+        try { localStorage.setItem('kanban_view_mode', mode); } catch { /* noop */ }
+    };
     const [replanLoading, setReplanLoading] = useState(false);
     const [fullReplanLoading, setFullReplanLoading] = useState(false);
     const [replanFeedback, setReplanFeedback] = useState<string | null>(null);
@@ -470,16 +478,25 @@ const SprintKanbanPageV2: React.FC = () => {
                                 <Button
                                     variant={viewMode === 'board' ? 'secondary' : 'outline-secondary'}
                                     size="sm"
-                                    onClick={() => { setViewMode('board'); try { localStorage.setItem('kanban_view_mode', 'board'); } catch {} }}
+                                    onClick={() => selectViewMode('board')}
                                     title="Board view"
                                     style={{ borderRadius: 0, border: 'none', padding: '4px 10px' }}
                                 >
                                     <Columns2 size={15} />
                                 </Button>
                                 <Button
+                                    variant={viewMode === 'swimlanes' ? 'secondary' : 'outline-secondary'}
+                                    size="sm"
+                                    onClick={() => selectViewMode('swimlanes')}
+                                    title="Swimlanes — group by goal"
+                                    style={{ borderRadius: 0, border: 'none', padding: '4px 10px' }}
+                                >
+                                    <Rows3 size={15} />
+                                </Button>
+                                <Button
                                     variant={viewMode === 'table' ? 'secondary' : 'outline-secondary'}
                                     size="sm"
-                                    onClick={() => { setViewMode('table'); try { localStorage.setItem('kanban_view_mode', 'table'); } catch {} }}
+                                    onClick={() => selectViewMode('table')}
                                     title="Triage table view"
                                     style={{ borderRadius: 0, border: 'none', padding: '4px 10px' }}
                                 >
@@ -657,8 +674,9 @@ const SprintKanbanPageV2: React.FC = () => {
                 <Col style={{ height: '100%' }}>
                     <Card style={{ border: 'none', boxShadow: '0 1px 3px rgba(0,0,0,0.1)', height: '100%', borderRadius: isFullscreen ? 0 : undefined }}>
                         <Card.Body style={{ padding: deviceInfo.isIPad ? '10px' : '24px', height: '100%', overflow: 'auto', backgroundColor: isFullscreen ? 'var(--bg)' : undefined }}>
-                            {viewMode === 'board' ? (
+                            {viewMode !== 'table' ? (
                                 <KanbanBoardV2
+                                    groupByGoal={viewMode === 'swimlanes'}
                                     sprintId={filterSprintId}
                                     themeFilter={themeFilterIds.length > 0 ? themeFilterIds : null}
                                     goalFilter={goalFilterIds.length > 0 ? goalFilterIds : null}

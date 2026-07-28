@@ -66,7 +66,7 @@ const ThemeBreakdown: React.FC<ThemeBreakdownProps> = ({ onThemeSelect }) => {
       const label = typeof s.theme === 'number' ? getThemeById(s.theme).label : String(s.theme || 'Unknown');
       const r = map.get(key) || { key, label, goals: 0, stories: 0, doneStories: 0 };
       r.stories += 1;
-      if (isStatus((s as any).status, 'done')) r.doneStories += 1;
+      if (isStatus((s as any).status, 'done', 'story')) r.doneStories += 1;
       map.set(key, r);
     }
 

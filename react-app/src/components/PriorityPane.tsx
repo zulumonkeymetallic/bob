@@ -32,7 +32,7 @@ const PriorityPane: React.FC<PriorityPaneProps> = ({ tasks }) => {
       const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
       
       const scoredTasks = tasks
-        .filter(task => !isStatus(task.status, 'done'))
+        .filter(task => !isStatus(task.status, 'done', 'task'))
         .map(task => {
           let score = 0;
           const reasonCodes: string[] = [];
@@ -88,7 +88,7 @@ const PriorityPane: React.FC<PriorityPaneProps> = ({ tasks }) => {
           }
 
           // In progress bonus
-          if (isStatus(task.status, 'in_progress')) {
+          if (isStatus(task.status, 'in_progress', 'task')) {
             score += 5;
             reasonCodes.push('in_progress');
             rationale = rationale ? `${rationale}, already started` : 'Task in progress';
