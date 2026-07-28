@@ -264,6 +264,13 @@ export function useDailyPlanTimeline(params: UseDailyPlanTimelineParams = {}): U
   // `selfContained`. Deliberately not persona-filtered: a work-calendar meeting still belongs on
   // today's plan regardless of which persona tab is active.
   const [liveGcalEvents, setLiveGcalEvents] = useState<DailyPlanCalendarEvent[]>([]);
+  /// Surfaced so an empty schedule can say *why*. A failing listener and a genuinely
+  /// empty day looked identical: the error handler set `[]` and returned, with no log and
+  /// no UI state, and MobileHome then rendered "No tasks, stories, chores, or calendar
+  /// events scheduled today". A missing composite index or a rules change is invisible
+  /// that way — and on 2026-07-28 the data was verified present (11 gcal blocks for the
+  /// day) while mobile showed nothing.
+  const [gcalError, setGcalError] = useState<string | null>(null);
   useEffect(() => {
     if (!uid) { setLiveGcalEvents([]); return; }
     const q = query(
@@ -286,7 +293,18 @@ export function useDailyPlanTimeline(params: UseDailyPlanTimelineParams = {}): U
         })
         .filter(Boolean) as DailyPlanCalendarEvent[];
       setLiveGcalEvents(mapped);
-    }, () => setLiveGcalEvents([]));
+      setGcalError(null);
+    }, (err) => {
+      setLiveGcalEvents([]);
+      // A permission-denied or failed-precondition here almost always means a composite
+      // index has not been deployed, or rules changed. Both are actionable, and both were
+      // previously silent.
+      const detail = (err as { code?: string; message?: string })?.code
+        || (err as { message?: string })?.message
+        || 'unknown error';
+      setGcalError(String(detail));
+      console.warn('[dailyPlan] calendar_blocks listener failed:', err);
+    });
     return () => unsub();
   }, [uid, todayStartMs, todayEndMs]);
 
@@ -624,6 +642,9 @@ export function useDailyPlanTimeline(params: UseDailyPlanTimelineParams = {}): U
   return {
     items,
     bucketCounts,
+    /// Non-null when the calendar_blocks listener failed. Render it — an empty plan with
+    /// no explanation is indistinguishable from a broken one.
+    gcalError,
     loading: selfContained ? fetchLoading : false,
     choreCompletionBusy,
     itemActionBusy,
