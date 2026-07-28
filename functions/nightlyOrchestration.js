@@ -492,59 +492,9 @@ async function callLLMJsonSafe({ system, user, purpose, userId, model }) {
   }
 }
 
-function computeCriticalityScore({ dueDateMs, createdAtMs, goalDueMs, theme, points, taskType }) {
-  let score = 0;
-  const now = Date.now();
-
-  // Due date urgency
-  if (dueDateMs) {
-    const days = Math.max(-30, Math.min(120, (dueDateMs - now) / 86400000));
-    if (days <= 0) score += 40;
-    else if (days <= 3) score += 30;
-    else if (days <= 7) score += 22;
-    else if (days <= 14) score += 15;
-    else if (days <= 30) score += 8;
-  }
-
-  // Age
-  if (createdAtMs) {
-    const ageDays = Math.max(0, (now - createdAtMs) / 86400000);
-    if (ageDays > 30) score += 15;
-    else if (ageDays > 14) score += 10;
-    else if (ageDays > 7) score += 6;
-  }
-
-  // Theme weighting
-  const themeKey = String(theme || '').toLowerCase();
-  if (['health', 'wealth', 'learning', 'growth', 'spirituality'].some((k) => themeKey.includes(k))) score += 10;
-  if (themeKey.includes('hobby') || themeKey.includes('hobbies')) score -= 5;
-
-  // Goal due date
-  if (goalDueMs) {
-    const daysGoal = Math.max(-30, Math.min(180, (goalDueMs - now) / 86400000));
-    if (daysGoal <= 0) score += 15;
-    else if (daysGoal <= 7) score += 10;
-    else if (daysGoal <= 30) score += 5;
-  }
-
-  // Size: smaller tasks due soon get a nudge; very large items less likely to be immediate
-  if (points != null) {
-    if (points <= 2) score += 6;
-    else if (points >= 8) score -= 4;
-  }
-
-  // Cap passive/recurring types to prevent them appearing in Top 3 or dominating AI ranking:
-  //   chore / habit / routine → max 30 (surfaced in daily plan, not sprint board)
-  //   read / watch            → max 10 (media consumption, not actionable work)
-  const type = String(taskType || '').toLowerCase();
-  if (['chore', 'habit', 'routine'].includes(type)) {
-    score = Math.min(30, score);
-  } else if (['read', 'watch'].includes(type)) {
-    score = Math.min(10, score);
-  }
-
-  return Math.max(0, Math.min(100, Math.round(score)));
-}
+// Scoring lives in ./scoring.js so it can be golden-vector tested against the iOS
+// implementation. See that file's header.
+const { computeCriticalityScore, normaliseThemeId } = require('./scoring');
 
 const LLM_PRIORITY_MAX_ITEMS = 40;
 const LLM_PRIORITY_MAX_TEXT = 500;
