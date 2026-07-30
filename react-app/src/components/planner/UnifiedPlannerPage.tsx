@@ -1837,8 +1837,15 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
                   </small>
                 </div>
               </div>
-              {/* Action buttons — moved out of calendar control bar */}
-              <div className="d-flex align-items-center gap-2 flex-wrap ms-auto">
+              {/* Action buttons — moved out of calendar control bar.
+                  flex-nowrap, not flex-wrap: PlanActionBar lives in here alongside Sync
+                  Google, the replan buttons, New Entry and Smart, so wrapping stacked the
+                  whole lot into two and three rows on anything narrower than a wide desktop.
+                  Every control carries a title, so the row scrolls instead of stacking. */}
+              <div
+                className="d-flex align-items-center gap-2 flex-nowrap ms-auto bob-planner-actions"
+                style={{ overflowX: 'auto', overflowY: 'hidden', scrollbarWidth: 'none' as any, minWidth: 0 }}
+              >
                 <Button
                   variant="outline-secondary"
                   size="sm"

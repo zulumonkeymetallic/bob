@@ -31,7 +31,7 @@ import { useAuth } from '../contexts/AuthContext';
 import type { Goal, Story, Task, Sprint } from '../types';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
 import { themeVars } from '../utils/themeVars';
-import { rescheduleGoalToQuarter as rescheduleGoalDates } from '../utils/roadmapSchedule';
+import { rescheduleGoalToQuarter as rescheduleGoalDates, roadmapColumnOrder, UNSCHEDULED_COLUMN } from '../utils/roadmapSchedule';
 import { colorWithAlpha, goalThemeColor as resolveGoalThemeColor } from '../utils/storyCardFormatting';
 import { getThemeName } from '../utils/statusHelpers';
 import PlanActionBar from './planner/PlanActionBar';
@@ -181,6 +181,7 @@ function computeQuarterKey(ts: number | null | undefined): string | null {
 }
 
 function quarterLabel(key: string): string {
+  if (key === UNSCHEDULED_COLUMN) return 'Unscheduled';
   const [year, q] = key.split('-');
   return `${q} ${year}`;
 }
@@ -480,7 +481,10 @@ const VisualCanvas: React.FC<VisualCanvasProps> = ({ forcedLayout, embedded = fa
       if (k1) keys.add(k1);
       if (k2) keys.add(k2);
     }
-    return [...keys].sort();
+    // Ordered by roadmapColumnOrder: history trimmed to one quarter back, and Unscheduled
+    // placed immediately before the current quarter so it is a short drag away rather than
+    // pinned to the far right.
+    return roadmapColumnOrder([...keys], computeQuarterKey(Date.now()));
   }, [roadmapGoals]);
 
   const roadmapThemes = useMemo(() =>
@@ -987,9 +991,6 @@ const VisualCanvas: React.FC<VisualCanvasProps> = ({ forcedLayout, embedded = fa
                     {qKey === currentQuarterKey && <span style={{ marginLeft: 5, fontSize: 9, color: 'var(--brand, #3b82f6)' }}>▶ now</span>}
                   </div>
                 ))}
-                <div style={{ width: 210, flexShrink: 0, padding: '5px 10px', fontSize: 11, fontWeight: 700, color: 'var(--muted, #9ca3af)', borderLeft: '1px solid var(--line, #e5e7eb)', background: 'var(--panel, #f9fafb)' }}>
-                  Unscheduled
-                </div>
               </div>
               {/* Theme rows */}
               {roadmapThemes.map(theme => {
@@ -1037,36 +1038,6 @@ const VisualCanvas: React.FC<VisualCanvasProps> = ({ forcedLayout, embedded = fa
                         </div>
                       );
                     })}
-                    {/* Unscheduled cell */}
-                    {(() => {
-                      const cellId = `${theme.id}:unscheduled`;
-                      const isDropTarget = roadmapDragId != null && dragOverCell === cellId;
-                      return (
-                    <div
-                      onDragOver={e => { if (roadmapDragId) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOverCell(cellId); } }}
-                      onDragLeave={() => setDragOverCell(prev => (prev === cellId ? null : prev))}
-                      onDrop={e => {
-                        e.preventDefault();
-                        const id = e.dataTransfer.getData('text/plain') || roadmapDragId;
-                        setDragOverCell(null);
-                        if (id) rescheduleGoalToQuarter(id, 'unscheduled');
-                      }}
-                      style={{
-                      width: 210, flexShrink: 0, padding: '6px 8px', minHeight: 72,
-                      borderLeft: '1px solid var(--line, #e5e7eb)', borderTop: '1px solid var(--line, #e5e7eb)',
-                      background: isDropTarget ? 'var(--accent-soft, #dbeafe)' : 'var(--panel, #fafafa)',
-                      boxShadow: isDropTarget ? `inset 0 0 0 2px ${theme.color}` : undefined,
-                      display: 'flex', flexDirection: 'column', gap: 4,
-                    }}>
-                      {(themeGoals?.get('unscheduled') || []).map(g => (
-                        <RoadmapChip key={g.id} goal={g} themeColor={theme.color}
-                          onEdit={setEditingGoal}
-                          onDragStartGoal={setRoadmapDragId}
-                          onDragEndGoal={() => { setRoadmapDragId(null); setDragOverCell(null); }} />
-                      ))}
-                    </div>
-                      );
-                    })()}
                   </div>
                 );
               })}

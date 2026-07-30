@@ -60,3 +60,41 @@ export function rescheduleGoalToQuarter(
   if (start == null) return null;
   return { startDate: start, endDate: start + goalDurationMs(prevStart, prevEnd) };
 }
+
+/** Sort key for a `YYYY-Qn` string. Lexical sort works, but only by luck of zero-padding. */
+export function quarterOrdinal(key: string): number | null {
+  const m = /^(\d{4})-Q([1-4])$/.exec(key);
+  return m ? Number(m[1]) * 4 + (Number(m[2]) - 1) : null;
+}
+
+export const UNSCHEDULED_COLUMN = 'unscheduled';
+
+/**
+ * Column order for the roadmap grid.
+ *
+ * Two deliberate choices, both about making a drag short:
+ *  - History is trimmed to a single quarter before the current one. Older quarters are done
+ *    with, and keeping them pushes the columns you actually plan into off the right edge.
+ *  - Unscheduled sits immediately BEFORE the current quarter rather than last. It is the pile
+ *    you drag OUT of, and it was previously the furthest possible point from the target.
+ *
+ * Result: [Q(n-1), Unscheduled, Q(n), Q(n+1), ...].
+ */
+export function roadmapColumnOrder(quarterKeys: string[], currentKey: string | null): string[] {
+  const cur = currentKey ? quarterOrdinal(currentKey) : null;
+
+  const sorted = [...new Set(quarterKeys)]
+    .filter((k) => quarterOrdinal(k) != null)
+    .sort((a, b) => quarterOrdinal(a)! - quarterOrdinal(b)!);
+
+  if (cur == null) return [...sorted, UNSCHEDULED_COLUMN];
+
+  const kept = sorted.filter((k) => quarterOrdinal(k)! >= cur - 1);
+  const previous = kept.filter((k) => quarterOrdinal(k)! < cur);
+  const currentAndLater = kept.filter((k) => quarterOrdinal(k)! >= cur);
+
+  // The current quarter always gets a column, even with nothing scheduled in it.
+  if (currentKey && !currentAndLater.includes(currentKey)) currentAndLater.unshift(currentKey);
+
+  return [...previous, UNSCHEDULED_COLUMN, ...currentAndLater];
+}

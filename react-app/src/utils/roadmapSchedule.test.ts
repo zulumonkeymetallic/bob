@@ -3,6 +3,7 @@ import {
   goalDurationMs,
   rescheduleGoalToQuarter,
   DEFAULT_GOAL_DURATION_MS,
+  roadmapColumnOrder,
 } from './roadmapSchedule';
 
 const q = (key: string) => new Date(quarterMidTimestamp(key)!);
@@ -90,5 +91,55 @@ describe('rescheduleGoalToQuarter', () => {
 
   it('declines an unparseable quarter instead of writing garbage', () => {
     expect(rescheduleGoalToQuarter('unscheduled', null, null)).toBeNull();
+  });
+});
+
+describe('roadmapColumnOrder', () => {
+  const CUR = '2026-Q3';
+
+  it('drops quarters older than the one before the current', () => {
+    const cols = roadmapColumnOrder(
+      ['2025-Q1', '2025-Q4', '2026-Q1', '2026-Q2', '2026-Q3', '2026-Q4'], CUR);
+    expect(cols).not.toContain('2025-Q1');
+    expect(cols).not.toContain('2026-Q1');
+    expect(cols).toContain('2026-Q2');   // n-1 is kept
+  });
+
+  it('puts Unscheduled immediately before the current quarter', () => {
+    const cols = roadmapColumnOrder(['2026-Q2', '2026-Q3', '2026-Q4'], CUR);
+    expect(cols).toEqual(['2026-Q2', 'unscheduled', '2026-Q3', '2026-Q4']);
+    expect(cols.indexOf('unscheduled')).toBe(cols.indexOf(CUR) - 1);
+  });
+
+  it('leads with Unscheduled when there is no previous quarter to show', () => {
+    const cols = roadmapColumnOrder(['2026-Q3', '2026-Q4'], CUR);
+    expect(cols[0]).toBe('unscheduled');
+    expect(cols[1]).toBe(CUR);
+  });
+
+  it('crosses a year boundary correctly', () => {
+    const cols = roadmapColumnOrder(['2025-Q3', '2025-Q4', '2026-Q1'], '2026-Q1');
+    expect(cols).toEqual(['2025-Q4', 'unscheduled', '2026-Q1']);
+  });
+
+  it('always gives the current quarter a column, even when nothing is in it', () => {
+    const cols = roadmapColumnOrder(['2026-Q4'], CUR);
+    expect(cols).toContain(CUR);
+    expect(cols.indexOf(CUR)).toBeLessThan(cols.indexOf('2026-Q4'));
+  });
+
+  it('keeps future quarters ascending', () => {
+    const cols = roadmapColumnOrder(['2027-Q2', '2026-Q4', '2026-Q3'], CUR);
+    expect(cols).toEqual(['unscheduled', '2026-Q3', '2026-Q4', '2027-Q2']);
+  });
+
+  it('ignores junk keys and de-duplicates', () => {
+    const cols = roadmapColumnOrder(['2026-Q3', '2026-Q3', 'nonsense', ''], CUR);
+    expect(cols).toEqual(['unscheduled', '2026-Q3']);
+  });
+
+  it('still returns something usable when the current quarter is unknown', () => {
+    const cols = roadmapColumnOrder(['2026-Q1', '2026-Q2'], null);
+    expect(cols).toEqual(['2026-Q1', '2026-Q2', 'unscheduled']);
   });
 });

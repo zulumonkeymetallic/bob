@@ -284,3 +284,16 @@
 .bob-tier-tablet .form-select {
   font-size: 16px;   /* below 16px iOS zooms the page on focus */
 }
+
+/* ═══════════════════════════════════════════════════════════
+   8. PLANNER ACTION ROW — one line, at every width
+   This row holds Sync Google, the replan buttons, PlanActionBar, New Entry and Smart. It is
+   flex-nowrap and scrolls, but the buttons themselves were still breaking their labels over
+   two lines ("Sync / Google"), which reads as a stacked bar even though it is one row.
+   Applies at all widths, not just tablet — the same wrapping happens on a narrow desktop.
+   ═══════════════════════════════════════════════════════════ */
+.bob-planner-actions .btn,
+.bob-planner-actions .dropdown-toggle {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
