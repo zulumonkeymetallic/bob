@@ -330,7 +330,10 @@ const RoadmapChip: React.FC<{
       title={`${goal.title} — click to edit, drag to reschedule`}
       style={{
         borderLeft: `3px solid ${themeColor}`,
-        background: isDone ? '#f3f4f6' : isActive ? '#fff' : '#fafafa',
+        // Theme variables, not fixed light greys — these chips were the white blocks left
+        // glowing in the Unscheduled column once the rest of the roadmap went dark.
+        background: isDone ? 'var(--panel, #f3f4f6)' : isActive ? 'var(--card, #fff)' : 'var(--panel, #fafafa)',
+        color: 'var(--text, #1a1a1a)',
         borderRadius: '0 6px 6px 0',
         padding: '4px 7px',
         cursor: 'grab',
@@ -960,9 +963,9 @@ const VisualCanvas: React.FC<VisualCanvasProps> = ({ forcedLayout, embedded = fa
 
       {/* ── ROADMAP layout (outside SVG canvas) ───────────────────────────────── */}
       {viewLayout === 'roadmap' && (
-        <div style={{ flex: 1, overflow: 'auto', background: 'var(--bs-light, #f8f9fa)', padding: '16px 20px' }}>
+        <div style={{ flex: 1, overflow: 'auto', background: 'var(--bg, #f8f9fa)', padding: '16px 20px' }}>
           {roadmapGoals.length === 0 ? (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#6b7280' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--muted, #6b7280)' }}>
               <Filter size={32} style={{ opacity: 0.4, marginBottom: 12 }} />
               <div className="fw-medium">No items match current filters</div>
               <div className="small mt-1">Try clearing filters or adding goals</div>
@@ -975,16 +978,16 @@ const VisualCanvas: React.FC<VisualCanvasProps> = ({ forcedLayout, embedded = fa
                 {roadmapQuarters.map(qKey => (
                   <div key={qKey} style={{
                     width: 210, flexShrink: 0, padding: '5px 10px',
-                    fontSize: 11, fontWeight: 700, color: '#374151',
-                    borderLeft: '1px solid #e5e7eb',
-                    background: qKey === currentQuarterKey ? '#dbeafe' : '#f1f5f9',
+                    fontSize: 11, fontWeight: 700, color: 'var(--text, #374151)',
+                    borderLeft: '1px solid var(--line, #e5e7eb)',
+                    background: qKey === currentQuarterKey ? 'var(--accent-soft, #dbeafe)' : 'var(--panel, #f1f5f9)',
                     borderRadius: qKey === roadmapQuarters[0] ? '6px 0 0 0' : undefined,
                   }}>
                     {quarterLabel(qKey)}
-                    {qKey === currentQuarterKey && <span style={{ marginLeft: 5, fontSize: 9, color: '#3b82f6' }}>▶ now</span>}
+                    {qKey === currentQuarterKey && <span style={{ marginLeft: 5, fontSize: 9, color: 'var(--brand, #3b82f6)' }}>▶ now</span>}
                   </div>
                 ))}
-                <div style={{ width: 210, flexShrink: 0, padding: '5px 10px', fontSize: 11, fontWeight: 700, color: '#9ca3af', borderLeft: '1px solid #e5e7eb', background: '#f9fafb' }}>
+                <div style={{ width: 210, flexShrink: 0, padding: '5px 10px', fontSize: 11, fontWeight: 700, color: 'var(--muted, #9ca3af)', borderLeft: '1px solid var(--line, #e5e7eb)', background: 'var(--panel, #f9fafb)' }}>
                   Unscheduled
                 </div>
               </div>
@@ -1020,8 +1023,8 @@ const VisualCanvas: React.FC<VisualCanvasProps> = ({ forcedLayout, embedded = fa
                           }}
                           style={{
                           width: 210, flexShrink: 0, padding: '6px 8px', minHeight: 72,
-                          borderLeft: '1px solid #e5e7eb', borderTop: '1px solid #e5e7eb',
-                          background: isDropTarget ? '#dbeafe' : qKey === currentQuarterKey ? '#eff6ff40' : '#fff',
+                          borderLeft: '1px solid var(--line, #e5e7eb)', borderTop: '1px solid var(--line, #e5e7eb)',
+                          background: isDropTarget ? 'var(--accent-soft, #dbeafe)' : qKey === currentQuarterKey ? '#eff6ff40' : 'var(--card, #fff)',
                           boxShadow: isDropTarget ? `inset 0 0 0 2px ${theme.color}` : undefined,
                           display: 'flex', flexDirection: 'column', gap: 4,
                         }}>
@@ -1050,8 +1053,8 @@ const VisualCanvas: React.FC<VisualCanvasProps> = ({ forcedLayout, embedded = fa
                       }}
                       style={{
                       width: 210, flexShrink: 0, padding: '6px 8px', minHeight: 72,
-                      borderLeft: '1px solid #e5e7eb', borderTop: '1px solid #e5e7eb',
-                      background: isDropTarget ? '#dbeafe' : '#fafafa',
+                      borderLeft: '1px solid var(--line, #e5e7eb)', borderTop: '1px solid var(--line, #e5e7eb)',
+                      background: isDropTarget ? 'var(--accent-soft, #dbeafe)' : 'var(--panel, #fafafa)',
                       boxShadow: isDropTarget ? `inset 0 0 0 2px ${theme.color}` : undefined,
                       display: 'flex', flexDirection: 'column', gap: 4,
                     }}>

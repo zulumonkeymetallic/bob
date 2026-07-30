@@ -27,7 +27,7 @@ type PlanDestination = {
 };
 
 const PLAN_LEVELS: PlanDestination[] = [
-  { level: 'gantt', label: 'Gannt chart' },
+  { level: 'gantt', label: 'Gantt chart' },
   { level: 'year', label: 'Year Planner' },
   { level: 'quarter', label: 'Quarter Planner' },
   { level: 'sprint', label: 'Multi Sprint Planner' },
@@ -125,6 +125,15 @@ const PlanActionBar: React.FC<PlanActionBarProps> = ({ className }) => {
             </Dropdown.Item>
           ))}
           <Dropdown.Divider />
+          {/* Roadmap is not a planner `level` — it lives at /canvas?layout=roadmap — so it
+              cannot go in PLAN_LEVELS above and is listed explicitly, like Weekly Capacity. */}
+          <Dropdown.Item
+            active={location.pathname === '/canvas' && new URLSearchParams(location.search).get('layout') === 'roadmap'}
+            onClick={() => navigate('/canvas?layout=roadmap')}
+          >
+            <MapIcon size={14} className="me-1" />
+            Roadmap
+          </Dropdown.Item>
           <Dropdown.Item
             active={isWeeklyCapacityActive}
             onClick={() => navigate('/planner/weekly-capacity')}
