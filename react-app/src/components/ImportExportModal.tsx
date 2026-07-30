@@ -6,6 +6,9 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { functions } from '../firebase';
 import { httpsCallable } from 'firebase/functions';
+import Papa from 'papaparse';
+import * as XLSX from 'xlsx';
+import { buildDoc, buildGoalDoc, buildStoryDoc, buildTaskDoc, rowHasTitle, type ImportType, type Persona } from '../utils/importNormalise';
 
 interface ImportExportModalProps {
   show: boolean;
@@ -194,6 +197,16 @@ const ImportExportModal: React.FC<ImportExportModalProps> = ({ show, onHide }) =
   const [isImporting, setIsImporting] = useState(false);
   const [isExportingSnapshot, setIsExportingSnapshot] = useState(false);
   const [importResult, setImportResult] = useState<string | null>(null);
+  // Which collection the rows are destined for. The old importer ignored this entirely and
+  // wrote everything to `goals`, so a tasks CSV silently became a pile of untitled goals.
+  const [importType, setImportType] = useState<ImportType>('goals');
+  const [preview, setPreview] = useState<{
+    type: ImportType;
+    total: number;
+    skipped: number;
+    docs: Record<string, unknown>[];
+    warnings: string[];
+  } | null>(null);
 
   const downloadJson = (filename: string, payload: any) => {
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -232,20 +245,24 @@ const ImportExportModal: React.FC<ImportExportModalProps> = ({ show, onHide }) =
 
   const generateCSVTemplate = (type: 'goals' | 'stories' | 'tasks') => {
     switch (type) {
+      // Theme accepts the full name or its numeric id; confidence is 1 Low / 2 Medium / 3 High.
       case 'goals':
-        return `title,description,theme,size,timeToMasterHours,confidence,targetDate,kpi1Name,kpi1Target,kpi1Unit,kpi2Name,kpi2Target,kpi2Unit
-"Complete Marathon Training","Train for and complete a marathon","Health","L",180,0.7,"2025-12-31","Weekly distance","50","km","Long run distance","35","km"
-"Build Emergency Fund","Save 6 months expenses","Wealth","M",60,0.8,"2025-10-31","Fund amount","25000","USD","Savings rate","20","%"`;
+        return `title,description,theme,size,timeToMasterHours,confidence,status,targetDate,kpi1Name,kpi1Target,kpi1Unit,kpi2Name,kpi2Target,kpi2Unit
+"Complete Marathon Training","Train for and complete a marathon","Health & Fitness","L",180,2,"new","2026-12-31","Weekly distance","50","km","Long run distance","35","km"
+"Build Emergency Fund","Save 6 months expenses","Finance & Wealth","M",60,3,"new","2026-10-31","Fund amount","25000","GBP","Savings rate","20","%"`;
       
       case 'stories':
-        return `title,goalTitle,priority,points,status,acceptanceCriteria1,acceptanceCriteria2,acceptanceCriteria3
-"Create training schedule","Complete Marathon Training","P1",3,"backlog","Schedule includes 4 running days","Rest days planned","Progressive distance increase"
-"Purchase running gear","Complete Marathon Training","P2",2,"backlog","Running shoes purchased","Weather gear acquired","Nutrition supplies ready"`;
-      
+        return `title,goalId,theme,priority,points,status,acceptanceCriteria1,acceptanceCriteria2,acceptanceCriteria3
+"Create training schedule","","Health & Fitness","P1",3,"backlog","Schedule includes 4 running days","Rest days planned","Progressive distance increase"
+"Purchase running gear","","Health & Fitness","P2",2,"backlog","Running shoes purchased","Weather gear acquired","Nutrition supplies ready"`;
+
+      // Column order matters less than it used to — headers are matched case- and
+      // separator-insensitively, and unknown values are reported in the preview rather than
+      // written blindly.
       case 'tasks':
-        return `title,parentTitle,parentType,effort,priority,estimateMin,estimatedHours,description,theme,dueDate,status
-"30-minute morning run","Create training schedule","story","M","high",30,"Easy pace base building run","Health","2025-09-01","planned"
-"Research running shoes","Purchase running gear","story","S","med",45,"Compare and select proper running shoes","Health","2025-08-31","planned"`;
+        return `title,storyId,parentType,effort,priority,estimateMin,description,theme,dueDate,status
+"30-minute morning run","","story","M","high",30,"Easy pace base building run","Health & Fitness","2026-09-01","todo"
+"Research running shoes","","story","S","medium",45,"Compare and select proper running shoes","Health & Fitness","2026-08-31","todo"`;
     }
   };
 
@@ -265,109 +282,148 @@ const ImportExportModal: React.FC<ImportExportModalProps> = ({ show, onHide }) =
     
     setIsImporting(true);
     try {
-      // Import goal
-      const goalTemplate = GOAL_TEMPLATES[category];
-      const goalRef = await addDoc(collection(db, 'goals'), {
-        ...goalTemplate,
-        persona: currentPersona,
-        ownerUid: currentUser.uid,
-        status: 'active',
-        createdAt: new Date(),
-        updatedAt: new Date()
-      });
+      // Routed through the same normaliser as the CSV path. Previously this spread the raw
+      // template object straight into Firestore, so it wrote `theme: "Health"` and
+      // `size: "L"` as strings into numeric fields, `confidence: 0.7` onto a 1-3 scale, and
+      // `status: 'active'` where a number belongs — and no `ref` on anything.
+      const now = new Date();
+      const ctx = { ownerUid: currentUser.uid, persona: currentPersona as Persona };
+      const stamp = (d: Record<string, unknown>) => ({ ...d, createdAt: now, updatedAt: now, serverUpdatedAt: now.getTime() });
 
-      // Import stories
+      const goalTemplate = GOAL_TEMPLATES[category];
+      const goalDoc = buildGoalDoc(goalTemplate as unknown as Record<string, unknown>, ctx).doc;
+      const goalRef = await addDoc(collection(db, 'goals'), stamp(goalDoc));
+
       const storyTemplates = STORY_TEMPLATES[category] || [];
       const storyRefs = [];
       for (const storyTemplate of storyTemplates) {
-        const storyRef = await addDoc(collection(db, 'stories'), {
-          ...storyTemplate,
-          goalId: goalRef.id,
-          persona: currentPersona,
-          ownerUid: currentUser.uid,
-          status: 0,
-          orderIndex: 0,
-          createdAt: new Date(),
-          updatedAt: new Date()
-        });
-        storyRefs.push(storyRef);
+        const storyDoc = buildStoryDoc(
+          { ...(storyTemplate as unknown as Record<string, unknown>), theme: goalDoc.theme },
+          { ...ctx, goalId: goalRef.id },
+        ).doc;
+        storyRefs.push(await addDoc(collection(db, 'stories'), stamp(storyDoc)));
       }
 
-      // Import tasks
       const taskTemplates = TASK_TEMPLATES[category] || [];
       for (let i = 0; i < taskTemplates.length && i < storyRefs.length; i++) {
-        await addDoc(collection(db, 'tasks'), {
-          ...taskTemplates[i],
-          parentType: 'story',
-          parentId: storyRefs[i].id,
-          persona: currentPersona,
-          ownerUid: currentUser.uid,
-          status: 0,
-          priority: 2,
-          theme: goalTemplate.theme,
-          hasGoal: true,
-          alignedToGoal: true,
-          source: 'template',
-          syncState: 'clean',
-          createdAt: new Date(),
-          updatedAt: new Date()
-        });
+        const taskDoc = buildTaskDoc(
+          { ...(taskTemplates[i] as unknown as Record<string, unknown>), theme: goalDoc.theme },
+          { ...ctx, parentId: storyRefs[i].id },
+        ).doc;
+        await addDoc(collection(db, 'tasks'), stamp(taskDoc));
       }
 
-      setImportResult(`✅ Successfully imported ${category} template with ${storyTemplates.length} stories and ${taskTemplates.length} tasks!`);
-    } catch (error) {
+      setImportResult(`Imported the ${category} template: 1 goal, ${storyTemplates.length} stories, ${Math.min(taskTemplates.length, storyRefs.length)} tasks.`);
+    } catch (error: any) {
       console.error('Import error:', error);
-      setImportResult(`❌ Import failed: ${error.message}`);
+      setImportResult(`Import failed: ${error.message}`);
     }
     setIsImporting(false);
   };
 
-  const parseCSVImport = async () => {
-    if (!currentUser || !importData.trim()) return;
+  /**
+   * Parse whatever the user pasted or uploaded into plain rows.
+   *
+   * PapaParse rather than `split(',')`: the previous implementation split every line on commas
+   * and stripped quotes, so a single quoted field containing a comma — "Save 6 months, then
+   * review" — silently shifted every subsequent column by one. Every value after it landed in
+   * the wrong field, and nothing surfaced that.
+   */
+  const parseRows = (text: string): Record<string, unknown>[] => {
+    const trimmed = text.trim();
+    if (!trimmed) return [];
 
-    setIsImporting(true);
+    if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+      const parsed = JSON.parse(trimmed);
+      return Array.isArray(parsed) ? parsed : [parsed];
+    }
+
+    const result = Papa.parse<Record<string, unknown>>(trimmed, {
+      header: true,
+      skipEmptyLines: true,
+      transformHeader: (h) => h.trim(),
+    });
+    return result.data || [];
+  };
+
+  /**
+   * Build the documents and show them, without writing anything. Import goes straight into
+   * live collections, so the user gets to see the row count, the exact field values and every
+   * inferred default before committing — a mis-mapped column is close to impossible to unpick
+   * afterwards.
+   */
+  const previewImport = () => {
+    if (!currentUser) return;
+    setImportResult(null);
     try {
-      const lines = importData.trim().split('\n');
-      const headers = lines[0].split(',').map(h => h.replace(/"/g, '').trim());
-      const rows = lines.slice(1).map(line => {
-        const values = line.split(',').map(v => v.replace(/"/g, '').trim());
-        const obj: any = {};
-        headers.forEach((header, index) => {
-          obj[header] = values[index] || '';
-        });
-        return obj;
-      });
-
-      let imported = 0;
-      for (const row of rows) {
-        if (row.title) {
-          await addDoc(collection(db, 'goals'), {
-            title: row.title,
-            description: row.description || '',
-            theme: row.theme || 'Growth',
-            size: row.size || 'M',
-            timeToMasterHours: parseInt(row.timeToMasterHours) || 40,
-            confidence: parseFloat(row.confidence) || 0.5,
-            targetDate: row.targetDate ? new Date(row.targetDate) : null,
-            kpis: [
-              { name: row.kpi1Name || '', target: parseInt(row.kpi1Target) || 0, unit: row.kpi1Unit || '' }
-            ].filter(kpi => kpi.name),
-            persona: currentPersona,
-            ownerUid: currentUser.uid,
-            status: 'active',
-            createdAt: new Date(),
-            updatedAt: new Date()
-          });
-          imported++;
-        }
+      const rows = parseRows(importData);
+      if (rows.length === 0) {
+        setImportResult('Nothing to import — no rows found.');
+        setPreview(null);
+        return;
       }
 
-      setImportResult(`✅ Successfully imported ${imported} items!`);
-    } catch (error) {
+      const usable = rows.filter((r) => rowHasTitle(importType, r));
+      const built = usable.map((row) =>
+        buildDoc(importType, row, { ownerUid: currentUser.uid, persona: currentPersona as Persona }),
+      );
+
+      setPreview({
+        type: importType,
+        total: rows.length,
+        skipped: rows.length - usable.length,
+        docs: built.map((b) => b.doc),
+        warnings: built.flatMap((b, i) => b.warnings.map((w) => `Row ${i + 1}: ${w}`)),
+      });
+    } catch (error: any) {
+      setPreview(null);
+      setImportResult(`Could not read that data: ${error.message}`);
+    }
+  };
+
+  /** Writes the previewed documents. Deliberately only reachable once a preview exists. */
+  const commitImport = async () => {
+    if (!currentUser || !preview) return;
+    setIsImporting(true);
+    try {
+      const now = new Date();
+      let written = 0;
+      for (const docData of preview.docs) {
+        await addDoc(collection(db, preview.type), {
+          ...docData,
+          createdAt: now,
+          updatedAt: now,
+          serverUpdatedAt: now.getTime(),
+        });
+        written += 1;
+      }
+      setImportResult(`Imported ${written} ${preview.type}.`);
+      setPreview(null);
+      setImportData('');
+    } catch (error: any) {
       console.error('CSV import error:', error);
-      setImportResult(`❌ Import failed: ${error.message}`);
+      setImportResult(`Import failed after partial write: ${error.message}`);
     }
     setIsImporting(false);
+  };
+
+  const handleImportFile = async (file: File) => {
+    setImportResult(null);
+    setPreview(null);
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    try {
+      if (ext === 'xlsx' || ext === 'xls') {
+        const buffer = await file.arrayBuffer();
+        const workbook = XLSX.read(buffer, { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        // Round-trip through CSV so spreadsheets and pasted text take exactly the same path.
+        setImportData(XLSX.utils.sheet_to_csv(sheet));
+      } else {
+        setImportData(await file.text());
+      }
+    } catch (error: any) {
+      setImportResult(`Could not read ${file.name}: ${error.message}`);
+    }
   };
 
   return (
@@ -429,23 +485,91 @@ const ImportExportModal: React.FC<ImportExportModalProps> = ({ show, onHide }) =
               </div>
 
               <Form.Group className="mb-3">
-                <Form.Label>CSV Data</Form.Label>
+                <Form.Label>Import as</Form.Label>
+                <Form.Select
+                  value={importType}
+                  onChange={(e) => { setImportType(e.target.value as ImportType); setPreview(null); }}
+                >
+                  <option value="goals">Goals</option>
+                  <option value="stories">Stories</option>
+                  <option value="tasks">Tasks</option>
+                </Form.Select>
+                <Form.Text muted>Rows are written to this collection.</Form.Text>
+              </Form.Group>
+
+              <Form.Group className="mb-3">
+                <Form.Label>Upload a file</Form.Label>
+                <Form.Control
+                  type="file"
+                  accept=".csv,.json,.xlsx,.xls"
+                  onChange={(e) => {
+                    const file = (e.target as HTMLInputElement).files?.[0];
+                    if (file) handleImportFile(file);
+                  }}
+                />
+                <Form.Text muted>CSV, JSON or Excel — or paste below.</Form.Text>
+              </Form.Group>
+
+              <Form.Group className="mb-3">
+                <Form.Label>Data</Form.Label>
                 <Form.Control
                   as="textarea"
                   rows={8}
                   value={importData}
-                  onChange={(e) => setImportData(e.target.value)}
-                  placeholder="Paste your CSV data here..."
+                  onChange={(e) => { setImportData(e.target.value); setPreview(null); }}
+                  placeholder="Paste CSV or JSON here..."
                 />
               </Form.Group>
 
-              <Button
-                variant="primary"
-                onClick={parseCSVImport}
-                disabled={isImporting || !importData.trim()}
-              >
-                {isImporting ? 'Importing...' : 'Import CSV'}
-              </Button>
+              <div className="d-flex gap-2 mb-3">
+                <Button variant="outline-primary" onClick={previewImport} disabled={!importData.trim()}>
+                  Preview
+                </Button>
+                {/* Writing is gated on a preview: import goes straight into live collections
+                    and a mis-mapped column is very hard to unpick afterwards. */}
+                <Button variant="primary" onClick={commitImport} disabled={isImporting || !preview || preview.docs.length === 0}>
+                  {isImporting ? 'Importing…' : preview ? `Import ${preview.docs.length} ${preview.type}` : 'Import'}
+                </Button>
+              </div>
+
+              {preview && (
+                <div className="border rounded p-2 mb-3" style={{ maxHeight: 320, overflow: 'auto' }}>
+                  <div className="d-flex align-items-center gap-2 mb-2">
+                    <Badge bg="primary">{preview.docs.length} to import</Badge>
+                    {preview.skipped > 0 && <Badge bg="secondary">{preview.skipped} skipped (no title)</Badge>}
+                    {preview.warnings.length > 0 && <Badge bg="warning" text="dark">{preview.warnings.length} warnings</Badge>}
+                  </div>
+
+                  {preview.warnings.length > 0 && (
+                    <Alert variant="warning" className="py-2 mb-2">
+                      <div className="small fw-bold mb-1">Values that had to be inferred</div>
+                      <ul className="small mb-0 ps-3">
+                        {preview.warnings.slice(0, 12).map((w, i) => <li key={i}>{w}</li>)}
+                        {preview.warnings.length > 12 && <li>…and {preview.warnings.length - 12} more</li>}
+                      </ul>
+                    </Alert>
+                  )}
+
+                  <table className="table table-sm small mb-0">
+                    <thead>
+                      <tr><th>Ref</th><th>Title</th><th>Theme</th><th>Status</th></tr>
+                    </thead>
+                    <tbody>
+                      {preview.docs.slice(0, 25).map((d: any, i) => (
+                        <tr key={i}>
+                          <td><code>{d.ref}</code></td>
+                          <td>{d.title}</td>
+                          <td>{String(d.theme)}</td>
+                          <td>{String(d.status)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {preview.docs.length > 25 && (
+                    <div className="small text-muted mt-1">Showing the first 25 of {preview.docs.length}.</div>
+                  )}
+                </div>
+              )}
             </div>
           </Tab>
 
