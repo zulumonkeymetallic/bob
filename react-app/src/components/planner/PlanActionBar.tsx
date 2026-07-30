@@ -47,6 +47,9 @@ const PlanActionBar: React.FC<PlanActionBarProps> = ({ className }) => {
     () => (location.pathname.startsWith('/planner') ? normalizePlannerLevel(query.get('level')) : null),
     [location.pathname, query],
   );
+  const isRoadmapActive = location.pathname === '/canvas'
+    && new URLSearchParams(location.search).get('layout') === 'roadmap';
+
   const activePlanLevel = useMemo(
     () => (currentPlannerLevel ? PLAN_LEVELS.find((entry) => entry.level === currentPlannerLevel) || null : null),
     [currentPlannerLevel],
@@ -110,10 +113,18 @@ const PlanActionBar: React.FC<PlanActionBarProps> = ({ className }) => {
         <Brain size={14} /><span className="d-none d-xl-inline ms-1">Coach</span>
       </Button>
       <Dropdown>
-        <Dropdown.Toggle size="sm" variant={activePlanLevel ? 'primary' : 'outline-secondary'} title="Switch planning level">
-          <Milestone size={14} /><span className="d-none d-xl-inline ms-1">Plan{activePlanLevel ? `: ${plannerLevelLabel(activePlanLevel.level)}` : ''}</span>
+        <Dropdown.Toggle size="sm" variant={activePlanLevel || isRoadmapActive ? 'primary' : 'outline-secondary'} title="Switch planning level">
+          <Milestone size={14} /><span className="d-none d-xl-inline ms-1">Plan{isRoadmapActive ? ': Roadmap' : activePlanLevel ? `: ${plannerLevelLabel(activePlanLevel.level)}` : ''}</span>
         </Dropdown.Toggle>
         <Dropdown.Menu>
+          {/* Roadmap sits first and is the default planning destination. It is not a planner
+              `level` — it lives at /canvas?layout=roadmap — so it cannot join PLAN_LEVELS and
+              is listed explicitly here. */}
+          <Dropdown.Item active={isRoadmapActive} onClick={() => navigate('/canvas?layout=roadmap')}>
+            <MapIcon size={14} className="me-1" />
+            Roadmap
+          </Dropdown.Item>
+          <Dropdown.Divider />
           {PLAN_LEVELS.map((entry) => (
             <Dropdown.Item
               key={entry.level}
@@ -125,15 +136,6 @@ const PlanActionBar: React.FC<PlanActionBarProps> = ({ className }) => {
             </Dropdown.Item>
           ))}
           <Dropdown.Divider />
-          {/* Roadmap is not a planner `level` — it lives at /canvas?layout=roadmap — so it
-              cannot go in PLAN_LEVELS above and is listed explicitly, like Weekly Capacity. */}
-          <Dropdown.Item
-            active={location.pathname === '/canvas' && new URLSearchParams(location.search).get('layout') === 'roadmap'}
-            onClick={() => navigate('/canvas?layout=roadmap')}
-          >
-            <MapIcon size={14} className="me-1" />
-            Roadmap
-          </Dropdown.Item>
           <Dropdown.Item
             active={isWeeklyCapacityActive}
             onClick={() => navigate('/planner/weekly-capacity')}

@@ -31,6 +31,7 @@ import { useAuth } from '../contexts/AuthContext';
 import type { Goal, Story, Task, Sprint } from '../types';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
 import { themeVars } from '../utils/themeVars';
+import { rescheduleGoalToQuarter as rescheduleGoalDates } from '../utils/roadmapSchedule';
 import { colorWithAlpha, goalThemeColor as resolveGoalThemeColor } from '../utils/storyCardFormatting';
 import { getThemeName } from '../utils/statusHelpers';
 import PlanActionBar from './planner/PlanActionBar';
@@ -184,15 +185,8 @@ function quarterLabel(key: string): string {
   return `${q} ${year}`;
 }
 
-// A representative timestamp inside a quarter (mid of its last month, noon local)
-// so computeQuarterKey() maps it back to the same quarter regardless of TZ.
-function quarterKeyToTimestamp(key: string): number | null {
-  const m = /^(\d{4})-Q([1-4])$/.exec(key);
-  if (!m) return null;
-  const year = Number(m[1]);
-  const q = Number(m[2]);
-  return new Date(year, q * 3 - 1, 15, 12, 0, 0).getTime();
-}
+// The end-date anchor this used to provide now lives in utils/roadmapSchedule, which computes
+// a start AND an end so a roadmap drag writes the same pair the Gantt does.
 
 // ─── Goal theme colour ────────────────────────────────────────────────────────
 
@@ -522,10 +516,16 @@ const VisualCanvas: React.FC<VisualCanvasProps> = ({ forcedLayout, embedded = fa
           endDate: null, dueDate: null, updatedAt: serverTimestamp(),
         } as any);
       } else {
-        const ts = quarterKeyToTimestamp(qKey);
-        if (ts == null) return;
+        // Write BOTH dates, matching what the Gantt does. Writing endDate alone left the
+        // goal's startDate stale, and the nightly story realignment
+        // (functions/alignStoriesToGoalSprints.js) keys off goal dates — so the same move made
+        // here versus on the Gantt could put a goal's stories in different sprints.
+        const next = rescheduleGoalDates(qKey, (goal as any).startDate, (goal as any).endDate ?? (goal as any).dueDate);
+        if (!next) return;
         await updateDoc(doc(db, 'goals', goalId), {
-          endDate: ts, updatedAt: serverTimestamp(),
+          startDate: next.startDate,
+          endDate: next.endDate,
+          updatedAt: serverTimestamp(),
         } as any);
       }
     } catch (err) {
