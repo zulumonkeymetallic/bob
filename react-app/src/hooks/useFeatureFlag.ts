@@ -21,6 +21,8 @@ const DEFAULT_FLAGS: Record<string, boolean> = {
   gcal_linker: true,
   intent_broker: true,
   capacity_deferral: true,
+  /** Two-pane tablet shell. Off until the layout has had real-device time; see useTabletShell. */
+  tablet_shell: false,
 };
 
 interface FeatureFlagState {

@@ -108,6 +108,8 @@ const MS_IN_WEEK = 7 * MS_IN_DAY;
 const TASK_TTL_DAYS = Number(process.env.TASK_TTL_DAYS || 7);
 const SPRINT_NONE = '__none__';
 const DEFAULT_TASK_POINTS = 0.25;
+/** Matches POINTS_MIN in react-app/src/utils/points.ts — the floor and the creation default. */
+const POINTS_MIN_FOR_SIZING = 0.25;
 
 function clampStoryPoints(value) {
   const numeric = Number(value);
@@ -9991,6 +9993,27 @@ async function requestWorkEstimateFromLLM({ userId, entityType, title, descripti
   };
 }
 
+/**
+ * Does this item still need sizing?
+ *
+ * The filter here used to be `Number(data.points) > 0` — "it has points, leave it". That
+ * can never be true for a task, because tasks are *created* with
+ * `DEFAULT_TASK_POINTS = 0.25`. Every task therefore looked already-sized from the moment
+ * it existed, and the LLM sizing step ran to completion reporting `tasksSized: 0` for ever.
+ * The default value defeated the test for the default value.
+ *
+ * The honest question is "has anything actually judged this?", and the server already
+ * records that: `llmSizing` is written alongside every estimate it makes. So an item needs
+ * sizing when it is still on the floor value and carries no sizing provenance. Anything a
+ * human or an engine has set is left alone.
+ */
+function needsSizing(data) {
+  if (data.llmSizing || data.pointsSource) return false;
+  const points = Number(data.points);
+  if (!Number.isFinite(points)) return true;
+  return points <= POINTS_MIN_FOR_SIZING;
+}
+
 async function ensureLlmSizingForUser({
   db,
   userId,
@@ -10019,8 +10042,7 @@ async function ensureLlmSizingForUser({
       const data = doc.data() || {};
       const done = Number(data.status) === 2 || String(data.status).toLowerCase() === 'done';
       if (done || data.deleted) return false;
-      const hasPoints = Number.isFinite(Number(data.points)) && Number(data.points) > 0;
-      return !hasPoints;
+      return needsSizing(data);
     })
     .slice(0, Number.isFinite(taskLimit) ? taskLimit : undefined);
 
@@ -10062,8 +10084,7 @@ async function ensureLlmSizingForUser({
       const done = Number(data.status) === 4 || String(data.status).toLowerCase() === 'done';
       if (done || data.deleted) return false;
       if (!data.sprintId || !activeSprintIds.has(data.sprintId)) return false;
-      const hasPoints = Number.isFinite(Number(data.points)) && Number(data.points) > 0;
-      return !hasPoints;
+      return needsSizing(data);
     })
     .slice(0, Number.isFinite(storyLimit) ? storyLimit : undefined);
 
@@ -10270,7 +10291,13 @@ async function generateCalendarPlanForUser({ db, userId, profile, runId }) {
     completedAt: nowMs,
     plannedCount: plan.planned.length,
     unscheduledCount: plan.unscheduled.length,
-    conflicts: plan.conflicts || [],
+    // Sanitised, not trusted. A single undefined anywhere in this array makes Firestore
+    // reject the entire document, and this write sits mid-way through
+    // `nightly_task_maintenance` — so one malformed conflict took down scoring, sizing and
+    // pointing for the whole account, every night, silently. The source of the undefined
+    // (`scheduler/engine.js`) is fixed too; this is the guard that stops the next one
+    // costing a nightly run.
+    conflicts: stripUndefinedDeep(plan.conflicts || []),
     createdAt: nowMs,
     updatedAt: nowMs,
     runId,
@@ -10281,6 +10308,24 @@ async function generateCalendarPlanForUser({ db, userId, profile, runId }) {
     unscheduled: plan.unscheduled.length,
     conflicts: Array.isArray(plan.conflicts) ? plan.conflicts.length : 0,
   };
+}
+
+/**
+ * Recursively replace `undefined` with `null` so a value can be persisted.
+ *
+ * Firestore rejects `undefined` outright, and the failure is total: one bad leaf fails
+ * the whole `set()`. Anything assembled from optional fields and then written wholesale
+ * needs this.
+ */
+function stripUndefinedDeep(value) {
+  if (value === undefined) return null;
+  if (Array.isArray(value)) return value.map(stripUndefinedDeep);
+  if (value && typeof value === 'object' && value.constructor === Object) {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, stripUndefinedDeep(v)]),
+    );
+  }
+  return value;
 }
 
 async function applyDailySprintCalendarPlanForUser({ db, userId, profile, runId }) {
@@ -19309,7 +19354,17 @@ exports.dailyPlanningJob = schedulerV2.onSchedule({ schedule: '0 1 * * *', timeZ
 exports.nightlyTaskMaintenance = schedulerV2.onSchedule({
   schedule: '0 2 * * *',
   timeZone: 'UTC',
-  memory: '1GiB',
+  memory: '2GiB',
+  // Neither this nor `runNightlyMaintenanceNow` declared a timeout, so both ran on the
+  // 60-second default. This function walks every profile and, per user, dedupes, scores,
+  // sizes (LLM calls), plans the calendar and adjusts due dates. On an account with ~900
+  // stories and ~700 tasks that cannot finish in 60s, so the process was killed part-way
+  // through — leaving the `automation_runs` record on `status: started` with no error,
+  // for ever. Smaller accounts finished inside the budget, which is why the failure
+  // looked account-specific rather than like a timeout.
+  //
+  // 540s is the ceiling for a scheduled (event-driven) gen-2 function.
+  timeoutSeconds: 540,
   secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET],
 }, async () => {
   const db = ensureFirestore();
@@ -19505,7 +19560,13 @@ async function _autoRescheduleMissedForUser(uid, { limit = 10 } = {}) {
   return { ok: true, rescheduled };
 }
 
-exports.runNightlyMaintenanceNow = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET, BREVO_API_KEY] }, async (req) => {
+exports.runNightlyMaintenanceNow = httpsV2.onCall({
+  memory: '2GiB',
+  // Same 60s default as the scheduled twin, and the same consequence. Callable functions
+  // are HTTP-backed so they may run to 3600s; this one only ever processes the caller.
+  timeoutSeconds: 1800,
+  secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET, BREVO_API_KEY],
+}, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 

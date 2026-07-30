@@ -26,19 +26,12 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { themeVars, rgbaCard } from '../utils/themeVars';
+import type { PersonalItem } from './EditPersonalItemModal';
 
-interface PersonalItem {
-  id: string;
-  title: string;
-  description?: string;
-  category: 'personal' | 'work' | 'learning' | 'health' | 'finance';
-  priority: 'low' | 'medium' | 'high' | 'urgent';
-  status: 'todo' | 'in-progress' | 'waiting' | 'done';
-  dueDate?: number;
-  tags?: string[];
-  createdAt: number;
-  updatedAt: number;
-}
+// Imported rather than redeclared. The local copy had drifted from the shared definition —
+// it allowed priority 'urgent' where the shared one did not, and omitted ownerUid/persona —
+// which made the two structurally incompatible and broke the onItemUpdate callback under
+// strictFunctionTypes.
 
 interface PersonalListTableRow extends PersonalItem {
   sortOrder: number;

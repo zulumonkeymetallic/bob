@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { Card, Button, Badge, Form, Row, Col, Modal, ListGroup } from 'react-bootstrap';
 import { X, Edit3, Save, Calendar, Target, BookOpen, Clock, Hash, ChevronLeft, ChevronRight, Trash2, Plus, MessageCircle, Link as LinkIcon, Copy, MessageSquare, Wand2, ExternalLink } from 'lucide-react';
 import { httpsCallable } from 'firebase/functions';
@@ -10,6 +11,8 @@ import { useTestMode } from '../contexts/TestModeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { ActivityStreamService, ActivityEntry } from '../services/ActivityStreamService';
 import { validateRef } from '../utils/referenceGenerator';
+import { Z } from '../utils/layoutTokens';
+import { DETAIL_PANE_ID } from './layout/TabletPanes';
 import GoalChatModal from './GoalChatModal';
 import ResearchDocModal from './ResearchDocModal';
 import EditStoryModal from './EditStoryModal';
@@ -208,6 +211,15 @@ interface GlobalSidebarProps {
   sprints: Sprint[];
   onEdit?: (item: Story | Task | Goal, type: 'story' | 'task' | 'goal') => void;
   onDelete?: (item: Story | Task | Goal, type: 'story' | 'task' | 'goal') => void;
+  /**
+   * 'overlay' (default) is the historic behaviour: a position:fixed panel floating over the
+   * page. 'inline' hands the same content to the tablet shell's detail track instead, so the
+   * list beside it stays visible and interactive.
+   *
+   * Only the root wrapper below branches — every field, tab and action inside, and all ~20
+   * showSidebar() call sites, are identical in both modes.
+   */
+  mode?: 'overlay' | 'inline';
 }
 
 const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
@@ -215,7 +227,8 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   stories,
   sprints,
   onEdit,
-  onDelete
+  onDelete,
+  mode = 'overlay'
 }) => {
   const { selectedItem, selectedType, isVisible, isCollapsed, hideSidebar, showSidebar, toggleCollapse, updateItem } = useSidebar();
   const { isTestMode, testModeLabel } = useTestMode();
@@ -445,6 +458,20 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     }
     setQuickEdit(base);
   }, [selectedItem, selectedType]);
+
+  // Must stay ABOVE the early return below — this component bails out with `return null`
+  // whenever nothing is selected, so a hook declared after that point only runs on the renders
+  // where the panel is open, and React fails the next render with "rendered more hooks than
+  // during the previous render".
+  //
+  // Resolved in an effect rather than during render because TabletPanes owns the target
+  // element and may mount after this component, so a getElementById at render time can miss
+  // it on the first pass.
+  const [detailHost, setDetailHost] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    if (mode !== 'inline') { setDetailHost(null); return; }
+    setDetailHost(document.getElementById(DETAIL_PANE_ID));
+  }, [mode, isVisible]);
 
   if (!isVisible || !selectedItem || !selectedType) {
     return null;
@@ -753,6 +780,13 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   };
 
   const sidebarWidth = getSidebarWidth();
+  // Full-bleed on phone means this is behaving as an offcanvas sheet, not a dock, so it has
+  // to clear the fixed mobile header. At the old flat z-index of 1000 the header (1050, now
+  // Z.mobileHeader) painted over the panel's top-right corner — which is exactly where its
+  // only close button lives, so once opened on a phone the Activity Stream could not be
+  // dismissed at all. Docked (desktop/tablet) it stays at 1000 so the top toolbar keeps
+  // rendering above it; that ordering was a deliberate fix and is preserved.
+  const isFullBleed = sidebarWidth === '100vw';
 
   const deepLink = (() => {
     const base = window.location.origin || '';
@@ -774,23 +808,36 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
     return base;
   })();
 
-  return (
+  // Inline mode is in normal flow inside the shell's detail track, so it drops every
+  // viewport-anchored property: no fixed positioning, no 100vh (the track already bounds it),
+  // no z-index (nothing to escape), and no drop shadow (the grid border separates the panes).
+  const inline = mode === 'inline' && detailHost !== null;
+  const shellStyle: React.CSSProperties = inline
+    ? {
+        position: 'static',
+        width: '100%',
+        height: '100%',
+        backgroundColor: themeVars.panel,
+        overflow: 'hidden',
+        borderLeft: `3px solid ${themeColor}`,
+      }
+    : {
+        position: 'fixed',
+        top: 0,
+        right: 0,
+        width: sidebarWidth,
+        height: '100vh',
+        backgroundColor: themeVars.panel,
+        boxShadow: '-4px 0 8px rgba(0,0,0,0.1)',
+        zIndex: isFullBleed ? Z.panel : Z.sidebarRight,
+        transition: 'width 0.3s ease',
+        overflow: 'hidden',
+        borderLeft: `3px solid ${themeColor}`,
+      };
+
+  const content = (
     <>
-      <div role="dialog" aria-modal="true"
-        style={{
-          position: 'fixed',
-          top: 0,
-          right: 0,
-          width: sidebarWidth,
-          height: '100vh',
-          backgroundColor: themeVars.panel,
-          boxShadow: '-4px 0 8px rgba(0,0,0,0.1)',
-          zIndex: 1000,
-          transition: 'width 0.3s ease',
-          overflow: 'hidden',
-          borderLeft: `3px solid ${themeColor}`
-        }}
-      >
+      <div role="dialog" aria-modal={inline ? undefined : true} style={shellStyle}>
         {/* Collapse Toggle */}
         <div
           style={{
@@ -1601,6 +1648,12 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
       )}
     </>
   );
+
+  // The portal is what lets this render inside the shell's detail track without moving in the
+  // React tree — App.tsx keeps feeding it goals/stories/sprints exactly as before, and the
+  // dialogs above keep portalling themselves to <body>, so the track's overflow:hidden cannot
+  // clip them.
+  return inline && detailHost ? createPortal(content, detailHost) : content;
 };
 
 export default GlobalSidebar;

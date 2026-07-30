@@ -1,68 +1,49 @@
-// React import for the hook
-import React from 'react';
+/**
+ * deviceDetection — compatibility adapter over utils/layoutTier.
+ *
+ * This used to own the app's device logic. It now delegates, which buys its thirteen existing
+ * consumers three fixes for free, with no call-site changes:
+ *
+ *   - iPad is detected even when Safari sends a Macintosh user-agent ("Request Desktop
+ *     Website", the iPadOS default since 13). The old `/ipad/i.test(userAgent)` missed it.
+ *   - The returned object keeps its identity across resizes that do not change anything, so
+ *     consumers stop re-rendering on every frame of a drag or rotate.
+ *   - Rotation and the software keyboard are observed, not just `resize`.
+ *
+ * Rendering decisions are UNCHANGED: isMobile/isTablet still use their original formulas
+ * (see legacyIsMobile in layoutTier.ts). This file is the migration seam — new code should
+ * use `useLayoutTier()` / `useLayoutState()` directly, and each consumer moves over
+ * individually so any behaviour change is attributable to one commit.
+ *
+ * @deprecated Prefer utils/layoutTier.
+ */
+import { useLayoutState, getLayoutState, type LayoutState } from './layoutTier';
 
-// Device detection utilities for responsive UI
 export interface DeviceInfo {
   isMobile: boolean;
   isTablet: boolean;
   isDesktop: boolean;
-  isTouchDevice: boolean;
-  screenSize: 'xs' | 'sm' | 'md' | 'lg' | 'xl';
-  /** iPad specifically (any orientation) — used to keep the full nav menu available on
-   * iPad even while it's routed to the mobile (phone-style) experience in portrait. */
+  /** iPad specifically (any orientation). */
   isIPad: boolean;
 }
 
-export const getDeviceInfo = (): DeviceInfo => {
-  const userAgent = navigator.userAgent.toLowerCase();
-  const width = window.innerWidth;
-  
-  // iPad: portrait (<1024px) → mobile layout; landscape (≥1024px) → tablet sidebar layout
-  const isIPad = /ipad/i.test(userAgent);
+// Cached per LayoutState object so the adapter preserves the store's identity guarantee —
+// mapping through a fresh object literal every call would hand back the churn we just removed.
+const projections = new WeakMap<LayoutState, DeviceInfo>();
 
-  // Phone UA match (iPad excluded — handled separately by width)
-  const isPhoneUA = /android|webos|iphone|ipod|blackberry|iemobile|opera mini/i.test(userAgent);
-
-  const isMobile = (isPhoneUA && !isIPad) || width < 768 || (isIPad && width < 1024);
-
-  // Tablet: iPad landscape, or non-iPad viewport in 768–1199px range
-  const isTablet = (isIPad && width >= 1024) || (!isIPad && width >= 768 && width < 1200);
-
-  // Desktop
-  const isDesktop = !isMobile && !isTablet;
-  
-  // Touch device detection
-  const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-  
-  // Screen size categories
-  let screenSize: 'xs' | 'sm' | 'md' | 'lg' | 'xl' = 'lg';
-  if (width < 576) screenSize = 'xs';
-  else if (width < 768) screenSize = 'sm';
-  else if (width < 992) screenSize = 'md';
-  else if (width < 1200) screenSize = 'lg';
-  else screenSize = 'xl';
-  
-  return {
-    isMobile,
-    isTablet,
-    isDesktop,
-    isTouchDevice,
-    screenSize,
-    isIPad
+const project = (state: LayoutState): DeviceInfo => {
+  const cached = projections.get(state);
+  if (cached) return cached;
+  const info: DeviceInfo = {
+    isMobile: state.legacyIsMobile,
+    isTablet: state.legacyIsTablet,
+    isDesktop: !state.legacyIsMobile && !state.legacyIsTablet,
+    isIPad: state.isIPadOS,
   };
+  projections.set(state, info);
+  return info;
 };
 
-export const useDeviceInfo = () => {
-  const [deviceInfo, setDeviceInfo] = React.useState<DeviceInfo>(getDeviceInfo());
-  
-  React.useEffect(() => {
-    const handleResize = () => {
-      setDeviceInfo(getDeviceInfo());
-    };
-    
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-  
-  return deviceInfo;
-};
+export const getDeviceInfo = (): DeviceInfo => project(getLayoutState());
+
+export const useDeviceInfo = (): DeviceInfo => project(useLayoutState());

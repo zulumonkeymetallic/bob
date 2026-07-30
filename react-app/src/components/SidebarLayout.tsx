@@ -19,7 +19,12 @@ import ProcessTextActivityHost from './ProcessTextActivityHost';
 import NotificationStream from './NotificationStream';
 import AssistantDock from './AssistantDock';
 import { useDeviceInfo } from '../utils/deviceDetection';
+import { useLayoutState } from '../utils/layoutTier';
 import { forceCacheReset } from '../utils/staleCacheGuard';
+import { Z, SIZE } from '../utils/layoutTokens';
+import TabletPanes from './layout/TabletPanes';
+import { useTabletShell } from '../hooks/useTabletShell';
+import { useDetailPaneUrlSync } from '../hooks/useDetailPaneUrlSync';
 // Test mode UI removed per request
 
 interface SidebarLayoutProps {
@@ -72,12 +77,14 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const location = useLocation();
   const [isSmallScreen, setIsSmallScreen] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth < 768 : false);
   const [isLargeScreen, setIsLargeScreen] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth >= 1200 : true);
+  const [viewportWidth, setViewportWidth] = useState<number>(typeof window !== 'undefined' ? window.innerWidth : 1280);
   // isSmallScreen (width<768) misses iPad portrait (768-1024px), which the app's own
   // routing (useDeviceInfo().isMobile) already treats as mobile — that gap meant iPad
   // portrait got routed to the phone-style MobileHome experience but this header's old
   // `d-md-none` CSS class hid at exactly the point iPad needed it, leaving no way to reach
   // the full nav menu at all. deviceInfo.isMobile is the authoritative signal instead.
   const deviceInfo = useDeviceInfo();
+  const tabletShell = useTabletShell();
   const NAV_COLLAPSED_KEY = 'navCollapsedV3'; // V2 resets all users to collapsed default
   const [navCollapsed, setNavCollapsed] = useState<boolean>(() => {
     if (typeof window !== 'undefined' && window.innerWidth < 1200) return true;
@@ -93,153 +100,125 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       return next;
     });
   };
+  // On tablet the rail stays collapsed. Expanding it to 250px is the compact-desktop habit the
+  // tablet tier exists to avoid: at 1024 that is a quarter of the viewport spent on navigation
+  // the user is not looking at, and it competes directly with the detail pane for the width
+  // that makes the two-pane layout worth having. Group taps still navigate from the rail.
+  const railCollapsed = tabletShell.active ? true : navCollapsed;
+  // True when GlobalSidebar is rendering as the detail track rather than as a right-edge dock.
+  // Must match the mode App.tsx passes it, or the reserved margin and the actual panel
+  // disagree about where the sidebar is.
+  const detailPaneInline = tabletShell.active && tabletShell.panes === 2;
+  const layout = useLayoutState();
+  const isTabletShellChrome = layout.tier === 'tablet' && !deviceInfo.isMobile;
+  // Mounted once here rather than per-route: the detail pane is shell-level state, so the
+  // param that mirrors it has to be maintained wherever the user happens to be.
+  useDetailPaneUrlSync();
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
   const { selectedSprintId: globalSprintId, setSelectedSprintId: setGlobalSprintId } = useSprint();
   const { isVisible: isRightSidebarVisible, isCollapsed: isRightSidebarCollapsed, notificationsPinnedOpen } = useSidebar();
   const [assistantOpen, setAssistantOpen] = useState(false);
 
+  /**
+   * Seven groups, grouped by what you are trying to DO rather than by which entity the screen
+   * happens to render. It was fourteen groups and 65 entries pointing at 55 destinations.
+   *
+   * What changed and why:
+   *  - Ten duplicate entries removed. Kanban and Calendar each appeared three times, in groups
+   *    that had no particular claim to them; Habit Tracking and Sprint Capacity twice.
+   *  - The seven planner entries collapse to one. They were all `/planner` with a different
+   *    `?level=`, i.e. seven doors into one screen. PlannerLevelSwitcher now puts those six
+   *    levels on the page itself, which is what makes a single entry safe — before it, the
+   *    sidebar was genuinely the only way to change level.
+   *  - "Weekly Capacity" pointed at /calendar/planner, which redirects to /planner?level=calendar
+   *    and never reached the WeeklyThemePlanner it named. Now points at it directly.
+   *  - "Gannt chart" typo fixed at source, in plannerRoutes.plannerLevelLabel.
+   *  - Chores Checklist added: a live, daily-use screen that had no nav entry at all and was
+   *    only reachable by typing the URL or following a link from the dashboard.
+   *  - Logs folded into Settings; Travel and Journals into Library. All destinations survive.
+   */
   const navigationGroups: NavigationGroup[] = [
-      {
-        label: 'Overview',
-        icon: 'home',
-        lucideIcon: LayoutDashboard,
+    {
+      label: 'Today',
+      icon: 'home',
+      lucideIcon: LayoutDashboard,
       items: [
         { label: 'Overview', path: '/dashboard', icon: 'home' },
         { label: 'Daily Check-in', path: '/dashboard/daily-checkin', icon: 'clipboard-check' },
-        { label: 'Mobile', path: '/mobile', icon: 'mobile-alt' },
-        { label: 'Theme Progress', path: '/dashboard/theme-progress', icon: 'chart-line' },
-        { label: 'Finance Dashboard', path: '/dashboard/finance', icon: 'wallet' },
-        { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
-        { label: 'Fitness', path: '/fitness', icon: 'heartbeat' },
-        { label: 'Kanban Board', path: '/sprints/kanban', icon: 'columns' },
+        { label: 'Checklist', path: '/chores/checklist', icon: 'check-square' },
         { label: 'Calendar', path: '/calendar', icon: 'calendar' },
-        { label: 'Metrics', path: '/metrics', icon: 'tachometer-alt' },
-      ]
-    },
-    // Coach — Health folded in here (was its own top-level group) per Jim, 2026-07-23.
-    {
-      label: 'Coach',
-      icon: 'brain',
-      lucideIcon: Brain,
-      items: [
-        { label: 'AI Coach', path: '/coach', icon: 'brain' },
-        { label: 'Finance Coach', path: '/coach/finance', icon: 'chart-line' },
-        { label: 'Health Hub', path: '/health', icon: 'heartbeat' },
-        { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
-        { label: 'Running Heatmap', path: '/running/heatmap', icon: 'map-marked-alt' },
-      ]
-    },
-    {
-      label: 'Goals',
-      icon: 'bullseye',
-      lucideIcon: Target,
-      items: [
-        { label: 'Goals List', path: '/goals', icon: 'list' },
-        { label: 'Focus Goals', path: '/focus-goals', icon: 'bullseye' },
-        { label: 'Goal Planner', path: '/planner?level=year', icon: 'columns' },
-        { label: 'Gannt chart', path: '/planner?level=gantt', icon: 'magic' },
-        { label: 'Theme Progress', path: '/metrics/progress', icon: 'chart-bar' },
-        { label: 'Visual Canvas', path: '/canvas', icon: 'share-alt' }
-      ]
+        { label: 'Mobile View', path: '/mobile', icon: 'mobile-alt' },
+      ],
     },
     {
       label: 'Plan',
       icon: 'sitemap',
       lucideIcon: Network,
       items: [
-        { label: 'Year Planner', path: '/planner?level=year', icon: 'route' },
-        { label: 'Gannt chart', path: '/planner?level=gantt', icon: 'stream' },
-        { label: 'Multi Sprint Planner', path: '/planner?level=sprint', icon: 'th' },
-        { label: '4-Day Planner', path: '/planner?level=week', icon: 'th-large' },
+        { label: 'Planner', path: '/planner', icon: 'route' },
+        { label: 'Sprint Management', path: '/sprints/management', icon: 'tasks' },
+        { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'columns' },
+        { label: 'Capacity Planning', path: '/sprints/capacity', icon: 'chart-pie' },
+        { label: 'Weekly Capacity', path: '/planner/weekly-capacity', icon: 'palette' },
+        { label: 'Deferral Suggestions', path: '/sprints/deferrals', icon: 'clock' },
+        { label: 'Retrospective', path: '/sprints/retrospective', icon: 'undo' },
       ],
     },
     {
-      label: 'Finance',
+      label: 'Work',
+      icon: 'tasks',
+      lucideIcon: CheckSquare,
+      items: [
+        { label: 'Goals', path: '/goals', icon: 'bullseye' },
+        { label: 'Focus Goals', path: '/focus-goals', icon: 'bullseye' },
+        { label: 'Stories', path: '/stories', icon: 'book' },
+        { label: 'Tasks', path: '/tasks', icon: 'list' },
+        { label: 'Visual Canvas', path: '/canvas', icon: 'share-alt' },
+        { label: 'Theme Progress', path: '/metrics/progress', icon: 'chart-bar' },
+      ],
+    },
+    {
+      label: 'Health',
+      icon: 'brain',
+      lucideIcon: Brain,
+      items: [
+        { label: 'AI Coach', path: '/coach', icon: 'brain' },
+        { label: 'Health Hub', path: '/health', icon: 'heartbeat' },
+        { label: 'Fitness & Metrics', path: '/fitness', icon: 'tachometer-alt' },
+        { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
+        { label: 'Running Heatmap', path: '/running/heatmap', icon: 'map-marked-alt' },
+      ],
+    },
+    {
+      label: 'Money',
       icon: 'piggy-bank',
       lucideIcon: PiggyBank,
       items: [
         { label: 'Dashboard', path: '/finance/dashboard', icon: 'chart-line' },
+        { label: 'Finance Coach', path: '/coach/finance', icon: 'brain' },
         { label: 'Budgets', path: '/finance/budgets', icon: 'wallet' },
-        { label: 'Merchants', path: '/finance/merchants', icon: 'tags' },
         { label: 'Transactions', path: '/finance/transactions', icon: 'receipt' },
+        { label: 'Merchants', path: '/finance/merchants', icon: 'tags' },
         { label: 'Spend Breakdown', path: '/finance/flow', icon: 'sitemap' },
         { label: 'Pots', path: '/finance/pots', icon: 'database' },
-        { label: 'Goal Linking', path: '/finance/goals', icon: 'link' }
-      ]
+        { label: 'Goal Linking', path: '/finance/goals', icon: 'link' },
+      ],
     },
     {
-      label: 'Stories',
-      icon: 'book',
-      lucideIcon: BookOpen,
-      items: [
-        { label: 'Stories List', path: '/stories', icon: 'list' },
-        { label: 'Kanban Board', path: '/sprints/kanban', icon: 'columns' },
-        { label: 'Calendar', path: '/calendar', icon: 'calendar' }
-      ]
-    },
-    {
-      label: 'Journals',
+      label: 'Library',
       icon: 'book-open',
       lucideIcon: BookText,
       items: [
         { label: 'Journal Entries', path: '/journals', icon: 'book-open' },
-        { label: 'Journal Insights', path: '/journals/insights', icon: 'chart-line' }
-      ]
-    },
-    {
-      label: 'Backlog',
-      icon: 'clipboard-list',
-      lucideIcon: ClipboardList,
-      items: [
-        { label: 'Games', path: '/games-backlog', icon: 'gamepad' },
-        { label: 'Shows', path: '/shows-backlog', icon: 'tv' },
+        { label: 'Journal Insights', path: '/journals/insights', icon: 'chart-line' },
         { label: 'Books', path: '/books-backlog', icon: 'book' },
+        { label: 'Shows', path: '/shows-backlog', icon: 'tv' },
+        { label: 'Games', path: '/games-backlog', icon: 'gamepad' },
         { label: 'Videos', path: '/videos-backlog', icon: 'video' },
-        { label: 'YouTube History', path: '/youtube-history', icon: 'video' }
-      ]
+        { label: 'YouTube History', path: '/youtube-history', icon: 'video' },
+        { label: 'Travel Map', path: '/travel', icon: 'map' },
+      ],
     },
-    {
-      label: 'Tasks',
-      icon: 'tasks',
-      lucideIcon: CheckSquare,
-      items: [
-        { label: 'Tasks List', path: '/tasks', icon: 'list' }
-      ]
-    },
-    {
-      label: 'Sprints',
-      icon: 'calendar-alt',
-      lucideIcon: CalendarDays,
-      items: [
-        { label: 'Sprint Management', path: '/sprints/management', icon: 'tasks' },
-        { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'columns' },
-        { label: 'Multi Sprint Planner', path: '/planner?level=sprint', icon: 'th' },
-        { label: 'Capacity Planning', path: '/sprints/capacity', icon: 'chart-pie' },
-        { label: 'Deferral Suggestions', path: '/sprints/deferrals', icon: 'clock' },
-        { label: 'Retrospective', path: '/sprints/retrospective', icon: 'undo' }
-      ]
-    },
-    {
-      label: 'Calendar',
-      icon: 'calendar',
-      lucideIcon: Calendar,
-      items: [
-        { label: 'Calendar', path: '/calendar', icon: 'calendar' },
-        { label: 'Weekly Capacity', path: '/calendar/planner', icon: 'palette' },
-        { label: '4-Day Planner', path: '/planner?level=week', icon: 'th-large' },
-        { label: 'Sprint Capacity', path: '/sprints/capacity', icon: 'chart-pie' },
-        { label: 'Google Integration', path: '/calendar/integration', icon: 'google' }
-      ]
-    },
-    {
-      label: 'Travel',
-      icon: 'globe',
-      lucideIcon: Globe,
-      items: [
-        { label: 'Travel Map', path: '/travel', icon: 'map' }
-      ]
-    },
-    // (Removed Data Management per request)
     {
       label: 'Settings',
       icon: 'cog',
@@ -248,23 +227,16 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Profile', path: '/settings/profile', icon: 'user' },
         { label: 'AI', path: '/settings/ai', icon: 'robot' },
         { label: 'Integrations', path: '/settings/integrations', icon: 'plug' },
+        { label: 'Google Calendar', path: '/calendar/integration', icon: 'google' },
         { label: 'Finance', path: '/settings/finance', icon: 'wallet' },
         { label: 'Notifications', path: '/settings/notifications', icon: 'envelope' },
         { label: 'Privacy & Security', path: '/settings/privacy-security', icon: 'shield-alt' },
-        { label: 'Developer', path: '/settings/developer', icon: 'flask' }
-      ]
-    },
-    {
-      label: 'Logs',
-      icon: 'stream',
-      lucideIcon: ScrollText,
-      items: [
+        { label: 'Developer', path: '/settings/developer', icon: 'flask' },
         { label: 'Integration Logs', path: '/logs/integrations', icon: 'database' },
         { label: 'AI Diagnostics', path: '/logs/ai', icon: 'robot' },
-        { label: 'Transcript Processing', path: '/logs/transcripts', icon: 'file-alt' }
-      ]
+        { label: 'Transcript Processing', path: '/logs/transcripts', icon: 'file-alt' },
+      ],
     },
-    // Removed duplicate Health group at bottom
   ];
 
   const handleNavigation = (path: string) => {
@@ -287,6 +259,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     if (typeof window === 'undefined') return;
     const handler = () => {
       const w = window.innerWidth;
+      setViewportWidth(w);
       setIsSmallScreen(w < 768);
       setIsLargeScreen(w >= 1200);
       if (w < 1200) setNavCollapsed(true);
@@ -311,7 +284,19 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   };
 
   return (
-    <div className="d-flex sidebar-layout-outer" style={{ height: '100vh', overflow: 'hidden' }}>
+    <div
+      // The tier class lets the density stylesheet target the tablet shell rather than a raw
+      // viewport range, which also caught half-width desktop windows.
+      //
+      // Gated on the TIER, not on tabletShell.active, and that distinction matters: the
+      // density rules must keep applying to iPad exactly as they do today while the two-pane
+      // flag is still off, or turning the class on and off would itself be a visible change.
+      // The extra !isMobile is what keeps it aligned with the shell that is actually
+      // rendering — between 600 and 767 the tier says tablet but the phone shell is mounted,
+      // and tablet density there would style a layout that is not on screen.
+      className={`d-flex sidebar-layout-outer${isTabletShellChrome ? ' bob-tier-tablet' : ''}`}
+      style={{ height: '100vh', overflow: 'hidden' }}
+    >
       {/* Desktop Sidebar (collapsible) — mutually exclusive with the Mobile Header/bottom
           tabs via deviceInfo.isMobile (was a static `d-none d-md-flex` CSS breakpoint at
           768px, which showed this alongside MobileHome for iPad portrait, 768-1024px). */}
@@ -320,7 +305,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         className="sidebar-desktop flex-column"
         style={{
           display: 'flex',
-          width: navCollapsed ? '56px' : '250px',
+          width: railCollapsed ? `${SIZE.railW}px` : `${SIZE.sidebarW}px`,
           height: '100vh',
           flexShrink: 0,
           background: 'var(--panel)',
@@ -330,7 +315,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           transition: 'width 0.2s ease',
         }}
       >
-        {navCollapsed ? (
+        {railCollapsed ? (
           /* ── Collapsed icon rail ── */
           <>
             {/* Top: logo + expand chevron */}
@@ -535,7 +520,11 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       <div className="fixed-top" style={{
         background: currentPersona === 'work' ? '#d3d3d3' : 'var(--panel)',
         color: currentPersona === 'work' ? '#000' : '#000',
-        zIndex: 1050
+        // Was 1050 — above Bootstrap's offcanvas (1045) and level with its modal-backdrop.
+        // That meant this bar painted over both the nav Offcanvas below and the full-bleed
+        // Activity Stream, in each case covering the control that closes them. Z.mobileHeader
+        // (1035) still clears page content and the fixed bottom bars (1030).
+        zIndex: Z.mobileHeader
       }}>
         <Navbar className="px-3" style={{
           background: 'transparent'
@@ -559,7 +548,13 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             {deviceInfo.isIPad && 'blueprint.organize.build'}
           </Navbar.Brand>
           <div className="d-flex align-items-center gap-2">
-            {isSmallScreen && <NotificationStream isLargeScreen={false} />}
+            {/* Gated on nothing beyond its own header. It used to also require isSmallScreen
+                (<768px), while the desktop toolbar's copy requires !isSmallScreen inside a
+                !deviceInfo.isMobile branch — so at isMobile && width>=768 (iPad portrait, and
+                any phone in landscape) the bell rendered in neither place and notifications
+                were simply unreachable. The header's own isMobile gate is the only condition
+                that should matter here. */}
+            <NotificationStream isLargeScreen={false} />
             {currentUser && (
               <div className="rounded-circle bg-primary d-flex align-items-center justify-content-center"
                 style={{ width: '24px', height: '24px', fontSize: '12px' }}>
@@ -721,11 +716,23 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           // left of the Activity Stream's current width rather than collapsing away (a 10px
           // collapsed sliver read as "notifications don't show and can't be pinned" — fixed
           // per Jim, 2026-07-25), so both reserved widths always stack in full, never just 10px.
-          marginRight: window.innerWidth < 768 ? '0' : `${
-            (isRightSidebarVisible ? (isRightSidebarCollapsed ? 60 : 400) : 0)
+          // Clamped to half the viewport. Unclamped, all three panels reserve 1140px — more
+          // than an iPad landscape viewport (1194 at most), which drove the content column to
+          // zero. Past the cap the panels simply overlap the page instead of pushing it, so
+          // docking still works and content stays legible. Reads viewportWidth from state
+          // rather than window.innerWidth directly: the raw read never re-ran on resize and
+          // only updated by accident when a sibling state change happened to re-render.
+          marginRight: viewportWidth < 768 ? '0' : `${Math.min(
+            // Nothing to reserve for the Activity Stream when the tablet shell is showing it
+            // inline: it occupies the detail track inside this element rather than docking to
+            // the right of it. Reserving anyway double-counted the width — at 1024 the list
+            // track was left with 188px (968 − 400 reserved − 380 pane) and every list page
+            // collapsed into an unreadable column.
+            (isRightSidebarVisible && !detailPaneInline ? (isRightSidebarCollapsed ? 60 : 400) : 0)
             + (notificationsPinnedOpen ? 340 : 0)
-            + (assistantOpen ? 400 : 0)
-          }px`,
+            + (assistantOpen ? 400 : 0),
+            Math.floor(viewportWidth / 2)
+          )}px`,
           transition: 'margin-right 0.3s ease',
           minWidth: 0,
           display: 'flex',
@@ -782,7 +789,11 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
               </Button>
               {/* Metrics first, then selector so metrics appear to the left of the selector */}
               <CompactSprintMetrics selectedSprintId={globalSprintId} />
-              {!isSmallScreen && <NotificationStream isLargeScreen={isLargeScreen} />}
+              {/* No isSmallScreen gate: this whole toolbar is already behind !deviceInfo.isMobile,
+                  and isMobile is true for every width < 768, so !isSmallScreen was always true
+                  here anyway. Keeping the two bells gated on one signal each (their own
+                  container) is what stops the 768–1023px hole from reopening. */}
+              <NotificationStream isLargeScreen={isLargeScreen} />
               <span className="text-muted small me-2 d-none d-xl-inline">Active Sprint:</span>
               <SprintSelector
                 selectedSprintId={globalSprintId}
@@ -795,9 +806,11 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
 
         <ProcessTextActivityHost />
 
-        <main className="sidebar-layout-page" style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          {children}
-        </main>
+        <TabletPanes active={tabletShell.active} panes={tabletShell.panes}>
+          <main className="sidebar-layout-page" style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+            {children}
+          </main>
+        </TabletPanes>
         <AssistantDock open={assistantOpen} onClose={() => setAssistantOpen(false)} />
       </div>
     </div>

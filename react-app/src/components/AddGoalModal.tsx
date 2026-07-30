@@ -7,6 +7,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import { generateRef } from '../utils/referenceGenerator';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { normalizeGoalCostType } from '../utils/goalCost';
+import { errorMessage } from '../utils/errorMessage';
 
 // Goal type options — maps to goalKind in Firestore
 const GOAL_TYPES = [
@@ -237,11 +238,11 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
     } catch (error) {
       console.error('❌ AddGoalModal: GOAL creation failed', {
         action: 'goal_creation_error',
-        error: error.message,
+        error: errorMessage(error),
         formData: formData,
         timestamp: new Date().toISOString()
       });
-      setSubmitResult(`❌ Failed to create goal: ${error.message}`);
+      setSubmitResult(`❌ Failed to create goal: ${errorMessage(error)}`);
     }
     setIsSubmitting(false);
   };

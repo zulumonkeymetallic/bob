@@ -12,6 +12,7 @@ import { ActivityStreamService } from '../services/ActivityStreamService';
 import { ChoiceHelper } from '../config/choices';
 import { getBadgeVariant, getPriorityBadge, getStatusName } from '../utils/statusHelpers';
 import { taskStatusText } from '../utils/storyCardFormatting';
+import { SIZE } from '../utils/layoutTokens';
 import { extractWeatherSummary, extractWeatherTemp, formatWeatherLine } from '../utils/weatherFormat';
 import { isRecurringDueOnDate, resolveRecurringDueMs, resolveTaskDueMs } from '../utils/recurringTaskDue';
 import { getChoreKind as getChoreKindShared } from '../utils/choreKind';
@@ -85,7 +86,9 @@ const MOBILE_TAB_ICONS: Record<TabKey, LucideIcon> = {
   chores: CheckSquare,
   finance: Wallet,
 };
-const MOBILE_TAB_BAR_HEIGHT = 64;
+// Single-sourced with MaterialDesign.css's FAB offset, which reads the same value via the
+// --bob-tabBarH custom property. Both used to hardcode 64 independently.
+const MOBILE_TAB_BAR_HEIGHT = SIZE.tabBarH;
 // Coach tab renders full-page component; skips the overview chrome
 const COACH_TABS: TabKey[] = ['coach'];
 
@@ -1031,7 +1034,7 @@ const MobileHome: React.FC = () => {
   // DailyPlanWidget via useDailyPlanTimeline. Task/chore/story data is a pure derivation over
   // data MobileHome already subscribes to; `uid` adds the one new live subscription (raw GCal
   // event rows), replacing the once-a-day daily_summaries snapshot the hook used to fall back to.
-  const { items: unifiedTimelineItems, bucketCounts: dailyPlanBucketCounts, deleteItem: deleteDailyPlanItem, itemActionBusy: dailyPlanDeleteBusy } = useDailyPlanTimeline({
+  const { items: unifiedTimelineItems, bucketCounts: dailyPlanBucketCounts, deleteItem: deleteDailyPlanItem, itemActionBusy: dailyPlanDeleteBusy, gcalError: dailyPlanGcalError } = useDailyPlanTimeline({
     uid: currentUser?.uid,
     tasksDueToday: tasksDueTodayForMobile,
     choresDueToday,
@@ -1630,6 +1633,16 @@ const MobileHome: React.FC = () => {
               </div>
             </Card.Header>
             <Card.Body className="pt-0">
+              {/* A failing listener and a genuinely empty day used to look identical.
+                  The calendar_blocks subscription swallowed its error into an empty
+                  array, so a missing composite index or a rules change rendered as
+                  "nothing scheduled today" with no way to tell the difference. */}
+              {dailyPlanGcalError && (
+                <div className="alert alert-warning py-2 px-3 small mb-2" role="alert">
+                  Calendar events could not be loaded ({dailyPlanGcalError}). Your schedule
+                  may be incomplete — tasks and stories below are unaffected.
+                </div>
+              )}
               <div className="text-muted small mb-2">
                 {unifiedTimelineItems.length === 0
                   ? 'No tasks, stories, chores, or calendar events scheduled today.'

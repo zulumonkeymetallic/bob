@@ -11,7 +11,10 @@ export interface PersonalItem {
     title: string;
     description?: string;
     category: 'personal' | 'work' | 'learning' | 'health' | 'finance';
-    priority: 'low' | 'medium' | 'high';
+    // 'urgent' is offered by ModernPersonalListsTable's inline priority editor, so it can
+    // genuinely be present in the data. This type previously omitted it, which is how the
+    // table ended up declaring its own divergent copy of this interface.
+    priority: 'low' | 'medium' | 'high' | 'urgent';
     status: 'todo' | 'in-progress' | 'waiting' | 'done';
     dueDate?: number;
     tags?: string[];

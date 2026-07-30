@@ -19,6 +19,7 @@ import { saveFocusWizardPrefill } from '../services/focusGoalsService';
 import { pickDefaultPlanningSprintId } from '../utils/sprintFilter';
 import { withTimeout } from '../utils/withTimeout';
 import { evaluateStorySprintAlignment } from '../utils/sprintAlignment';
+import { errorMessage } from '../utils/errorMessage';
 
 const CREATE_TIMEOUT_MS = 15000;
 
@@ -263,7 +264,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
       } catch (error) {
         console.error('❌ FloatingActionButton: Failed to load goals/stories', {
           action: 'load_goals_stories_error',
-          error: error.message
+          error: errorMessage(error)
         });
       }
     };
@@ -531,11 +532,11 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
       console.error('❌ FloatingActionButton: QUICK ADD operation failed', {
         action: 'quick_add_error',
         itemType: quickAddType,
-        error: error.message,
+        error: errorMessage(error),
         formData: quickAddData,
         timestamp: new Date().toISOString()
       });
-      setSubmitResult(`❌ Failed to create ${quickAddType}: ${error.message}`);
+      setSubmitResult(`❌ Failed to create ${quickAddType}: ${errorMessage(error)}`);
     } finally {
       setIsSubmitting(false);
     }

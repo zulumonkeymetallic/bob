@@ -4,6 +4,7 @@
  * Supports both mouse and touch events for desktop and mobile/iPad
  */
 import logger from '../utils/logger';
+import { getLayoutState } from '../utils/layoutTier';
 
 export interface ClickEvent {
   timestamp: string;
@@ -284,17 +285,16 @@ class ClickTrackingService {
     return { page };
   }
   
+  /**
+   * Was an eighth, independent definition of device class, and the least accurate: any touch
+   * device 768px or wider counted as a tablet — including every touchscreen Windows laptop and
+   * a phone held in landscape — while a touchscreen desktop counted as mobile. Telemetry
+   * gathered under those rules could not answer "what are people actually using". Now shares
+   * the app's own tier so analytics and layout agree by construction.
+   */
   private detectDevice(): 'desktop' | 'mobile' | 'tablet' {
-    const userAgent = navigator.userAgent.toLowerCase();
-    const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-    
-    if (/ipad/.test(userAgent) || (isTouchDevice && window.innerWidth >= 768)) {
-      return 'tablet';
-    } else if (isTouchDevice || /mobile|android|iphone/.test(userAgent)) {
-      return 'mobile';
-    } else {
-      return 'desktop';
-    }
+    const { tier } = getLayoutState();
+    return tier === 'phone' ? 'mobile' : tier;
   }
   
   private trackPageNavigation() {

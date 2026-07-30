@@ -1,9 +1,9 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Dropdown } from 'react-bootstrap';
 import logger from '../utils/logger';
 import { useSprint } from '../contexts/SprintContext';
 import type { Sprint } from '../types';
-import { planningSprints } from '../utils/sprintFilter';
+import { planningSprints, visibleSprintWindow, SPRINT_SELECTOR_DEFAULT_VISIBLE } from '../utils/sprintFilter';
 
 interface SprintSelectorProps {
   selectedSprintId?: string;
@@ -37,7 +37,20 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
   }, [sprints, effectiveSelectedId]);
 
   const now = Date.now();
-  const visibleSprints = useMemo(() => planningSprints(sprints), [sprints]);
+  // Sorted active-first, then soonest-starting (see planningSprints).
+  const orderedSprints = useMemo(() => planningSprints(sprints), [sprints]);
+
+  /**
+   * Only the current sprint and the next three are shown by default. The full list runs to
+   * ten-plus planned sprints years out, which buries the two or three anyone actually
+   * switches between. The rest stay one click away rather than being removed.
+   */
+  const [showAllSprints, setShowAllSprints] = useState(false);
+  const hiddenCount = Math.max(0, orderedSprints.length - SPRINT_SELECTOR_DEFAULT_VISIBLE);
+  const visibleSprints = useMemo(
+    () => visibleSprintWindow(orderedSprints, effectiveSelectedId, showAllSprints),
+    [orderedSprints, effectiveSelectedId, showAllSprints],
+  );
   const isSprintComplete = (s: Sprint) => {
     // Only consider a sprint complete if its status is explicitly 2 (Complete)
     // Don't auto-complete based on end date - let user manually close via workflow
@@ -151,7 +164,13 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
         )}
       </Dropdown.Toggle>
 
-      <Dropdown.Menu align="end" style={{ minWidth: '300px', zIndex: 2000 }}>
+      {/* No z-index here. This menu renders inside the top toolbar, which is a stacking
+          context (position:relative + z-index:1010), so any value set here is resolved
+          within that — the old `zIndex: 2000` was never 2000 against the page and lost to
+          MaterialDesign.css's blanket `.dropdown-menu { z-index: 1060 }`. That blanket rule
+          is now back at Bootstrap's 1000, which puts page content below the toolbar and
+          makes this menu visible without needing a number at all. */}
+      <Dropdown.Menu align="end" style={{ minWidth: '300px' }}>
         <Dropdown.Header>Available Sprints</Dropdown.Header>
         <Dropdown.Item
           active={effectiveSelectedId === ''}
@@ -208,6 +227,14 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
                 </div>
               </Dropdown.Item>
             ))
+        )}
+        {hiddenCount > 0 && (
+          <Dropdown.Item
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowAllSprints((v) => !v); }}
+            className="text-center small text-muted"
+          >
+            {showAllSprints ? 'Show fewer' : `Show all sprints (${hiddenCount} more)`}
+          </Dropdown.Item>
         )}
         <Dropdown.Divider />
         <Dropdown.Item onClick={() => window.location.href = '/sprints/management'}>

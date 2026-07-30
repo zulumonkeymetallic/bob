@@ -232,6 +232,16 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
   };
 
   const dateKey = useMemo(() => format(date, DAY_FORMAT), [date]);
+  // `scheduled_instances.occurrenceDate` is stored as yyyy-MM-dd, but DAY_FORMAT is
+  // yyyyMMdd — and DAY_FORMAT cannot simply change, because `dateKey` is also the
+  // `daily_checkins` document id and every existing check-in is keyed `..._20260405`.
+  //
+  // Querying the scheduler with the wrong shape returned nothing, always: string-compared,
+  // '2026-07-28' < '20260728' because '-' sorts below '0', so the `occurrenceDate >=`
+  // bound excluded every document. Verified against Firestore — the range [20260725..
+  // 20260725] matched 0 docs where [2026-07-25..2026-07-25] matched 50. That is why the
+  // check-in showed "No planned items for this day" regardless of what was scheduled.
+  const occurrenceKey = useMemo(() => format(date, 'yyyy-MM-dd'), [date]);
   const dayStart = useMemo(() => startOfDay(date), [date]);
   const dayEnd = useMemo(() => endOfDay(date), [date]);
 
@@ -334,7 +344,17 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
     const yesterdayKey = format(getYesterday(), DAY_FORMAT);
     const docId = `${currentUser.uid}_${yesterdayKey}`;
     getDoc(doc(db, 'daily_checkins', docId)).then((snap) => {
-      if (!snap.exists() || (snap.data()?.completedCount ?? 0) === 0) {
+      // `completedCount` is only written by the checklist submit. Tapping mood or energy
+      // writes a doc without it, so `?? 0` reported every such day as "not completed" —
+      // a false alarm on exactly the days something *was* recorded. Treat a doc with any
+      // check-in signal as started.
+      const d = snap.data() as Record<string, unknown> | undefined;
+      const hasSignal = !!d && (
+        (typeof d.completedCount === 'number' && d.completedCount > 0)
+        || d.moodScore != null
+        || d.energyScore != null
+      );
+      if (!snap.exists() || !hasSignal) {
         setYesterdayWarning(
           `Yesterday's check-in (${yesterdayKey.slice(0,4)}-${yesterdayKey.slice(4,6)}-${yesterdayKey.slice(6)}) wasn't completed. ` +
           `You're currently viewing ${format(date, 'yyyy-MM-dd')}.`
@@ -463,7 +483,7 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
       });
 
       const instancesPromise = getDocs(
-        schedulerCollections.userInstancesRange(db, ownerUid, dateKey, dateKey),
+        schedulerCollections.userInstancesRange(db, ownerUid, occurrenceKey, occurrenceKey),
       ).catch(async (err) => {
         if (isPermissionDenied(err)) {
           console.warn('CheckInDaily: scheduled_instances permission denied, skipping');
@@ -475,7 +495,7 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
         );
         const filtered = fallbackSnap.docs.filter((docSnap) => {
           const data = docSnap.data() as any;
-          return String(data?.occurrenceDate || '') === dateKey;
+          return String(data?.occurrenceDate || '') === occurrenceKey;
         });
         return { docs: filtered } as typeof fallbackSnap;
       });

@@ -1,0 +1,282 @@
+{
+  "_readme": [
+    "Golden vectors pinning BOB's criticality scorer across its two implementations:",
+    "  iOS    bob-ios/BOB/Sources/Sync/WorkItemScoring.swift        (BOBTests/ScoringVectorTests.swift)",
+    "  server bob/functions/scoring.js                              (functions/scoring.test.js)",
+    "",
+    "The algorithm runs in both places because BOB must work fully offline. That is a",
+    "deliberate duplication, and PORTING_CONTRACT 2.3 is the record of what it costs: four",
+    "divergences that nobody noticed until someone read both listings side by side, plus a",
+    "fifth found on 2026-07-28 \u2014 Firestore stores `theme` as BOTH an id (314 of 500 sampled",
+    "stories) and a name (174), the server matched only names and iOS only ids, so for any",
+    "themed item one engine added 10 and the other 0. Both now normalise first.",
+    "",
+    "As of 2026-07-28 both implementations pass all of these. Change a constant in either",
+    "one and you change it in the other and here, in the same commit \u2014 otherwise one of the",
+    "two builds goes red, which is the entire point.",
+    "",
+    "nowMs is pinned so results are deterministic. Expectations were produced by executing",
+    "the real server function with Date.now stubbed, so they are the reference",
+    "implementation's own output rather than a transcription of it.",
+    "",
+    "functions/scoringVectors.json is a vendored copy and must stay byte-identical."
+  ],
+  "nowMs": 1785196800000,
+  "vectors": [
+    {
+      "name": "due_overdue",
+      "input": {
+        "dueDateMs": 1784764800000
+      },
+      "expected": 40
+    },
+    {
+      "name": "due_today",
+      "input": {
+        "dueDateMs": 1785196800000
+      },
+      "expected": 40
+    },
+    {
+      "name": "due_3d",
+      "input": {
+        "dueDateMs": 1785456000000
+      },
+      "expected": 30
+    },
+    {
+      "name": "due_7d",
+      "input": {
+        "dueDateMs": 1785801600000
+      },
+      "expected": 22
+    },
+    {
+      "name": "due_14d",
+      "input": {
+        "dueDateMs": 1786406400000
+      },
+      "expected": 15
+    },
+    {
+      "name": "due_30d",
+      "input": {
+        "dueDateMs": 1787788800000
+      },
+      "expected": 8
+    },
+    {
+      "name": "due_60d",
+      "input": {
+        "dueDateMs": 1790380800000
+      },
+      "expected": 0
+    },
+    {
+      "name": "due_clamp_ancient",
+      "input": {
+        "dueDateMs": 1707436800000
+      },
+      "expected": 40
+    },
+    {
+      "name": "due_clamp_far",
+      "input": {
+        "dueDateMs": 1862956800000
+      },
+      "expected": 0
+    },
+    {
+      "name": "age_8d",
+      "input": {
+        "createdAtMs": 1784505600000
+      },
+      "expected": 6
+    },
+    {
+      "name": "age_15d",
+      "input": {
+        "createdAtMs": 1783900800000
+      },
+      "expected": 10
+    },
+    {
+      "name": "age_31d",
+      "input": {
+        "createdAtMs": 1782518400000
+      },
+      "expected": 15
+    },
+    {
+      "name": "goal_overdue",
+      "input": {
+        "goalDueMs": 1785110400000
+      },
+      "expected": 15
+    },
+    {
+      "name": "goal_7d",
+      "input": {
+        "goalDueMs": 1785801600000
+      },
+      "expected": 10
+    },
+    {
+      "name": "goal_30d",
+      "input": {
+        "goalDueMs": 1787788800000
+      },
+      "expected": 5
+    },
+    {
+      "name": "goal_clamp_far",
+      "input": {
+        "goalDueMs": 1862956800000
+      },
+      "expected": 0
+    },
+    {
+      "name": "points_small",
+      "input": {
+        "points": 2
+      },
+      "expected": 6
+    },
+    {
+      "name": "points_large",
+      "input": {
+        "points": 8
+      },
+      "expected": 0
+    },
+    {
+      "name": "cap_chore",
+      "input": {
+        "dueDateMs": 1784764800000,
+        "points": 1,
+        "taskType": "chore"
+      },
+      "expected": 30
+    },
+    {
+      "name": "cap_read",
+      "input": {
+        "dueDateMs": 1784764800000,
+        "points": 1,
+        "taskType": "read"
+      },
+      "expected": 10
+    },
+    {
+      "name": "cap_watch",
+      "input": {
+        "dueDateMs": 1784764800000,
+        "taskType": "watch"
+      },
+      "expected": 10
+    },
+    {
+      "name": "combo_urgent_small",
+      "input": {
+        "dueDateMs": 1785369600000,
+        "createdAtMs": 1781740800000,
+        "goalDueMs": 1785628800000,
+        "points": 1
+      },
+      "expected": 61
+    },
+    {
+      "name": "empty",
+      "input": {},
+      "expected": 0
+    },
+    {
+      "name": "theme_id_health",
+      "input": {
+        "dueDateMs": 1785801600000,
+        "theme": 1
+      },
+      "expected": 32
+    },
+    {
+      "name": "theme_id_wealth",
+      "input": {
+        "dueDateMs": 1785801600000,
+        "theme": 3
+      },
+      "expected": 32
+    },
+    {
+      "name": "theme_id_learning",
+      "input": {
+        "dueDateMs": 1785801600000,
+        "theme": 4
+      },
+      "expected": 32
+    },
+    {
+      "name": "theme_id_spiritual",
+      "input": {
+        "dueDateMs": 1785801600000,
+        "theme": 9
+      },
+      "expected": 32
+    },
+    {
+      "name": "theme_id_hobbies",
+      "input": {
+        "dueDateMs": 1785801600000,
+        "theme": 6
+      },
+      "expected": 17
+    },
+    {
+      "name": "theme_id_general",
+      "input": {
+        "dueDateMs": 1785801600000,
+        "theme": 0
+      },
+      "expected": 22
+    },
+    {
+      "name": "theme_id_work",
+      "input": {
+        "dueDateMs": 1785801600000,
+        "theme": 12
+      },
+      "expected": 22
+    },
+    {
+      "name": "theme_name_health",
+      "input": {
+        "dueDateMs": 1785801600000,
+        "theme": "Health & Fitness"
+      },
+      "expected": 32
+    },
+    {
+      "name": "theme_name_hobbies",
+      "input": {
+        "dueDateMs": 1785801600000,
+        "theme": "Hobbies & Interests"
+      },
+      "expected": 17
+    },
+    {
+      "name": "theme_name_growth",
+      "input": {
+        "dueDateMs": 1785801600000,
+        "theme": "Growth"
+      },
+      "expected": 32
+    },
+    {
+      "name": "theme_name_work",
+      "input": {
+        "dueDateMs": 1785801600000,
+        "theme": "Work (Main Gig)"
+      },
+      "expected": 22
+    }
+  ]
+}

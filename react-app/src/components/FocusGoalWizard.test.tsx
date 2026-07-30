@@ -105,11 +105,15 @@ describe('FocusGoalWizard integration flow', () => {
       expect(mockHttpsCallable).toHaveBeenCalledWith({}, 'getIntentBrokerPrompts');
     });
 
+    // Program name is required before step 1 will advance. The wizard gained this field after
+    // this test was written, and because the suite could not run at all (react-router-dom was
+    // unresolvable under Jest) the resulting failure went unnoticed.
+    await userEvent.type(screen.getByPlaceholderText('Project 45 v2'), 'Race readiness');
+
     await userEvent.type(
       screen.getByPlaceholderText('Describe the result you want and why it matters now...'),
       'Improve race readiness this sprint'
     );
-    await userEvent.click(screen.getByRole('button', { name: /next/i }));
 
     await userEvent.click(screen.getByText('Build endurance'));
     await userEvent.click(screen.getByText('Plan race calendar'));
@@ -132,9 +136,14 @@ describe('FocusGoalWizard integration flow', () => {
     await userEvent.click(screen.getByText(/^quarter$/i));
     await userEvent.click(screen.getByRole('button', { name: /next/i }));
 
+    // Step 4 (Milestones + Sprint Plan) did not exist when this test was written, but it needs
+    // no interaction: entering it auto-assigns every leaf goal to a sprint window. Clicking the
+    // window buttons here toggles those assignments OFF, which is what blocks the step.
+    await userEvent.click(screen.getByRole('button', { name: /next/i }));
+
     await waitFor(() => {
-      expect(screen.getByText(/Story-based goals:/i)).toBeInTheDocument();
-      expect(screen.getByText(/Calendar-time goals:/i)).toBeInTheDocument();
+      expect(screen.getByText(/Story-based leaf goals:/i)).toBeInTheDocument();
+      expect(screen.getByText(/Calendar-time leaf goals:/i)).toBeInTheDocument();
     });
 
     await userEvent.click(screen.getByRole('button', { name: /next/i }));
