@@ -706,25 +706,46 @@ exports.runCoachOrchestratorNightly = schedulerV2.onSchedule(
   },
   async () => {
     const firestore = db();
-    // Process all users with Strava connected or Telegram linked
-    const [stravaSnap, telegramSnap] = await Promise.all([
+
+    // HealthKit first, Strava as a supplement.
+    //
+    // This used to select on `stravaConnected == true` OR a telegram_sessions row. Both
+    // were proxies from before there was an iOS app: Strava was the only way to see
+    // training, Telegram the only way to reach the user. The phone now supplies HRV,
+    // sleep, resting HR, VO2 max, readiness, steps and workouts directly — strictly more
+    // than Strava, and without a third-party token that expires.
+    //
+    // The old gate was also silently fragile. Strava authorisation expires — this account
+    // is carrying `stravaNeedsReconnect: true` and `stravaLastSyncStatus: 'error'` right
+    // now — and when `stravaConnected` flips false the user simply vanishes from the
+    // cohort. No error, no log line, coach_daily just stops. Gating on a credential that
+    // rots is how a daily feature dies quietly.
+    //
+    // Telegram is dropped outright: being reachable by chat says nothing about whether
+    // there is health data to coach on.
+    const [healthkitSnap, stravaSnap] = await Promise.all([
+      firestore.collection('profiles').where('healthkitStatus', '==', 'authorized').get(),
       firestore.collection('profiles').where('stravaConnected', '==', true).get(),
-      firestore.collection('telegram_sessions').get(),
     ]);
 
-    const telegramUids = new Set(telegramSnap.docs.map(d => d.data()?.uid).filter(Boolean));
     const allUids = new Set([
+      ...healthkitSnap.docs.map(d => d.id),
       ...stravaSnap.docs.map(d => d.id),
-      ...telegramUids,
     ]);
 
-    console.log(`[coachOrchestrator] Processing ${allUids.size} users`);
+    console.log(
+      `[coachOrchestrator] Processing ${allUids.size} users ` +
+      `(healthkit=${healthkitSnap.size}, strava=${stravaSnap.size})`
+    );
 
     for (const uid of allUids) {
       try {
         await _runOrchestratorForUser(uid);
       } catch (e) {
-        console.error(`[coachOrchestrator] Failed for uid=${uid}:`, e?.message);
+        // Per-user catch so one bad account cannot take the cohort down. The trade-off is
+        // that a persistent failure is invisible unless someone reads the logs — which is
+        // why the stack is logged, not just the message.
+        console.error(`[coachOrchestrator] Failed for uid=${uid}:`, e?.stack || e?.message);
       }
     }
   }
