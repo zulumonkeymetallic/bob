@@ -1,9 +1,9 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Dropdown } from 'react-bootstrap';
 import logger from '../utils/logger';
 import { useSprint } from '../contexts/SprintContext';
 import type { Sprint } from '../types';
-import { planningSprints } from '../utils/sprintFilter';
+import { planningSprints, visibleSprintWindow, SPRINT_SELECTOR_DEFAULT_VISIBLE } from '../utils/sprintFilter';
 
 interface SprintSelectorProps {
   selectedSprintId?: string;
@@ -37,7 +37,20 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
   }, [sprints, effectiveSelectedId]);
 
   const now = Date.now();
-  const visibleSprints = useMemo(() => planningSprints(sprints), [sprints]);
+  // Sorted active-first, then soonest-starting (see planningSprints).
+  const orderedSprints = useMemo(() => planningSprints(sprints), [sprints]);
+
+  /**
+   * Only the current sprint and the next three are shown by default. The full list runs to
+   * ten-plus planned sprints years out, which buries the two or three anyone actually
+   * switches between. The rest stay one click away rather than being removed.
+   */
+  const [showAllSprints, setShowAllSprints] = useState(false);
+  const hiddenCount = Math.max(0, orderedSprints.length - SPRINT_SELECTOR_DEFAULT_VISIBLE);
+  const visibleSprints = useMemo(
+    () => visibleSprintWindow(orderedSprints, effectiveSelectedId, showAllSprints),
+    [orderedSprints, effectiveSelectedId, showAllSprints],
+  );
   const isSprintComplete = (s: Sprint) => {
     // Only consider a sprint complete if its status is explicitly 2 (Complete)
     // Don't auto-complete based on end date - let user manually close via workflow
@@ -214,6 +227,14 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
                 </div>
               </Dropdown.Item>
             ))
+        )}
+        {hiddenCount > 0 && (
+          <Dropdown.Item
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowAllSprints((v) => !v); }}
+            className="text-center small text-muted"
+          >
+            {showAllSprints ? 'Show fewer' : `Show all sprints (${hiddenCount} more)`}
+          </Dropdown.Item>
         )}
         <Dropdown.Divider />
         <Dropdown.Item onClick={() => window.location.href = '/sprints/management'}>
