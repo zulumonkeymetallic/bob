@@ -80,7 +80,6 @@ import DayCapacityWarningBanner from './DayCapacityWarningBanner';
 import { useSidebar } from '../../contexts/SidebarContext';
 import PlanActionBar from './PlanActionBar';
 import UnifiedPlannerLevels from './UnifiedPlannerLevels';
-import PlannerLevelSwitcher from './PlannerLevelSwitcher';
 import { normalizePlannerLevel } from '../../utils/plannerRoutes';
 import { applyPlannerDefer, type PlannerDeferPayload } from '../../utils/plannerDeferral';
 
@@ -2843,26 +2842,12 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
 const UnifiedPlannerPage: React.FC = () => {
   const location = useLocation();
   const plannerLevel = useMemo(() => normalizePlannerLevel(new URLSearchParams(location.search).get('level')), [location.search]);
-  // Embedded uses (the planner rendered inside another surface) bring their own chrome, so the
-  // switcher would be a second, competing navigation row.
-  const embedded = useMemo(() => {
-    const embed = new URLSearchParams(location.search).get('embed');
-    return embed === '1' || embed === 'true';
-  }, [location.search]);
 
-  // Rendered above whichever level is active, so the six levels are reachable from the page
-  // itself. Until now `?level=` could only be changed from the sidebar, which is why one screen
-  // needed seven nav entries.
-  return (
-    <>
-      {!embedded && (
-        <div className="px-3 pt-3">
-          <PlannerLevelSwitcher />
-        </div>
-      )}
-      {plannerLevel !== 'calendar' ? <UnifiedPlannerLevels /> : <UnifiedPlannerCalendarPage />}
-    </>
-  );
+  if (plannerLevel !== 'calendar') {
+    return <UnifiedPlannerLevels />;
+  }
+
+  return <UnifiedPlannerCalendarPage />;
 };
 
 export default UnifiedPlannerPage;

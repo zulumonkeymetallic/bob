@@ -95,7 +95,56 @@
 }
 
 /* ═══════════════════════════════════════════════════════════
-   3. TABLET DENSITY — roughly 30% more vertical real-estate
+   3. TOOLBAR COMPACTION — keep every control on one row
+   The original of this block was deleted wholesale while fixing the clipped notification
+   panel and Sprint menu. That was too blunt: the defect was ONE declaration,
+   `overflow: hidden` on the flex row, which cropped anything escaping the toolbar. The rest
+   of it — tighter gaps, smaller buttons and badges, a narrower search field — is what kept
+   the metrics, search and Sprint selector on a single line at iPad width. Without it they
+   wrap and the Sprint selector drops onto a row of its own.
+
+   `overflow` is deliberately absent below and must stay absent.
+   ═══════════════════════════════════════════════════════════ */
+
+.bob-tier-tablet .sidebar-layout-toolbar .container-fluid {
+  padding: 3px 8px !important;
+}
+
+.bob-tier-tablet .sidebar-layout-toolbar .d-flex.gap-3 {
+  gap: 0.25rem !important;
+  flex-wrap: nowrap !important;
+}
+
+.bob-tier-tablet .sidebar-layout-toolbar .btn {
+  padding: 0.15rem 0.4rem !important;
+  font-size: 0.7rem !important;
+  white-space: nowrap !important;
+}
+
+.bob-tier-tablet .sidebar-layout-toolbar .badge,
+.bob-tier-tablet .sidebar-layout-toolbar [class*='badge'] {
+  font-size: 0.6rem !important;
+  padding: 0.1rem 0.3rem !important;
+}
+
+/* The search field is the single greediest element in the row. */
+.bob-tier-tablet .sidebar-layout-toolbar input[type='text'],
+.bob-tier-tablet .sidebar-layout-toolbar input[type='search'],
+.bob-tier-tablet .sidebar-layout-toolbar .form-control {
+  max-width: 140px !important;
+  font-size: 0.75rem !important;
+  padding: 0.15rem 0.4rem !important;
+}
+
+/* Verbose labels ("Active Sprint:") that only earn their space on a wide desktop. */
+.bob-tier-tablet .sidebar-layout-toolbar .d-none.d-xl-inline,
+.bob-tier-tablet .sidebar-layout-toolbar .d-none.d-xl-flex,
+.bob-tier-tablet .sidebar-layout-toolbar .d-none.d-xl-block {
+  display: none !important;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   4. TABLET DENSITY — roughly 30% more vertical real-estate
    ═══════════════════════════════════════════════════════════ */
 
 .bob-tier-tablet .py-4  { padding-top: 0.625rem !important; padding-bottom: 0.625rem !important; }

@@ -100,11 +100,12 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       return next;
     });
   };
-  // On tablet the rail stays collapsed. Expanding it to 250px is the compact-desktop habit the
-  // tablet tier exists to avoid: at 1024 that is a quarter of the viewport spent on navigation
-  // the user is not looking at, and it competes directly with the detail pane for the width
-  // that makes the two-pane layout worth having. Group taps still navigate from the rail.
-  const railCollapsed = tabletShell.active ? true : navCollapsed;
+  // The rail starts collapsed on tablet — navCollapsed already defaults to true below 1200px
+  // and to the stored preference above it — but the user's own toggle always wins.
+  //
+  // This previously forced `true` whenever the tablet shell was active, which made the expand
+  // chevron dead on iPad: it flipped navCollapsed, the override ignored it, and nothing moved.
+  const railCollapsed = navCollapsed;
   // True when GlobalSidebar is rendering as the detail track rather than as a right-edge dock.
   // Must match the mode App.tsx passes it, or the reserved margin and the actual panel
   // disagree about where the sidebar is.
@@ -119,106 +120,148 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const { isVisible: isRightSidebarVisible, isCollapsed: isRightSidebarCollapsed, notificationsPinnedOpen } = useSidebar();
   const [assistantOpen, setAssistantOpen] = useState(false);
 
-  /**
-   * Seven groups, grouped by what you are trying to DO rather than by which entity the screen
-   * happens to render. It was fourteen groups and 65 entries pointing at 55 destinations.
-   *
-   * What changed and why:
-   *  - Ten duplicate entries removed. Kanban and Calendar each appeared three times, in groups
-   *    that had no particular claim to them; Habit Tracking and Sprint Capacity twice.
-   *  - The seven planner entries collapse to one. They were all `/planner` with a different
-   *    `?level=`, i.e. seven doors into one screen. PlannerLevelSwitcher now puts those six
-   *    levels on the page itself, which is what makes a single entry safe — before it, the
-   *    sidebar was genuinely the only way to change level.
-   *  - "Weekly Capacity" pointed at /calendar/planner, which redirects to /planner?level=calendar
-   *    and never reached the WeeklyThemePlanner it named. Now points at it directly.
-   *  - "Gannt chart" typo fixed at source, in plannerRoutes.plannerLevelLabel.
-   *  - Chores Checklist added: a live, daily-use screen that had no nav entry at all and was
-   *    only reachable by typing the URL or following a link from the dashboard.
-   *  - Logs folded into Settings; Travel and Journals into Library. All destinations survive.
-   */
   const navigationGroups: NavigationGroup[] = [
-    {
-      label: 'Today',
-      icon: 'home',
-      lucideIcon: LayoutDashboard,
+      {
+        label: 'Overview',
+        icon: 'home',
+        lucideIcon: LayoutDashboard,
       items: [
         { label: 'Overview', path: '/dashboard', icon: 'home' },
         { label: 'Daily Check-in', path: '/dashboard/daily-checkin', icon: 'clipboard-check' },
-        { label: 'Checklist', path: '/chores/checklist', icon: 'check-square' },
+        { label: 'Mobile', path: '/mobile', icon: 'mobile-alt' },
+        { label: 'Theme Progress', path: '/dashboard/theme-progress', icon: 'chart-line' },
+        { label: 'Finance Dashboard', path: '/dashboard/finance', icon: 'wallet' },
+        { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
+        { label: 'Fitness', path: '/fitness', icon: 'heartbeat' },
+        { label: 'Kanban Board', path: '/sprints/kanban', icon: 'columns' },
         { label: 'Calendar', path: '/calendar', icon: 'calendar' },
-        { label: 'Mobile View', path: '/mobile', icon: 'mobile-alt' },
-      ],
+        { label: 'Metrics', path: '/metrics', icon: 'tachometer-alt' },
+      ]
+    },
+    // Coach — Health folded in here (was its own top-level group) per Jim, 2026-07-23.
+    {
+      label: 'Coach',
+      icon: 'brain',
+      lucideIcon: Brain,
+      items: [
+        { label: 'AI Coach', path: '/coach', icon: 'brain' },
+        { label: 'Finance Coach', path: '/coach/finance', icon: 'chart-line' },
+        { label: 'Health Hub', path: '/health', icon: 'heartbeat' },
+        { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
+        { label: 'Running Heatmap', path: '/running/heatmap', icon: 'map-marked-alt' },
+      ]
+    },
+    {
+      label: 'Goals',
+      icon: 'bullseye',
+      lucideIcon: Target,
+      items: [
+        { label: 'Goals List', path: '/goals', icon: 'list' },
+        { label: 'Focus Goals', path: '/focus-goals', icon: 'bullseye' },
+        { label: 'Goal Planner', path: '/planner?level=year', icon: 'columns' },
+        { label: 'Gannt chart', path: '/planner?level=gantt', icon: 'magic' },
+        { label: 'Theme Progress', path: '/metrics/progress', icon: 'chart-bar' },
+        { label: 'Visual Canvas', path: '/canvas', icon: 'share-alt' }
+      ]
     },
     {
       label: 'Plan',
       icon: 'sitemap',
       lucideIcon: Network,
       items: [
-        { label: 'Planner', path: '/planner', icon: 'route' },
-        { label: 'Sprint Management', path: '/sprints/management', icon: 'tasks' },
-        { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'columns' },
-        { label: 'Capacity Planning', path: '/sprints/capacity', icon: 'chart-pie' },
-        { label: 'Weekly Capacity', path: '/planner/weekly-capacity', icon: 'palette' },
-        { label: 'Deferral Suggestions', path: '/sprints/deferrals', icon: 'clock' },
-        { label: 'Retrospective', path: '/sprints/retrospective', icon: 'undo' },
+        { label: 'Year Planner', path: '/planner?level=year', icon: 'route' },
+        { label: 'Gannt chart', path: '/planner?level=gantt', icon: 'stream' },
+        { label: 'Multi Sprint Planner', path: '/planner?level=sprint', icon: 'th' },
+        { label: '4-Day Planner', path: '/planner?level=week', icon: 'th-large' },
       ],
     },
     {
-      label: 'Work',
-      icon: 'tasks',
-      lucideIcon: CheckSquare,
-      items: [
-        { label: 'Goals', path: '/goals', icon: 'bullseye' },
-        { label: 'Focus Goals', path: '/focus-goals', icon: 'bullseye' },
-        { label: 'Stories', path: '/stories', icon: 'book' },
-        { label: 'Tasks', path: '/tasks', icon: 'list' },
-        { label: 'Visual Canvas', path: '/canvas', icon: 'share-alt' },
-        { label: 'Theme Progress', path: '/metrics/progress', icon: 'chart-bar' },
-      ],
-    },
-    {
-      label: 'Health',
-      icon: 'brain',
-      lucideIcon: Brain,
-      items: [
-        { label: 'AI Coach', path: '/coach', icon: 'brain' },
-        { label: 'Health Hub', path: '/health', icon: 'heartbeat' },
-        { label: 'Fitness & Metrics', path: '/fitness', icon: 'tachometer-alt' },
-        { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
-        { label: 'Running Heatmap', path: '/running/heatmap', icon: 'map-marked-alt' },
-      ],
-    },
-    {
-      label: 'Money',
+      label: 'Finance',
       icon: 'piggy-bank',
       lucideIcon: PiggyBank,
       items: [
         { label: 'Dashboard', path: '/finance/dashboard', icon: 'chart-line' },
-        { label: 'Finance Coach', path: '/coach/finance', icon: 'brain' },
         { label: 'Budgets', path: '/finance/budgets', icon: 'wallet' },
-        { label: 'Transactions', path: '/finance/transactions', icon: 'receipt' },
         { label: 'Merchants', path: '/finance/merchants', icon: 'tags' },
+        { label: 'Transactions', path: '/finance/transactions', icon: 'receipt' },
         { label: 'Spend Breakdown', path: '/finance/flow', icon: 'sitemap' },
         { label: 'Pots', path: '/finance/pots', icon: 'database' },
-        { label: 'Goal Linking', path: '/finance/goals', icon: 'link' },
-      ],
+        { label: 'Goal Linking', path: '/finance/goals', icon: 'link' }
+      ]
     },
     {
-      label: 'Library',
+      label: 'Stories',
+      icon: 'book',
+      lucideIcon: BookOpen,
+      items: [
+        { label: 'Stories List', path: '/stories', icon: 'list' },
+        { label: 'Kanban Board', path: '/sprints/kanban', icon: 'columns' },
+        { label: 'Calendar', path: '/calendar', icon: 'calendar' }
+      ]
+    },
+    {
+      label: 'Journals',
       icon: 'book-open',
       lucideIcon: BookText,
       items: [
         { label: 'Journal Entries', path: '/journals', icon: 'book-open' },
-        { label: 'Journal Insights', path: '/journals/insights', icon: 'chart-line' },
-        { label: 'Books', path: '/books-backlog', icon: 'book' },
-        { label: 'Shows', path: '/shows-backlog', icon: 'tv' },
-        { label: 'Games', path: '/games-backlog', icon: 'gamepad' },
-        { label: 'Videos', path: '/videos-backlog', icon: 'video' },
-        { label: 'YouTube History', path: '/youtube-history', icon: 'video' },
-        { label: 'Travel Map', path: '/travel', icon: 'map' },
-      ],
+        { label: 'Journal Insights', path: '/journals/insights', icon: 'chart-line' }
+      ]
     },
+    {
+      label: 'Backlog',
+      icon: 'clipboard-list',
+      lucideIcon: ClipboardList,
+      items: [
+        { label: 'Games', path: '/games-backlog', icon: 'gamepad' },
+        { label: 'Shows', path: '/shows-backlog', icon: 'tv' },
+        { label: 'Books', path: '/books-backlog', icon: 'book' },
+        { label: 'Videos', path: '/videos-backlog', icon: 'video' },
+        { label: 'YouTube History', path: '/youtube-history', icon: 'video' }
+      ]
+    },
+    {
+      label: 'Tasks',
+      icon: 'tasks',
+      lucideIcon: CheckSquare,
+      items: [
+        { label: 'Tasks List', path: '/tasks', icon: 'list' }
+      ]
+    },
+    {
+      label: 'Sprints',
+      icon: 'calendar-alt',
+      lucideIcon: CalendarDays,
+      items: [
+        { label: 'Sprint Management', path: '/sprints/management', icon: 'tasks' },
+        { label: 'Sprint Kanban', path: '/sprints/kanban', icon: 'columns' },
+        { label: 'Multi Sprint Planner', path: '/planner?level=sprint', icon: 'th' },
+        { label: 'Capacity Planning', path: '/sprints/capacity', icon: 'chart-pie' },
+        { label: 'Deferral Suggestions', path: '/sprints/deferrals', icon: 'clock' },
+        { label: 'Retrospective', path: '/sprints/retrospective', icon: 'undo' }
+      ]
+    },
+    {
+      label: 'Calendar',
+      icon: 'calendar',
+      lucideIcon: Calendar,
+      items: [
+        { label: 'Calendar', path: '/calendar', icon: 'calendar' },
+        { label: 'Weekly Capacity', path: '/calendar/planner', icon: 'palette' },
+        { label: '4-Day Planner', path: '/planner?level=week', icon: 'th-large' },
+        { label: 'Sprint Capacity', path: '/sprints/capacity', icon: 'chart-pie' },
+        { label: 'Google Integration', path: '/calendar/integration', icon: 'google' }
+      ]
+    },
+    {
+      label: 'Travel',
+      icon: 'globe',
+      lucideIcon: Globe,
+      items: [
+        { label: 'Travel Map', path: '/travel', icon: 'map' }
+      ]
+    },
+    // (Removed Data Management per request)
     {
       label: 'Settings',
       icon: 'cog',
@@ -227,16 +270,23 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Profile', path: '/settings/profile', icon: 'user' },
         { label: 'AI', path: '/settings/ai', icon: 'robot' },
         { label: 'Integrations', path: '/settings/integrations', icon: 'plug' },
-        { label: 'Google Calendar', path: '/calendar/integration', icon: 'google' },
         { label: 'Finance', path: '/settings/finance', icon: 'wallet' },
         { label: 'Notifications', path: '/settings/notifications', icon: 'envelope' },
         { label: 'Privacy & Security', path: '/settings/privacy-security', icon: 'shield-alt' },
-        { label: 'Developer', path: '/settings/developer', icon: 'flask' },
+        { label: 'Developer', path: '/settings/developer', icon: 'flask' }
+      ]
+    },
+    {
+      label: 'Logs',
+      icon: 'stream',
+      lucideIcon: ScrollText,
+      items: [
         { label: 'Integration Logs', path: '/logs/integrations', icon: 'database' },
         { label: 'AI Diagnostics', path: '/logs/ai', icon: 'robot' },
-        { label: 'Transcript Processing', path: '/logs/transcripts', icon: 'file-alt' },
-      ],
+        { label: 'Transcript Processing', path: '/logs/transcripts', icon: 'file-alt' }
+      ]
     },
+    // Removed duplicate Health group at bottom
   ];
 
   const handleNavigation = (path: string) => {
