@@ -29,7 +29,7 @@ export function normalizePlannerLevel(value: string | null | undefined): Unified
 export function plannerLevelLabel(level: UnifiedPlannerLevel): string {
   switch (level) {
     case 'gantt':
-      return 'Gannt chart';
+      return 'Gantt chart';
     case 'year':
       return 'Year Planner';
     case 'quarter':
