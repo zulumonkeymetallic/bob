@@ -1001,6 +1001,10 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
                     groupByParent
                   />
                 ) : (
+                  /* No groupByParent here on purpose. Grouping is a LIST-view idea: passing it
+                     to the card view forced the grid into `--stacked`, a single column at every
+                     width, which is why cards stopped tiling several to a row. The table above
+                     keeps the hierarchy; cards go back to a dense responsive grid. */
                   <GoalsCardView
                     goals={orderedFilteredGoals}
                     onGoalUpdate={handleGoalUpdate}
@@ -1008,7 +1012,6 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
                     onGoalPriorityChange={handleGoalPriorityChange}
                     themes={globalThemes}
                     cardLayout={goalsDetailLevel === 'full' ? 'comfortable' : 'grid'}
-                    groupByParent
                     showDescriptions={goalsDetailLevel === 'minimal' ? false : showGoalDescriptions}
                     goalKpiStatusByGoalId={goalKpiStatusByGoalId}
                   />

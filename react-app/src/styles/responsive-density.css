@@ -36,11 +36,13 @@
 
   .sidebar-layout-outer {
     height: 100vh !important;
+    height: 100dvh !important;
     overflow: hidden !important;
   }
 
   .sidebar-layout-main {
     height: 100vh !important;
+    height: 100dvh !important;
     overflow: hidden !important;
     display: flex !important;
     flex-direction: column !important;
@@ -89,7 +91,12 @@
 }
 
 .bob-tier-tablet .sidebar-desktop {
+  /* dvh, not vh. On iOS Safari 100vh is the height of the screen with the browser chrome
+     ignored, so with a tab bar and a bookmarks bar showing, a 100vh rail is taller than the
+     visible viewport and its pinned footer — theme toggle and sign out — sits below the fold
+     with no way to reach it. dvh tracks the actually-visible area. */
   height: 100vh !important;
+  height: 100dvh !important;
   overflow: hidden !important;
   flex-shrink: 0 !important;
 }

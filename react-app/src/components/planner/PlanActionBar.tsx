@@ -85,8 +85,15 @@ const PlanActionBar: React.FC<PlanActionBarProps> = ({ className }) => {
     }
   };
 
+  // One row, always. Every button already carries a `title`, and its label collapses to an icon
+  // below xl, so wrapping onto a second row buys nothing — it just makes the bar taller and
+  // makes the layout jump as the label breakpoint is crossed. If the icons still do not fit,
+  // the row scrolls horizontally rather than stacking.
   return (
-    <div className={`d-flex align-items-center gap-1 flex-wrap ${className || ''}`.trim()}>
+    <div
+      className={`d-flex align-items-center gap-1 flex-nowrap ${className || ''}`.trim()}
+      style={{ overflowX: 'auto', overflowY: 'hidden', scrollbarWidth: 'none' as any }}
+    >
       <Button size="sm" variant={buttonVariant('dashboard')} onClick={() => navigate('/dashboard')} title="Overview dashboard">
         <LayoutDashboard size={14} /><span className="d-none d-xl-inline ms-1">Overview</span>
       </Button>

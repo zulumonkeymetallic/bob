@@ -4,7 +4,7 @@ import { useNavigate, useLocation, Link } from 'react-router-dom';
 import {
   BookOpen, BookText, Brain, Calendar, CalendarDays, CheckSquare, ChevronLeft,
   ChevronRight, ClipboardList, Globe, LayoutDashboard, Network,
-  PiggyBank, ScrollText, Settings, Target, LucideIcon,
+  PiggyBank, ScrollText, Settings, Target, LucideIcon, Moon, Sun, LogOut,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
@@ -345,7 +345,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       // rendering — between 600 and 767 the tier says tablet but the phone shell is mounted,
       // and tablet density there would style a layout that is not on screen.
       className={`d-flex sidebar-layout-outer${isTabletShellChrome ? ' bob-tier-tablet' : ''}`}
-      style={{ height: '100vh', overflow: 'hidden' }}
+      style={{ height: '100dvh', overflow: 'hidden' }}
     >
       {/* Desktop Sidebar (collapsible) — mutually exclusive with the Mobile Header/bottom
           tabs via deviceInfo.isMobile (was a static `d-none d-md-flex` CSS breakpoint at
@@ -356,7 +356,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         style={{
           display: 'flex',
           width: railCollapsed ? `${SIZE.railW}px` : `${SIZE.sidebarW}px`,
-          height: '100vh',
+          // dvh so the pinned footer stays on screen under iOS Safari's browser chrome.
+          height: '100dvh',
           flexShrink: 0,
           background: 'var(--panel)',
           color: 'var(--notion-text)',
@@ -435,7 +436,11 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                 onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--notion-hover)'; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'none'; }}
               >
-                <i className={`fas fa-${theme === 'light' ? 'moon' : 'sun'}`} style={{ fontSize: '14px' }} />
+                {/* lucide, not Font Awesome. The rail's nav icons are lucide components and
+                    render fine; these two footer buttons were the only <i class="fas"> glyphs
+                    left and they drew nothing at all, so the collapsed rail looked like it had
+                    no theme toggle or sign-out at all. */}
+                {theme === 'light' ? <Moon size={16} strokeWidth={1.8} /> : <Sun size={16} strokeWidth={1.8} />}
               </button>
               <button
                 onClick={onSignOut || signOut}
@@ -444,7 +449,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
                 onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'var(--notion-hover)'; }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = 'none'; }}
               >
-                <i className="fas fa-sign-out-alt" style={{ fontSize: '14px' }} />
+                <LogOut size={16} strokeWidth={1.8} />
               </button>
             </div>
           </>
