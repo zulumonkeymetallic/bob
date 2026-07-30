@@ -9,6 +9,11 @@ import { installGlobalErrorHandlers } from './utils/globalErrorHandlers';
 import logger from './utils/logger';
 import { startLagMonitor } from './utils/lagMonitor';
 import { clearStaleFirestoreCache } from './utils/staleCacheGuard';
+import { applyLayoutTokens } from './utils/layoutTokens';
+
+// Publish layout sizes as CSS custom properties before first paint, so stylesheets can stop
+// hardcoding numbers the TypeScript already owns (see MaterialDesign.css's FAB offset).
+applyLayoutTokens();
 
 // Install global error handlers and log startup
 installGlobalErrorHandlers();

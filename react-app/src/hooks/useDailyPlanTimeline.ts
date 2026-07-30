@@ -214,6 +214,10 @@ export interface UseDailyPlanTimelineParams {
 export interface UseDailyPlanTimelineResult {
   items: DailyPlanTimelineItem[];
   bucketCounts: { morning: number; afternoon: number; evening: number };
+  /** Non-null when the calendar_blocks listener failed. The hook has always returned this
+   *  and MobileHome has always destructured it; it was just missing from the type, which
+   *  broke the build for both. */
+  gcalError: string | null;
   loading: boolean;
   choreCompletionBusy: Record<string, boolean>;
   itemActionBusy: Record<string, boolean>;

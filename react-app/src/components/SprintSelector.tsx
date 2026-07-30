@@ -151,7 +151,13 @@ const SprintSelector: React.FC<SprintSelectorProps> = ({
         )}
       </Dropdown.Toggle>
 
-      <Dropdown.Menu align="end" style={{ minWidth: '300px', zIndex: 2000 }}>
+      {/* No z-index here. This menu renders inside the top toolbar, which is a stacking
+          context (position:relative + z-index:1010), so any value set here is resolved
+          within that — the old `zIndex: 2000` was never 2000 against the page and lost to
+          MaterialDesign.css's blanket `.dropdown-menu { z-index: 1060 }`. That blanket rule
+          is now back at Bootstrap's 1000, which puts page content below the toolbar and
+          makes this menu visible without needing a number at all. */}
+      <Dropdown.Menu align="end" style={{ minWidth: '300px' }}>
         <Dropdown.Header>Available Sprints</Dropdown.Header>
         <Dropdown.Item
           active={effectiveSelectedId === ''}

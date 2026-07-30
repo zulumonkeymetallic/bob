@@ -828,14 +828,18 @@ body.modal-open .md-fab {
 
 /* Responsive adjustments */
 @media (max-width: 768px) {
-  /* FAB must clear the 64px MobileHome tab bar + safe area */
+  /* FAB must clear the MobileHome tab bar + safe area. --bob-tabBarH is published at boot
+     from SIZE.tabBarH in utils/layoutTokens.ts, which is the same constant MobileHome uses
+     for the bar itself — previously this was a literal 64 duplicated across the JS/CSS
+     boundary, so changing the bar's height left the FAB floating at the old offset. The
+     fallback keeps this correct for the first paint and for any non-app page. */
   .md-fab {
-    bottom: calc(64px + env(safe-area-inset-bottom, 0px) + 16px) !important;
+    bottom: calc(var(--bob-tabBarH, 64px) + env(safe-area-inset-bottom, 0px) + 16px) !important;
     right: 16px;
   }
 
   .md-fab-menu {
-    bottom: calc(64px + env(safe-area-inset-bottom, 0px) + 88px) !important;
+    bottom: calc(var(--bob-tabBarH, 64px) + env(safe-area-inset-bottom, 0px) + 88px) !important;
     right: 16px;
   }
   
@@ -850,9 +854,13 @@ body.modal-open .md-fab {
   }
 }
 
-/* Fix Bootstrap dropdown z-index issues */
+/* Bootstrap's own $zindex-dropdown. This was 1060, which sat ABOVE the app's top toolbar
+   (1010) and the docked Activity Stream (1000) — so any ordinary dropdown inside a route
+   painted over the app chrome, and conversely the toolbar's own popovers (notification
+   panel, Sprint selector, global search) lost to page content despite asking for 1045/2000/1100.
+   Page content belongs under app chrome; see src/utils/layoutTokens.ts for the full ladder. */
 .dropdown-menu {
-  z-index: 1060 !important;
+  z-index: 1000 !important;
   background: var(--md-surface-container) !important;
   border: 1px solid var(--md-outline) !important;
   border-radius: 8px !important;
@@ -878,12 +886,11 @@ body.modal-open .md-fab {
   color: var(--md-on-surface) !important;
 }
 
-/* Ensure dropdown doesn't interfere with other elements */
+/* Bootstrap needs the wrapper positioned so the menu can anchor to it. It must NOT carry a
+   z-index: doing so made every dropdown wrapper in the app a stacking context at 1055,
+   which both lifted page-content dropdowns above the app chrome and capped anything
+   rendered inside a toolbar dropdown at that wrapper's level. The menu's own z-index above
+   is the only one needed. */
 .dropdown {
   position: relative;
-  z-index: 1055;
-}
-
-.dropdown-toggle {
-  z-index: 1056;
 }
