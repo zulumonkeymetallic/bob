@@ -275,3 +275,43 @@ describe('parity with the behaviour this replaces', () => {
     expect(state.tier).toBe('tablet');
   });
 });
+
+describe('the tablet shell must follow the device, with no URL parameter', () => {
+  /**
+   * The shell is switched on by default, so these are the cases that decide whether a real
+   * device gets it. An iPad must resolve to 'tablet' from detection alone — no ?shell=, no
+   * setting — and critically at ANY width, because an iPad Pro 12.9" in landscape reports
+   * 1366px and would otherwise fall past the desktop boundary into the wrong shell.
+   */
+  const ipad = (width: number, height: number) => computeTier({
+    width, height, ua: UA.mac, maxTouchPoints: 5, coarsePointer: true,
+  });
+
+  it.each([
+    ['iPad mini portrait', 744, 1133],
+    ['iPad Air portrait', 820, 1180],
+    ['iPad Air landscape', 1180, 820],
+    ['iPad Pro 11 landscape', 1194, 834],
+    ['iPad Pro 12.9 landscape', 1366, 1024],
+  ])('%s is a tablet', (_label, w, h) => {
+    expect(ipad(w, h).tier).toBe('tablet');
+  });
+
+  it('keeps an iPad Pro out of the desktop tier despite being wider than desktopMin', () => {
+    // 1366 > 1200, so a width-only rule would hand this a desktop shell and a mouse-sized UI.
+    expect(ipad(1366, 1024).tier).not.toBe('desktop');
+    expect(ipad(1366, 1024).panes).toBe(2);
+  });
+
+  it('still gives a real desktop the desktop shell', () => {
+    expect(computeTier({
+      width: 1366, height: 768, ua: UA.mac, maxTouchPoints: 0, coarsePointer: false,
+    }).tier).toBe('desktop');
+  });
+
+  it('drops to one pane in a narrow Split View but stays a tablet', () => {
+    const split = ipad(700, 1080);
+    expect(split.tier).toBe('tablet');
+    expect(split.panes).toBe(1);
+  });
+});

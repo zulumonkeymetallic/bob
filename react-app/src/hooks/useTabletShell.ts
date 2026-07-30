@@ -1,11 +1,14 @@
 /**
- * useTabletShell — the single gate deciding whether the two-pane tablet shell is live.
+ * useTabletShell — decides whether the two-pane tablet shell is live.
  *
- * Kept separate from the tier itself so the shell can ship dark: `tier === 'tablet'` starts
- * being true for real iPads as soon as detection is fixed, but nothing about the layout
- * changes until this returns active. That lets the shell land in main, be exercised via the
- * override, and be switched on as its own one-line change rather than as a side effect of a
- * large refactor.
+ * The shell follows the DEVICE, with no user action required: layoutTier identifies a tablet
+ * from the user agent, touch points and pointer type — including iPadOS, which reports a
+ * Macintosh user agent and so needs the touch check to be recognised at all — and an iPad is
+ * treated as a tablet in both orientations regardless of width.
+ *
+ * The `tablet_shell` flag stays as a kill switch, defaulted on, for a device that turns out to
+ * behave badly. The `?shell=` parameter below is a debug escape hatch for forcing the shell on
+ * or off while testing; it is not how anyone is expected to reach this.
  */
 import { useLocation } from 'react-router-dom';
 import { useLayoutState } from '../utils/layoutTier';
@@ -37,9 +40,9 @@ const SINGLE_PANE_PREFIXES = [
 ];
 
 /**
- * `?shell=1` / `?shell=0` pins the shell for the session, independent of the Firestore flag.
- * Needed because the flag is per-user and slow to flip, whereas testing the shell means
- * toggling it repeatedly against different viewport widths.
+ * Debug only. `?shell=1` / `?shell=0` pins the shell for the session, independent of the flag,
+ * so it can be toggled repeatedly against different viewport widths while testing. Normal use
+ * never involves this — the shell is chosen from the device.
  */
 const readLocalOverride = (): boolean | null => {
   if (typeof window === 'undefined') return null;

@@ -21,8 +21,13 @@ const DEFAULT_FLAGS: Record<string, boolean> = {
   gcal_linker: true,
   intent_broker: true,
   capacity_deferral: true,
-  /** Two-pane tablet shell. Off until the layout has had real-device time; see useTabletShell. */
-  tablet_shell: false,
+  /**
+   * Two-pane tablet shell. On by default — the shell is meant to follow the device, and
+   * layoutTier already identifies a tablet from the user agent, touch points and pointer
+   * type, including iPadOS reporting a Macintosh UA. This flag remains only as a kill switch
+   * if the shell misbehaves on a device we have not seen.
+   */
+  tablet_shell: true,
 };
 
 interface FeatureFlagState {
