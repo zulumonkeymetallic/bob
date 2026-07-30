@@ -21,7 +21,6 @@ import {
   doc,
   onSnapshot,
   query,
-  serverTimestamp,
   updateDoc,
   where,
 } from 'firebase/firestore';
@@ -31,7 +30,6 @@ import { useAuth } from '../contexts/AuthContext';
 import type { Goal, Story, Task, Sprint } from '../types';
 import { GLOBAL_THEMES } from '../constants/globalThemes';
 import { themeVars } from '../utils/themeVars';
-import { rescheduleGoalToQuarter as rescheduleGoalDates, roadmapColumnOrder, UNSCHEDULED_COLUMN } from '../utils/roadmapSchedule';
 import { colorWithAlpha, goalThemeColor as resolveGoalThemeColor } from '../utils/storyCardFormatting';
 import { getThemeName } from '../utils/statusHelpers';
 import PlanActionBar from './planner/PlanActionBar';
@@ -39,6 +37,7 @@ import ThemeMultiSelect from './shared/ThemeMultiSelect';
 import SprintMultiSelect from './shared/SprintMultiSelect';
 import ShareGoalsPanel from './shared/ShareGoalsPanel';
 import GoalCard from './GoalCard';
+import RoadmapGrid from './planner/RoadmapGrid';
 import EditGoalModal from './EditGoalModal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -173,18 +172,7 @@ function elbowPath(fx: number, fy: number, tx: number, ty: number): string {
 
 // ─── Quarter helpers (roadmap layout) ─────────────────────────────────────────
 
-function computeQuarterKey(ts: number | null | undefined): string | null {
-  if (!ts || !Number.isFinite(ts)) return null;
-  const d = new Date(ts);
-  const q = Math.ceil((d.getMonth() + 1) / 3);
-  return `${d.getFullYear()}-Q${q}`;
-}
 
-function quarterLabel(key: string): string {
-  if (key === UNSCHEDULED_COLUMN) return 'Unscheduled';
-  const [year, q] = key.split('-');
-  return `${q} ${year}`;
-}
 
 // The end-date anchor this used to provide now lives in utils/roadmapSchedule, which computes
 // a start AND an end so a roadmap drag writes the same pair the Gantt does.
@@ -293,69 +281,6 @@ const NodeCard: React.FC<{
 
 // ─── Roadmap chip ─────────────────────────────────────────────────────────────
 
-const GOAL_KIND_ICON: Record<string, string> = {
-  umbrella: '◆',
-  milestone: '◉',
-  focus: '★',
-};
-
-const RoadmapChip: React.FC<{
-  goal: Goal;
-  themeColor: string;
-  onEdit: (goal: Goal) => void;
-  onDragStartGoal: (goalId: string) => void;
-  onDragEndGoal: () => void;
-}> = ({ goal, themeColor, onEdit, onDragStartGoal, onDragEndGoal }) => {
-  const g = goal as any;
-  const plannedStartKey = computeQuarterKey(typeof g.plannedStartDate === 'number' ? g.plannedStartDate : null);
-  const kindIcon = GOAL_KIND_ICON[g.goalKind] ?? '○';
-  const isDone = Number(g.status) === 4;
-  const isActive = Number(g.status) === 1;
-
-  return (
-    <div
-      draggable
-      onDragStart={e => {
-        e.dataTransfer.setData('text/plain', goal.id);
-        e.dataTransfer.effectAllowed = 'move';
-        onDragStartGoal(goal.id);
-      }}
-      onDragEnd={onDragEndGoal}
-      onClick={() => onEdit(goal)}
-      title={`${goal.title} — click to edit, drag to reschedule`}
-      style={{
-        borderLeft: `3px solid ${themeColor}`,
-        // Theme variables, not fixed light greys — these chips were the white blocks left
-        // glowing in the Unscheduled column once the rest of the roadmap went dark.
-        background: isDone ? 'var(--panel, #f3f4f6)' : isActive ? 'var(--card, #fff)' : 'var(--panel, #fafafa)',
-        color: 'var(--text, #1a1a1a)',
-        borderRadius: '0 6px 6px 0',
-        padding: '4px 7px',
-        cursor: 'grab',
-        boxShadow: '0 1px 2px rgba(0,0,0,0.07)',
-        fontSize: 11,
-        opacity: isDone ? 0.55 : 1,
-        transition: 'box-shadow 0.12s',
-      }}
-      onMouseEnter={e => (e.currentTarget.style.boxShadow = '0 2px 6px rgba(0,0,0,0.15)')}
-      onMouseLeave={e => (e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.07)')}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-        <span style={{ color: themeColor, fontSize: 9, flexShrink: 0 }}>{kindIcon}</span>
-        <span style={{ fontWeight: 600, whiteSpace: 'normal', wordBreak: 'break-word' }}>
-          {goal.title}
-        </span>
-        {isActive && (
-          <span style={{ flexShrink: 0, fontSize: 9, background: '#dcfce7', color: '#16a34a', borderRadius: 4, padding: '0 3px' }}>●</span>
-        )}
-      </div>
-      <div style={{ color: '#9ca3af', fontSize: 9, marginTop: 1, display: 'flex', gap: 6 }}>
-        {g.ref && <span>{g.ref}</span>}
-        {plannedStartKey && <span>Start {quarterLabel(plannedStartKey)}</span>}
-      </div>
-    </div>
-  );
-};
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
@@ -416,10 +341,8 @@ const VisualCanvas: React.FC<VisualCanvasProps> = ({ forcedLayout, embedded = fa
   const dragStartPos    = useRef({ x: 0, y: 0 });
   const wasDragged      = useRef(false);
 
-  // ── Roadmap edit + drag-to-reschedule ────────────────────────────────────────
-  const [editingGoal,      setEditingGoal]      = useState<Goal | null>(null);
-  const [roadmapDragId,    setRoadmapDragId]    = useState<string | null>(null);
-  const [dragOverCell,     setDragOverCell]     = useState<string | null>(null);
+  // Roadmap drag state moved into RoadmapGrid along with the grid itself.
+  const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
 
   // ── Firestore subscriptions ──────────────────────────────────────────────────
   useEffect(() => {
@@ -469,73 +392,8 @@ const VisualCanvas: React.FC<VisualCanvasProps> = ({ forcedLayout, embedded = fa
     });
   }, [goals, activeOnly, focusOnly, focusGoalIds, filterThemeIds, searchTerm]);
 
-  const roadmapQuarters = useMemo((): string[] => {
-    const keys = new Set<string>();
-    const curKey = computeQuarterKey(Date.now());
-    if (curKey) keys.add(curKey);
-    for (const g of roadmapGoals) {
-      const due = (g as any).endDate || (g as any).dueDate;
-      const planned = typeof (g as any).plannedStartDate === 'number' ? (g as any).plannedStartDate : null;
-      const k1 = computeQuarterKey(due);
-      const k2 = computeQuarterKey(planned);
-      if (k1) keys.add(k1);
-      if (k2) keys.add(k2);
-    }
-    // Ordered by roadmapColumnOrder: history trimmed to one quarter back, and Unscheduled
-    // placed immediately before the current quarter so it is a short drag away rather than
-    // pinned to the far right.
-    return roadmapColumnOrder([...keys], computeQuarterKey(Date.now()));
-  }, [roadmapGoals]);
 
-  const roadmapThemes = useMemo(() =>
-    GLOBAL_THEMES.filter(t => roadmapGoals.some(g => Number((g as any).theme ?? 0) === t.id)),
-    [roadmapGoals],
-  );
 
-  const roadmapGrid = useMemo((): Map<number, Map<string, Goal[]>> => {
-    const grid = new Map<number, Map<string, Goal[]>>();
-    for (const g of roadmapGoals) {
-      const themeId = Number((g as any).theme ?? 0);
-      const due = (g as any).endDate || (g as any).dueDate;
-      const cell = computeQuarterKey(due) ?? 'unscheduled';
-      if (!grid.has(themeId)) grid.set(themeId, new Map());
-      const row = grid.get(themeId)!;
-      if (!row.has(cell)) row.set(cell, []);
-      row.get(cell)!.push(g);
-    }
-    return grid;
-  }, [roadmapGoals]);
-
-  const currentQuarterKey = useMemo(() => computeQuarterKey(Date.now()), []);
-
-  // Move a goal into a quarter column (or unschedule it) by rewriting its due/end date.
-  // The roadmap cell is keyed off `endDate || dueDate`, so we set endDate to a date
-  // inside the target quarter; unscheduling clears both so it falls to the last column.
-  const rescheduleGoalToQuarter = useCallback(async (goalId: string, qKey: string) => {
-    const goal = goals.find(g => g.id === goalId);
-    if (!goal) return;
-    try {
-      if (qKey === 'unscheduled') {
-        await updateDoc(doc(db, 'goals', goalId), {
-          endDate: null, dueDate: null, updatedAt: serverTimestamp(),
-        } as any);
-      } else {
-        // Write BOTH dates, matching what the Gantt does. Writing endDate alone left the
-        // goal's startDate stale, and the nightly story realignment
-        // (functions/alignStoriesToGoalSprints.js) keys off goal dates — so the same move made
-        // here versus on the Gantt could put a goal's stories in different sprints.
-        const next = rescheduleGoalDates(qKey, (goal as any).startDate, (goal as any).endDate ?? (goal as any).dueDate);
-        if (!next) return;
-        await updateDoc(doc(db, 'goals', goalId), {
-          startDate: next.startDate,
-          endDate: next.endDate,
-          updatedAt: serverTimestamp(),
-        } as any);
-      }
-    } catch (err) {
-      console.error('Failed to reschedule goal', goalId, err);
-    }
-  }, [goals]);
 
   // ── Node computation ─────────────────────────────────────────────────────────
   const { nodes, connections } = useMemo(() => {
@@ -965,88 +823,15 @@ const VisualCanvas: React.FC<VisualCanvasProps> = ({ forcedLayout, embedded = fa
         </div>
       )}
 
-      {/* ── ROADMAP layout (outside SVG canvas) ───────────────────────────────── */}
+      {/* ── ROADMAP layout ────────────────────────────────────────────────────
+          Delegates to the extracted RoadmapGrid so /canvas?layout=roadmap and
+          /planner?level=roadmap render exactly the same component and cannot drift. The
+          canvas has already applied its own filters, so goals are passed in and the grid's
+          own filter row is suppressed. */}
       {viewLayout === 'roadmap' && (
-        <div style={{ flex: 1, overflow: 'auto', background: 'var(--bg, #f8f9fa)', padding: '16px 20px' }}>
-          {roadmapGoals.length === 0 ? (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--muted, #6b7280)' }}>
-              <Filter size={32} style={{ opacity: 0.4, marginBottom: 12 }} />
-              <div className="fw-medium">No items match current filters</div>
-              <div className="small mt-1">Try clearing filters or adding goals</div>
-            </div>
-          ) : (
-            <div style={{ minWidth: 'max-content' }}>
-              {/* Quarter header row */}
-              <div style={{ display: 'flex', marginBottom: 2 }}>
-                <div style={{ width: 168, flexShrink: 0 }} />
-                {roadmapQuarters.map(qKey => (
-                  <div key={qKey} style={{
-                    width: 210, flexShrink: 0, padding: '5px 10px',
-                    fontSize: 11, fontWeight: 700, color: 'var(--text, #374151)',
-                    borderLeft: '1px solid var(--line, #e5e7eb)',
-                    background: qKey === currentQuarterKey ? 'var(--accent-soft, #dbeafe)' : 'var(--panel, #f1f5f9)',
-                    borderRadius: qKey === roadmapQuarters[0] ? '6px 0 0 0' : undefined,
-                  }}>
-                    {quarterLabel(qKey)}
-                    {qKey === currentQuarterKey && <span style={{ marginLeft: 5, fontSize: 9, color: 'var(--brand, #3b82f6)' }}>▶ now</span>}
-                  </div>
-                ))}
-              </div>
-              {/* Theme rows */}
-              {roadmapThemes.map(theme => {
-                const themeGoals = roadmapGrid.get(theme.id);
-                return (
-                  <div key={theme.id} style={{ display: 'flex', marginBottom: 1 }}>
-                    {/* Theme label */}
-                    <div style={{
-                      width: 168, flexShrink: 0, padding: '8px 10px',
-                      borderTop: `3px solid ${theme.color}`,
-                      background: `${theme.color}18`,
-                      fontSize: 11, fontWeight: 700, color: theme.color,
-                      display: 'flex', alignItems: 'flex-start',
-                    }}>
-                      {theme.name}
-                    </div>
-                    {/* Quarter cells */}
-                    {roadmapQuarters.map(qKey => {
-                      const cellGoals = themeGoals?.get(qKey) || [];
-                      const cellId = `${theme.id}:${qKey}`;
-                      const isDropTarget = roadmapDragId != null && dragOverCell === cellId;
-                      return (
-                        <div key={qKey}
-                          onDragOver={e => { if (roadmapDragId) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOverCell(cellId); } }}
-                          onDragLeave={() => setDragOverCell(prev => (prev === cellId ? null : prev))}
-                          onDrop={e => {
-                            e.preventDefault();
-                            const id = e.dataTransfer.getData('text/plain') || roadmapDragId;
-                            setDragOverCell(null);
-                            if (id) rescheduleGoalToQuarter(id, qKey);
-                          }}
-                          style={{
-                          width: 210, flexShrink: 0, padding: '6px 8px', minHeight: 72,
-                          borderLeft: '1px solid var(--line, #e5e7eb)', borderTop: '1px solid var(--line, #e5e7eb)',
-                          background: isDropTarget ? 'var(--accent-soft, #dbeafe)' : qKey === currentQuarterKey ? '#eff6ff40' : 'var(--card, #fff)',
-                          boxShadow: isDropTarget ? `inset 0 0 0 2px ${theme.color}` : undefined,
-                          display: 'flex', flexDirection: 'column', gap: 4,
-                        }}>
-                          {cellGoals.map(g => (
-                            <RoadmapChip key={g.id} goal={g} themeColor={theme.color}
-                              onEdit={setEditingGoal}
-                              onDragStartGoal={setRoadmapDragId}
-                              onDragEndGoal={() => { setRoadmapDragId(null); setDragOverCell(null); }} />
-                          ))}
-                        </div>
-                      );
-                    })}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
+        <RoadmapGrid goals={roadmapGoals} showFilters={false} />
       )}
 
-      {/* Canvas (swimlane + tree) */}
       {viewLayout !== 'roadmap' && (
       <div
         ref={canvasRef}

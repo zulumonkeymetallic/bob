@@ -27,6 +27,9 @@ type PlanDestination = {
 };
 
 const PLAN_LEVELS: PlanDestination[] = [
+  // Roadmap leads: it is the default planning view. It is a real planner level now, so unlike
+  // before it needs no special-casing outside this list.
+  { level: 'roadmap', label: 'Roadmap' },
   { level: 'gantt', label: 'Gantt chart' },
   { level: 'year', label: 'Year Planner' },
   { level: 'quarter', label: 'Quarter Planner' },
@@ -82,6 +85,8 @@ const PlanActionBar: React.FC<PlanActionBarProps> = ({ className }) => {
         return <GitBranch size={14} className="me-1" />;
       case 'week':
         return <Timer size={14} className="me-1" />;
+      case 'roadmap':
+        return <MapIcon size={14} className="me-1" />;
       case 'calendar':
       default:
         return <Calendar size={14} className="me-1" />;
@@ -106,7 +111,7 @@ const PlanActionBar: React.FC<PlanActionBarProps> = ({ className }) => {
       <Button size="sm" variant={buttonVariant('kanban')} onClick={() => navigate('/sprints/kanban')} title="Kanban board">
         <LayoutGrid size={14} /><span className="d-none d-xl-inline ms-1">Kanban</span>
       </Button>
-      <Button size="sm" variant={buttonVariant('roadmap')} onClick={() => navigate('/canvas?layout=roadmap')} title="Goal roadmap">
+      <Button size="sm" variant={buttonVariant('roadmap')} onClick={() => navigate(buildPlannerPath('roadmap'))} title="Goal roadmap">
         <MapIcon size={14} /><span className="d-none d-xl-inline ms-1">Roadmap</span>
       </Button>
       <Button size="sm" variant={buttonVariant('coach')} onClick={() => navigate('/coach')} title="Coach hub">
@@ -117,14 +122,6 @@ const PlanActionBar: React.FC<PlanActionBarProps> = ({ className }) => {
           <Milestone size={14} /><span className="d-none d-xl-inline ms-1">Plan{isRoadmapActive ? ': Roadmap' : activePlanLevel ? `: ${plannerLevelLabel(activePlanLevel.level)}` : ''}</span>
         </Dropdown.Toggle>
         <Dropdown.Menu>
-          {/* Roadmap sits first and is the default planning destination. It is not a planner
-              `level` — it lives at /canvas?layout=roadmap — so it cannot join PLAN_LEVELS and
-              is listed explicitly here. */}
-          <Dropdown.Item active={isRoadmapActive} onClick={() => navigate('/canvas?layout=roadmap')}>
-            <MapIcon size={14} className="me-1" />
-            Roadmap
-          </Dropdown.Item>
-          <Dropdown.Divider />
           {PLAN_LEVELS.map((entry) => (
             <Dropdown.Item
               key={entry.level}

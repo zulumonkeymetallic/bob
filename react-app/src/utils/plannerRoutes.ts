@@ -1,4 +1,5 @@
 export type UnifiedPlannerLevel =
+  | 'roadmap'
   | 'gantt'
   | 'year'
   | 'quarter'
@@ -7,6 +8,7 @@ export type UnifiedPlannerLevel =
   | 'calendar';
 
 const VALID_LEVELS = new Set<UnifiedPlannerLevel>([
+  'roadmap',
   'gantt',
   'year',
   'quarter',
@@ -28,6 +30,8 @@ export function normalizePlannerLevel(value: string | null | undefined): Unified
 
 export function plannerLevelLabel(level: UnifiedPlannerLevel): string {
   switch (level) {
+    case 'roadmap':
+      return 'Roadmap';
     case 'gantt':
       return 'Gantt chart';
     case 'year':

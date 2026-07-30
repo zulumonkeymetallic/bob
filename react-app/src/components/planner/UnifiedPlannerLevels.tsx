@@ -9,6 +9,7 @@ import UnifiedRoadmapGanttView from './UnifiedRoadmapGanttView';
 import PlanActionBar from './PlanActionBar';
 import SprintPlanningMatrix from '../SprintPlanningMatrix';
 import SprintWeekPlanner from './SprintWeekPlanner';
+import RoadmapGrid from './RoadmapGrid';
 
 const toAnchorDate = (value: string | null) => {
   if (!value) return null;
@@ -34,6 +35,10 @@ const UnifiedPlannerLevels: React.FC = () => {
     if (level === 'week') return startOfDay(new Date());
     return new Date();
   }, [level, query]);
+
+  if (level === 'roadmap') {
+    return <RoadmapGrid />;
+  }
 
   if (level === 'gantt') {
     return <UnifiedRoadmapGanttView initialSubView="gantt" />;
