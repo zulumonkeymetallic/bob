@@ -12,6 +12,7 @@ import { ActivityStreamService } from '../services/ActivityStreamService';
 import { ChoiceHelper } from '../config/choices';
 import { getBadgeVariant, getPriorityBadge, getStatusName } from '../utils/statusHelpers';
 import { taskStatusText } from '../utils/storyCardFormatting';
+import { SIZE } from '../utils/layoutTokens';
 import { extractWeatherSummary, extractWeatherTemp, formatWeatherLine } from '../utils/weatherFormat';
 import { isRecurringDueOnDate, resolveRecurringDueMs, resolveTaskDueMs } from '../utils/recurringTaskDue';
 import { getChoreKind as getChoreKindShared } from '../utils/choreKind';
@@ -85,7 +86,9 @@ const MOBILE_TAB_ICONS: Record<TabKey, LucideIcon> = {
   chores: CheckSquare,
   finance: Wallet,
 };
-const MOBILE_TAB_BAR_HEIGHT = 64;
+// Single-sourced with MaterialDesign.css's FAB offset, which reads the same value via the
+// --bob-tabBarH custom property. Both used to hardcode 64 independently.
+const MOBILE_TAB_BAR_HEIGHT = SIZE.tabBarH;
 // Coach tab renders full-page component; skips the overview chrome
 const COACH_TABS: TabKey[] = ['coach'];
 

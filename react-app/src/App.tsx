@@ -46,6 +46,7 @@ import { BobDataProvider } from './contexts/BobDataContext';
 import PersonaSwitcher from './components/PersonaSwitcher';
 import GlobalSidebar from './components/GlobalSidebar';
 import { useDeviceInfo } from './utils/deviceDetection';
+import { useTabletShell } from './hooks/useTabletShell';
 import { VERSION } from './version';
 // import { versionTimeoutService } from './services/versionTimeoutService';
 import SprintPlannerSimple from './components/SprintPlannerSimple';
@@ -160,6 +161,7 @@ function AppContent() {
   const location = useLocation();
   const navigate = useNavigate();
   const deviceInfo = useDeviceInfo();
+  const tabletShell = useTabletShell();
   const { currentPersona } = usePersona();
   const { sprints } = useSprint();
   const [isNavExpanded, setIsNavExpanded] = useState(false);
@@ -582,12 +584,15 @@ function AppContent() {
             onHide={() => setShowImportModal(false)}
           />
 
-          {/* Global Sidebar */}
+          {/* Global Sidebar. On the tablet shell at two panes it renders inline as the detail
+              track instead of floating over the page, so the list beside it stays usable. At
+              one pane there is no room for a split, so it stays an overlay sheet. */}
           <GlobalSidebar
             goals={goals}
             stories={stories}
             sprints={sprints}
             onDelete={handleGlobalSidebarDelete}
+            mode={tabletShell.active && tabletShell.panes === 2 ? 'inline' : 'overlay'}
           />
         </SidebarLayout>
         </BobDataProvider>

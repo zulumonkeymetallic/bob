@@ -19,7 +19,12 @@ import ProcessTextActivityHost from './ProcessTextActivityHost';
 import NotificationStream from './NotificationStream';
 import AssistantDock from './AssistantDock';
 import { useDeviceInfo } from '../utils/deviceDetection';
+import { useLayoutState } from '../utils/layoutTier';
 import { forceCacheReset } from '../utils/staleCacheGuard';
+import { Z, SIZE } from '../utils/layoutTokens';
+import TabletPanes from './layout/TabletPanes';
+import { useTabletShell } from '../hooks/useTabletShell';
+import { useDetailPaneUrlSync } from '../hooks/useDetailPaneUrlSync';
 // Test mode UI removed per request
 
 interface SidebarLayoutProps {
@@ -72,12 +77,14 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   const location = useLocation();
   const [isSmallScreen, setIsSmallScreen] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth < 768 : false);
   const [isLargeScreen, setIsLargeScreen] = useState<boolean>(typeof window !== 'undefined' ? window.innerWidth >= 1200 : true);
+  const [viewportWidth, setViewportWidth] = useState<number>(typeof window !== 'undefined' ? window.innerWidth : 1280);
   // isSmallScreen (width<768) misses iPad portrait (768-1024px), which the app's own
   // routing (useDeviceInfo().isMobile) already treats as mobile — that gap meant iPad
   // portrait got routed to the phone-style MobileHome experience but this header's old
   // `d-md-none` CSS class hid at exactly the point iPad needed it, leaving no way to reach
   // the full nav menu at all. deviceInfo.isMobile is the authoritative signal instead.
   const deviceInfo = useDeviceInfo();
+  const tabletShell = useTabletShell();
   const NAV_COLLAPSED_KEY = 'navCollapsedV3'; // V2 resets all users to collapsed default
   const [navCollapsed, setNavCollapsed] = useState<boolean>(() => {
     if (typeof window !== 'undefined' && window.innerWidth < 1200) return true;
@@ -93,6 +100,20 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       return next;
     });
   };
+  // On tablet the rail stays collapsed. Expanding it to 250px is the compact-desktop habit the
+  // tablet tier exists to avoid: at 1024 that is a quarter of the viewport spent on navigation
+  // the user is not looking at, and it competes directly with the detail pane for the width
+  // that makes the two-pane layout worth having. Group taps still navigate from the rail.
+  const railCollapsed = tabletShell.active ? true : navCollapsed;
+  // True when GlobalSidebar is rendering as the detail track rather than as a right-edge dock.
+  // Must match the mode App.tsx passes it, or the reserved margin and the actual panel
+  // disagree about where the sidebar is.
+  const detailPaneInline = tabletShell.active && tabletShell.panes === 2;
+  const layout = useLayoutState();
+  const isTabletShellChrome = layout.tier === 'tablet' && !deviceInfo.isMobile;
+  // Mounted once here rather than per-route: the detail pane is shell-level state, so the
+  // param that mirrors it has to be maintained wherever the user happens to be.
+  useDetailPaneUrlSync();
   const [expandedGroups, setExpandedGroups] = useState<string[]>([]);
   const { selectedSprintId: globalSprintId, setSelectedSprintId: setGlobalSprintId } = useSprint();
   const { isVisible: isRightSidebarVisible, isCollapsed: isRightSidebarCollapsed, notificationsPinnedOpen } = useSidebar();
@@ -287,6 +308,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
     if (typeof window === 'undefined') return;
     const handler = () => {
       const w = window.innerWidth;
+      setViewportWidth(w);
       setIsSmallScreen(w < 768);
       setIsLargeScreen(w >= 1200);
       if (w < 1200) setNavCollapsed(true);
@@ -311,7 +333,19 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
   };
 
   return (
-    <div className="d-flex sidebar-layout-outer" style={{ height: '100vh', overflow: 'hidden' }}>
+    <div
+      // The tier class lets the density stylesheet target the tablet shell rather than a raw
+      // viewport range, which also caught half-width desktop windows.
+      //
+      // Gated on the TIER, not on tabletShell.active, and that distinction matters: the
+      // density rules must keep applying to iPad exactly as they do today while the two-pane
+      // flag is still off, or turning the class on and off would itself be a visible change.
+      // The extra !isMobile is what keeps it aligned with the shell that is actually
+      // rendering — between 600 and 767 the tier says tablet but the phone shell is mounted,
+      // and tablet density there would style a layout that is not on screen.
+      className={`d-flex sidebar-layout-outer${isTabletShellChrome ? ' bob-tier-tablet' : ''}`}
+      style={{ height: '100vh', overflow: 'hidden' }}
+    >
       {/* Desktop Sidebar (collapsible) — mutually exclusive with the Mobile Header/bottom
           tabs via deviceInfo.isMobile (was a static `d-none d-md-flex` CSS breakpoint at
           768px, which showed this alongside MobileHome for iPad portrait, 768-1024px). */}
@@ -320,7 +354,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         className="sidebar-desktop flex-column"
         style={{
           display: 'flex',
-          width: navCollapsed ? '56px' : '250px',
+          width: railCollapsed ? `${SIZE.railW}px` : `${SIZE.sidebarW}px`,
           height: '100vh',
           flexShrink: 0,
           background: 'var(--panel)',
@@ -330,7 +364,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           transition: 'width 0.2s ease',
         }}
       >
-        {navCollapsed ? (
+        {railCollapsed ? (
           /* ── Collapsed icon rail ── */
           <>
             {/* Top: logo + expand chevron */}
@@ -535,7 +569,11 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       <div className="fixed-top" style={{
         background: currentPersona === 'work' ? '#d3d3d3' : 'var(--panel)',
         color: currentPersona === 'work' ? '#000' : '#000',
-        zIndex: 1050
+        // Was 1050 — above Bootstrap's offcanvas (1045) and level with its modal-backdrop.
+        // That meant this bar painted over both the nav Offcanvas below and the full-bleed
+        // Activity Stream, in each case covering the control that closes them. Z.mobileHeader
+        // (1035) still clears page content and the fixed bottom bars (1030).
+        zIndex: Z.mobileHeader
       }}>
         <Navbar className="px-3" style={{
           background: 'transparent'
@@ -559,7 +597,13 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             {deviceInfo.isIPad && 'blueprint.organize.build'}
           </Navbar.Brand>
           <div className="d-flex align-items-center gap-2">
-            {isSmallScreen && <NotificationStream isLargeScreen={false} />}
+            {/* Gated on nothing beyond its own header. It used to also require isSmallScreen
+                (<768px), while the desktop toolbar's copy requires !isSmallScreen inside a
+                !deviceInfo.isMobile branch — so at isMobile && width>=768 (iPad portrait, and
+                any phone in landscape) the bell rendered in neither place and notifications
+                were simply unreachable. The header's own isMobile gate is the only condition
+                that should matter here. */}
+            <NotificationStream isLargeScreen={false} />
             {currentUser && (
               <div className="rounded-circle bg-primary d-flex align-items-center justify-content-center"
                 style={{ width: '24px', height: '24px', fontSize: '12px' }}>
@@ -721,11 +765,23 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
           // left of the Activity Stream's current width rather than collapsing away (a 10px
           // collapsed sliver read as "notifications don't show and can't be pinned" — fixed
           // per Jim, 2026-07-25), so both reserved widths always stack in full, never just 10px.
-          marginRight: window.innerWidth < 768 ? '0' : `${
-            (isRightSidebarVisible ? (isRightSidebarCollapsed ? 60 : 400) : 0)
+          // Clamped to half the viewport. Unclamped, all three panels reserve 1140px — more
+          // than an iPad landscape viewport (1194 at most), which drove the content column to
+          // zero. Past the cap the panels simply overlap the page instead of pushing it, so
+          // docking still works and content stays legible. Reads viewportWidth from state
+          // rather than window.innerWidth directly: the raw read never re-ran on resize and
+          // only updated by accident when a sibling state change happened to re-render.
+          marginRight: viewportWidth < 768 ? '0' : `${Math.min(
+            // Nothing to reserve for the Activity Stream when the tablet shell is showing it
+            // inline: it occupies the detail track inside this element rather than docking to
+            // the right of it. Reserving anyway double-counted the width — at 1024 the list
+            // track was left with 188px (968 − 400 reserved − 380 pane) and every list page
+            // collapsed into an unreadable column.
+            (isRightSidebarVisible && !detailPaneInline ? (isRightSidebarCollapsed ? 60 : 400) : 0)
             + (notificationsPinnedOpen ? 340 : 0)
-            + (assistantOpen ? 400 : 0)
-          }px`,
+            + (assistantOpen ? 400 : 0),
+            Math.floor(viewportWidth / 2)
+          )}px`,
           transition: 'margin-right 0.3s ease',
           minWidth: 0,
           display: 'flex',
@@ -782,7 +838,11 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
               </Button>
               {/* Metrics first, then selector so metrics appear to the left of the selector */}
               <CompactSprintMetrics selectedSprintId={globalSprintId} />
-              {!isSmallScreen && <NotificationStream isLargeScreen={isLargeScreen} />}
+              {/* No isSmallScreen gate: this whole toolbar is already behind !deviceInfo.isMobile,
+                  and isMobile is true for every width < 768, so !isSmallScreen was always true
+                  here anyway. Keeping the two bells gated on one signal each (their own
+                  container) is what stops the 768–1023px hole from reopening. */}
+              <NotificationStream isLargeScreen={isLargeScreen} />
               <span className="text-muted small me-2 d-none d-xl-inline">Active Sprint:</span>
               <SprintSelector
                 selectedSprintId={globalSprintId}
@@ -795,9 +855,11 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
 
         <ProcessTextActivityHost />
 
-        <main className="sidebar-layout-page" style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          {children}
-        </main>
+        <TabletPanes active={tabletShell.active} panes={tabletShell.panes}>
+          <main className="sidebar-layout-page" style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+            {children}
+          </main>
+        </TabletPanes>
         <AssistantDock open={assistantOpen} onClose={() => setAssistantOpen(false)} />
       </div>
     </div>
