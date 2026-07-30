@@ -7,6 +7,7 @@ import { functions, db } from '../firebase';
 import { collection, query, where, orderBy, limit, onSnapshot } from 'firebase/firestore';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { resolveThemeFromValue } from '../utils/themeResolver';
+import { errorMessage } from '../utils/errorMessage';
 
 interface CalendarEvent {
   id: string;
@@ -146,7 +147,7 @@ const CalendarSyncManager: React.FC = () => {
       setSyncStatus('✅ Events fetched successfully');
     } catch (error) {
       console.error('Failed to fetch events:', error);
-      setSyncStatus('❌ Error fetching events: ' + error.message);
+      setSyncStatus('❌ Error fetching events: ' + errorMessage(error));
     } finally {
       setIsLoading(false);
     }
@@ -167,7 +168,7 @@ const CalendarSyncManager: React.FC = () => {
       setSyncStatus(`✅ Planner updated. AI blocks: ${blocksCreated}, scheduled instances: ${planned}`);
     } catch (error) {
       console.error('AI planning failed:', error);
-      setSyncStatus('❌ AI planning error: ' + error.message);
+      setSyncStatus('❌ AI planning error: ' + errorMessage(error));
     } finally {
       setIsLoading(false);
     }
@@ -202,7 +203,7 @@ const CalendarSyncManager: React.FC = () => {
       await fetchUpcomingEvents(); // Refresh events list
     } catch (error) {
       console.error('Failed to create test event:', error);
-      setSyncStatus('❌ Test event creation error: ' + error.message);
+      setSyncStatus('❌ Test event creation error: ' + errorMessage(error));
     } finally {
       setIsLoading(false);
     }

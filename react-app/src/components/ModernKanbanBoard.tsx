@@ -835,7 +835,11 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
 
   // Wire sidebar inline editor to Firestore updates
   useEffect(() => {
-    const handler = async (item: Story | Task, type: 'story' | 'task', updates: any) => {
+    // Signature must match SidebarContext's handler exactly, including the 'goal' case this
+    // board never receives — a narrower parameter type is unsound for a callback the context
+    // may invoke with any entity, which is what strictFunctionTypes catches.
+    const handler = async (item: Story | Task | Goal, type: 'story' | 'task' | 'goal', updates: any) => {
+      if (type === 'goal') return;
       const col = type === 'story' ? 'stories' : 'tasks';
       const docRef = doc(db, col, (item as any).id);
       let payload: any = { ...updates, updatedAt: serverTimestamp() };

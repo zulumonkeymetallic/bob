@@ -57,6 +57,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useFocusGoals } from '../hooks/useFocusGoals';
 import { evaluateStorySprintAlignment, getSprintFocusGoalIds } from '../utils/sprintAlignment';
 import { useNavigate } from 'react-router-dom';
+import { errorMessage } from '../utils/errorMessage';
 
 interface TaskTableRow extends Task {
   storyTitle?: string;
@@ -1420,7 +1421,7 @@ const ModernTaskTable: React.FC<ModernTaskTableProps> = ({
         console.error('❌ ModernTaskTable: Task reorder failed', {
           action: 'task_reorder_error',
           taskId: active.id,
-          error: error.message,
+          error: errorMessage(error),
           timestamp: new Date().toISOString()
         });
       }

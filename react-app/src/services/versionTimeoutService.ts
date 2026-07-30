@@ -2,6 +2,7 @@
 // Forces clients to check for new app versions and busts cache after 30 minutes
 
 import { VERSION, BUILD_HASH } from '../version';
+import { errorMessage } from '../utils/errorMessage';
 
 // Feature flag: disabled — 30-minute forced refresh is too disruptive
 // Re-enable by setting this to true if needed for cache-busting in future
@@ -107,7 +108,7 @@ export class VersionTimeoutService implements IVersionTimeoutService {
       localStorage.setItem('bobLastVersionCheck', Date.now().toString());
       
     } catch (error) {
-      console.warn('⚠️ Version check failed:', error.message);
+      console.warn('⚠️ Version check failed:', errorMessage(error));
     }
   }
 
@@ -132,7 +133,7 @@ export class VersionTimeoutService implements IVersionTimeoutService {
         serverVersion = data.version;
       }
     } catch (error) {
-      console.warn('📡 Server version check failed:', error.message);
+      console.warn('📡 Server version check failed:', errorMessage(error));
     }
     
     return {

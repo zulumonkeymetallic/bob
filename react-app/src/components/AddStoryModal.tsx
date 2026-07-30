@@ -13,6 +13,7 @@ import { planningSprints, pickDefaultPlanningSprintId } from '../utils/sprintFil
 import { evaluateStorySprintAlignment } from '../utils/sprintAlignment';
 import { getGoalDisplayPath, getLeafGoalOptions, isGoalInHierarchySet, resolveLeafGoalSelection } from '../utils/goalHierarchy';
 import { withTimeout } from '../utils/withTimeout';
+import { errorMessage, errorStack } from '../utils/errorMessage';
 
 const CREATE_TIMEOUT_MS = 15000;
 
@@ -205,8 +206,8 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
         } catch (error) {
           console.error('❌ AddStoryModal: Error loading data', {
             action: 'modal_data_load_error',
-            error: error.message,
-            stack: error.stack,
+            error: errorMessage(error),
+            stack: errorStack(error),
             user: currentUser?.uid,
             persona: currentPersona
           });
@@ -370,11 +371,11 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
     } catch (error) {
       console.error('❌ AddStoryModal: STORY creation failed', {
         action: 'story_creation_error',
-        error: error.message,
+        error: errorMessage(error),
         formData: formData,
         timestamp: new Date().toISOString()
       });
-      setSubmitResult(`❌ Failed to create story: ${error.message}`);
+      setSubmitResult(`❌ Failed to create story: ${errorMessage(error)}`);
     } finally {
       setIsSubmitting(false);
     }

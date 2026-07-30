@@ -1,6 +1,7 @@
 import { db } from '../firebase';
 import { collection, query, where, getDocs, doc, getDoc, deleteDoc } from 'firebase/firestore';
 import { isStatus, isTheme } from '../utils/statusHelpers';
+import { errorMessage } from '../utils/errorMessage';
 
 export interface ProjectStats {
   totalCriticalDefects: number;
@@ -171,7 +172,7 @@ export const deleteGoal = async (goalId: string): Promise<void> => {
     console.log('Goal deleted successfully:', goalId);
   } catch (error) {
     console.error('Error deleting goal:', error);
-    throw new Error(`Failed to delete goal: ${error.message}`);
+    throw new Error(`Failed to delete goal: ${errorMessage(error)}`);
   }
 };
 
@@ -182,7 +183,7 @@ export const deleteStory = async (storyId: string): Promise<void> => {
     console.log('Story deleted successfully:', storyId);
   } catch (error) {
     console.error('Error deleting story:', error);
-    throw new Error(`Failed to delete story: ${error.message}`);
+    throw new Error(`Failed to delete story: ${errorMessage(error)}`);
   }
 };
 
@@ -193,7 +194,7 @@ export const deleteTask = async (taskId: string): Promise<void> => {
     console.log('Task deleted successfully:', taskId);
   } catch (error) {
     console.error('Error deleting task:', error);
-    throw new Error(`Failed to delete task: ${error.message}`);
+    throw new Error(`Failed to delete task: ${errorMessage(error)}`);
   }
 };
 
@@ -208,6 +209,6 @@ export const deleteBulkItems = async (
     console.log(`Bulk deleted ${itemIds.length} ${itemType}:`, itemIds);
   } catch (error) {
     console.error(`Error bulk deleting ${itemType}:`, error);
-    throw new Error(`Failed to bulk delete ${itemType}: ${error.message}`);
+    throw new Error(`Failed to bulk delete ${itemType}: ${errorMessage(error)}`);
   }
 };
