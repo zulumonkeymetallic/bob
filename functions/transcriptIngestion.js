@@ -3483,8 +3483,37 @@ function buildCalendarQueryResponse({ intent, confidence, events, processedAt, c
   };
 }
 
-function resolvePersona(value) {
-  return String(value || 'personal').trim().toLowerCase() === 'work' ? 'work' : 'personal';
+// Capture always lands in the personal persona. Jim's rule, 2026-07-30.
+//
+// This returned 'work' whenever a caller asked for it, and the value flows straight onto
+// the stories and tasks this pipeline creates, and scopes which goals they can match. Work
+// is a stream Jim manages elsewhere, and only personal-persona items generate GCal events,
+// so a captured item written as work is both misfiled and silently unschedulable.
+//
+// Nothing legitimately captures work through here — iOS and the web FAB both send
+// 'personal' — so the branch is removed rather than guarded. The parameter is kept in the
+// signatures so callers and stored payloads stay unchanged.
+//
+// The same over-broad word-list bug drove this in three other places, all now fixed:
+// bob_firestore_mutation.py, bob_take_snapshot.py, and the iOS VoiceCaptureService
+// classifier, which withheld work-classified recordings from BOB entirely.
+function resolvePersona(_value) {
+  return 'personal';
+}
+
+// Read-side companion to resolvePersona.
+//
+// resolvePersona is a *write* normaliser and always answers 'personal', so
+// `resolvePersona(doc.persona) === somePersona` is now always true — which would silently
+// turn every persona filter into a no-op and start pulling work documents into personal
+// matching and personal Top-3 lists. Filters must test the STORED value instead.
+//
+// Only an explicitly stored 'work' counts. A guessed persona (derivedPersona and similar)
+// must never be the reason a document is excluded — that mistake is what made
+// `infer_best_goal` in Hermes skip "Launch AI Consultancy for SMEs", one of Jim's own
+// personal goals.
+function isStoredWorkPersona(value) {
+  return String(value || '').trim().toLowerCase() === 'work';
 }
 
 function isTaskDoneStatus(status) {
@@ -3598,7 +3627,7 @@ async function listTopPriorityItems({ db, uid, persona, timezone, count = DEFAUL
 
   const tasks = taskDocs
     .map((doc) => ({ id: doc.id, data: doc.data() || {} }))
-    .filter(({ data }) => resolvePersona(data.persona) === safePersona)
+    .filter(({ data }) => !isStoredWorkPersona(data.persona))
     .filter(({ data }) => !isTaskDoneStatus(data.status) && data.deleted !== true)
     .filter(({ data }) => !isRoutineLikeTask(data))
     .filter(({ data }) => {
@@ -3610,7 +3639,7 @@ async function listTopPriorityItems({ db, uid, persona, timezone, count = DEFAUL
 
   const stories = storyDocs
     .map((doc) => ({ id: doc.id, data: doc.data() || {} }))
-    .filter(({ data }) => resolvePersona(data.persona) === safePersona)
+    .filter(({ data }) => !isStoredWorkPersona(data.persona))
     .filter(({ data }) => !isStoryDoneStatus(data.status) && data.deleted !== true)
     .filter(({ data }) => {
       if (data.aiTop3ForDay !== true) return false;
@@ -4586,7 +4615,9 @@ async function processTranscriptIngestion({
 
     const safeIngestionPersona = resolvePersona(persona);
     const allUserGoals = await loadGoalsForUser(uid);
-    const userGoals = allUserGoals.filter((goal) => resolvePersona(goal.persona) === safeIngestionPersona);
+    // Match against personal goals only. Never a work goal: a captured (personal) story
+    // hanging off a work parent is misfiled and drops out of personal scheduling.
+    const userGoals = allUserGoals.filter((goal) => !isStoredWorkPersona(goal.persona));
 
     const profileApiKeys = resolveProfileProviderApiKeys(profile);
     const rawAnalysis = existingLock.analysis || await callTranscriptModel({
@@ -5027,6 +5058,10 @@ async function processAgentRequest({
   channel,
   authMode,
 }) {
+  // Normalised at the door as well as at every use site. `persona` is written directly onto
+  // created stories (see the story payload) and tasks, not only via resolvePersona, so
+  // pinning it here is what guarantees no captured entity can be born as work.
+  persona = resolvePersona(persona);
   const db = admin.firestore();
   const normalizedTranscript = normalizeTranscriptForFingerprint(transcript);
   if (!normalizedTranscript) {
