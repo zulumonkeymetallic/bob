@@ -202,7 +202,7 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
   }, [goals, currentPeriodKey, granularity, sprints]);
 
   /**
-   * Rows are themes at quarter granularity and individual goals at month granularity. Across a
+   * Rows are themes at quarter granularity and individual goals at sprint granularity. Across a
    * quarter you are balancing themes; across a month you are asking which goals land when, and
    * a theme row there just stacks unrelated goals on top of each other.
    */
@@ -316,11 +316,12 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
                 Focus goals only
               </label>
             </div>
-            {/* Granularity also flips the row axis — themes across a quarter and a sprint,
-                goals across a month. It deliberately stops at sprint: days belong to the
-                Calendar, and story-level sprint capacity belongs to /planner?level=sprint. */}
+            {/* Granularity also flips the row axis — themes across a quarter (the balance
+                question), goals across a sprint (the what-is-in-flight question). Two levels
+                only: days belong to the Calendar, and story-level sprint capacity belongs to
+                /planner?level=sprint. */}
             <div className="btn-group btn-group-sm" role="group" aria-label="Granularity" style={{ flexShrink: 0 }}>
-              {(['quarter', 'month', 'sprint'] as const).map((g) => (
+              {(['quarter', 'sprint'] as const).map((g) => (
                 <button
                   key={g}
                   type="button"
@@ -331,11 +332,9 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
                     color: granularity === g ? '#fff' : undefined,
                   }}
                   onClick={() => setGranularity(g)}
-                  title={
-                    g === 'quarter' ? 'Quarters, one row per theme'
-                      : g === 'month' ? 'Months, one row per goal'
-                        : 'Sprints, one row per theme'
-                  }
+                  title={g === 'quarter'
+                    ? 'Quarters, one row per theme'
+                    : 'Sprints, one row per goal'}
                 >
                   {g}
                 </button>

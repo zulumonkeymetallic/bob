@@ -111,9 +111,9 @@ export function roadmapColumnOrder(quarterKeys: string[], currentKey: string | n
  * works: across a quarter you are balancing themes against each other, across a month you are
  * asking which goals land when. A fixed row axis makes one of those two views useless.
  *
- * It stops at month. Days belong to the Calendar, which already has Google sync, real events
- * and time-of-day placement; rebuilding that here would duplicate the strongest surface in the
- * app with a worse version.
+ * It stops at sprint. Days belong to the Calendar, which already has Google sync, real events
+ * and time-of-day placement, and story-level sprint capacity belongs to /planner?level=sprint —
+ * rebuilding either here would duplicate a stronger surface with a worse version.
  */
 export function computeQuarterKey(ts: number | null | undefined): string | null {
   if (!ts || !Number.isFinite(ts)) return null;
@@ -127,58 +127,35 @@ export function quarterLabel(key: string): string {
   return `${q} ${year}`;
 }
 
-export type RoadmapGranularity = 'quarter' | 'month' | 'sprint';
+export type RoadmapGranularity = 'quarter' | 'sprint';
 
 export const ROADMAP_ROW_AXIS: Record<RoadmapGranularity, 'theme' | 'goal'> = {
+  // Quarter is the strategic horizon: themes as rows, because the question is balance
+  // between them.
   quarter: 'theme',
-  // Month is the goal-level horizon: across a month you are asking which goals land when.
-  month: 'goal',
-  // Sprint goes back to themes on purpose. Sprint planning is a balance question — is this
-  // sprint spread sanely across themes — and goal rows would put 100+ rows on a 5-column grid.
-  sprint: 'theme',
+  // Sprint is the execution horizon: goals as rows, because the question is which goals are
+  // actually in flight. Row counts stay sane here in a way they never did at month, since the
+  // sprint filters and a handful of columns naturally narrow it.
+  sprint: 'goal',
 };
-
-export function computeMonthKey(ts: number | null | undefined): string | null {
-  if (!ts || !Number.isFinite(ts)) return null;
-  const d = new Date(ts);
-  return `${d.getFullYear()}-M${String(d.getMonth() + 1).padStart(2, '0')}`;
-}
-
-export function monthOrdinal(key: string): number | null {
-  const m = /^(\d{4})-M(0[1-9]|1[0-2])$/.exec(key);
-  return m ? Number(m[1]) * 12 + (Number(m[2]) - 1) : null;
-}
-
-export function monthLabel(key: string): string {
-  const m = /^(\d{4})-M(\d{2})$/.exec(key);
-  if (!m) return key;
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, 1);
-  return d.toLocaleString(undefined, { month: 'short', year: 'numeric' });
-}
 
 /** Period key for a timestamp at the given granularity. */
 export function computePeriodKey(
   ts: number | null | undefined, g: RoadmapGranularity, sprints: RoadmapSprint[] = [],
 ): string | null {
-  if (g === 'sprint') return computeSprintKey(ts, sprints);
-  return g === 'month' ? computeMonthKey(ts) : computeQuarterKey(ts);
+  return g === 'sprint' ? computeSprintKey(ts, sprints) : computeQuarterKey(ts);
 }
 
 export function periodLabel(key: string, g: RoadmapGranularity, sprints: RoadmapSprint[] = []): string {
   if (key === UNSCHEDULED_COLUMN) return 'Unscheduled';
-  if (g === 'sprint') return sprintLabel(key, sprints);
-  return g === 'month' ? monthLabel(key) : quarterLabel(key);
+  return g === 'sprint' ? sprintLabel(key, sprints) : quarterLabel(key);
 }
 
 /** Mid-period timestamp — the anchor a dropped goal's end date takes. */
 export function periodMidTimestamp(
   key: string, g: RoadmapGranularity, sprints: RoadmapSprint[] = [],
 ): number | null {
-  if (g === 'sprint') return sprintMidTimestamp(key, sprints);
-  if (g !== 'month') return quarterMidTimestamp(key);
-  const m = /^(\d{4})-M(\d{2})$/.exec(key);
-  if (!m) return null;
-  return new Date(Number(m[1]), Number(m[2]) - 1, 15, 12, 0, 0).getTime();
+  return g === 'sprint' ? sprintMidTimestamp(key, sprints) : quarterMidTimestamp(key);
 }
 
 /** Granularity-aware sibling of rescheduleGoalToQuarter. Same end-anchored rule. */
@@ -199,19 +176,7 @@ export function roadmapPeriodOrder(
   // Sprint columns come from the sprint list, not from the keys present in the data — an empty
   // sprint still needs a column to drag INTO.
   if (g === 'sprint') return roadmapSprintOrder(sprints);
-  if (g !== 'month') return roadmapColumnOrder(keys, currentKey);
-
-  const ord = monthOrdinal;
-  const cur = currentKey ? ord(currentKey) : null;
-  const sorted = [...new Set(keys)].filter((k) => ord(k) != null).sort((a, b) => ord(a)! - ord(b)!);
-  if (cur == null) return [UNSCHEDULED_COLUMN, ...sorted];
-
-  const kept = sorted.filter((k) => ord(k)! >= cur - 1);
-  if (currentKey && !kept.includes(currentKey)) {
-    kept.push(currentKey);
-    kept.sort((a, b) => ord(a)! - ord(b)!);
-  }
-  return [UNSCHEDULED_COLUMN, ...kept];
+  return roadmapColumnOrder(keys, currentKey);
 }
 
 // ── Sprint granularity ───────────────────────────────────────────────────────
