@@ -68,7 +68,7 @@ export const ThemeMultiSelect: React.FC<ThemeMultiSelectProps> = ({
         popperConfig={{ strategy: 'fixed' }}
         style={{
           maxHeight: 420, overflowY: 'auto', minWidth: 220, padding: '4px 0',
-          zIndex: Z.panel,
+          zIndex: Z.menu,
           background: 'var(--card, #fff)',
           border: '1px solid var(--line, #e5e7eb)',
           boxShadow: '0 8px 24px rgba(0,0,0,0.18)',

@@ -4,6 +4,7 @@
  * Uses raw <input type="checkbox"> for reliable visibility.
  */
 
+import { Z } from '../../utils/layoutTokens';
 import React from 'react';
 import { Dropdown } from 'react-bootstrap';
 
@@ -62,7 +63,7 @@ export const YearMultiSelect: React.FC<YearMultiSelectProps> = ({
           without it this menu was rendering on top of both, since Bootstrap's own dropdown
           z-index (1000) can tie or race with panels elsewhere in the app. Confirmed by Jim,
           2026-07-23 (Goals page year selector showing over the notifications dropdown). */}
-      <Dropdown.Menu style={{ maxHeight: 360, overflowY: 'auto', minWidth: 180, padding: '4px 0', zIndex: 900 }}>
+      <Dropdown.Menu renderOnMount popperConfig={{ strategy: 'fixed' }} style={{ zIndex: Z.menu, background: 'var(--card, #fff)', border: '1px solid var(--line, #e5e7eb)', boxShadow: '0 8px 24px rgba(0,0,0,0.18)', maxHeight: 360, overflowY: 'auto', minWidth: 180, padding: '4px 0' }}>
         {/* All years */}
         <label
           className="d-flex align-items-center gap-2 px-3 py-1"

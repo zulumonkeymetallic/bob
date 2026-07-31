@@ -33,6 +33,7 @@ import EditGoalModal from '../EditGoalModal';
 import ThemeMultiSelect from '../shared/ThemeMultiSelect';
 import YearMultiSelect from '../shared/YearMultiSelect';
 import { useSprint } from '../../contexts/SprintContext';
+import { useSidebar } from '../../contexts/SidebarContext';
 import {
   goalMatchesRoadmapFilters,
   hasActiveRoadmapFilters,
@@ -71,7 +72,7 @@ const RoadmapChip: React.FC<{
       }}
       onDragEnd={onDragEndGoal}
       onClick={() => onEdit(goal)}
-      title={`${goal.title} — click to edit, drag to reschedule`}
+      title={`${goal.title} — click for detail, drag to reschedule`}
       style={{
         borderLeft: `3px solid ${themeColor}`,
         // Theme variables throughout: fixed light greys here left white blocks glowing in dark mode.
@@ -113,6 +114,29 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
   const [stories, setStories] = useState<any[]>([]);
   const [focusGoalIds, setFocusGoalIds] = useState<Set<string>>(new Set());
   const [fullScreen, setFullScreen] = useState(false);
+  const shellRef = React.useRef<HTMLDivElement>(null);
+  /**
+   * Real Fullscreen API, matching the Gantt. A `position: fixed` overlay is not full screen —
+   * it still sits inside the browser chrome, and because it creates a stacking context it also
+   * caps every dropdown inside it. Falls back to the overlay if the browser refuses.
+   */
+  const toggleFullScreen = useCallback(async () => {
+    const el = shellRef.current;
+    try {
+      if (!document.fullscreenElement && el?.requestFullscreen) {
+        await el.requestFullscreen();
+        return;
+      }
+      if (document.fullscreenElement) { await document.exitFullscreen(); return; }
+    } catch { /* fall through to the overlay */ }
+    setFullScreen((v) => !v);
+  }, []);
+
+  useEffect(() => {
+    const onChange = () => setFullScreen(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
   const [granularity, setGranularity] = useState<RoadmapGranularity>('quarter');
   const rowAxis = ROADMAP_ROW_AXIS[granularity];
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
@@ -120,6 +144,10 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
   const [dragOverCell, setDragOverCell] = useState<string | null>(null);
 
   const { sprints, selectedSprintId } = useSprint();
+  // Clicking a chip opens the Activity Stream rather than the edit modal: the stream is the
+  // app's existing "detail for entity X" surface, already wired from ~20 other components, and
+  // it keeps you on the roadmap instead of trapping you behind a dialog.
+  const { showSidebar } = useSidebar();
   const selfLoading = providedGoals === undefined;
 
   useEffect(() => {
@@ -238,6 +266,25 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
   }, [goals, rowAxis, granularity, sprints]);
 
   /**
+   * Stories per (goal, sprint) — only meaningful at sprint granularity, where rows are goals.
+   *
+   * Keyed off the story's OWN sprintId rather than its dates: a story's sprint is an explicit
+   * assignment, and inferring it from dates would disagree with the Kanban and the sprint
+   * planner, which both read the field.
+   */
+  const storiesByGoalSprint = useMemo(() => {
+    const m = new Map<string, any[]>();
+    if (granularity !== 'sprint') return m;
+    for (const st of stories) {
+      if (!st.goalId || !st.sprintId) continue;
+      const key = `goal-${st.goalId}:${st.sprintId}`;
+      if (!m.has(key)) m.set(key, []);
+      m.get(key)!.push(st);
+    }
+    return m;
+  }, [stories, granularity]);
+
+  /**
    * A drop writes BOTH goal dates. Only endDate used to be written, which left startDate stale
    * and made the overnight story realignment behave differently here than on the Gantt.
    */
@@ -263,7 +310,7 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
   }, [goals, granularity, sprints]);
 
   return (
-    <div style={fullScreen
+    <div ref={shellRef} style={fullScreen
       ? { position: 'fixed', inset: 0, zIndex: Z.panel, background: 'var(--bg, #f8f9fa)',
           display: 'flex', flexDirection: 'column' }
       : { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
@@ -349,7 +396,7 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
             <span className="text-muted small text-nowrap">{goals.length} goals</span>
             <button
               type="button" className="grv5-select" style={{ cursor: 'pointer', padding: '0 10px' }}
-              onClick={() => setFullScreen((v) => !v)}
+              onClick={toggleFullScreen}
               title={fullScreen ? 'Exit full screen' : 'Full screen'}
             >
               {fullScreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
@@ -426,11 +473,28 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
                           display: 'flex', flexDirection: 'column', gap: 4,
                         }}
                       >
+                        {granularity === 'sprint' && rowAxis === 'goal'
+                          && (storiesByGoalSprint.get(`${theme.key}:${qKey}`) || []).map((st: any) => (
+                          <div
+                            key={st.id}
+                            onClick={() => showSidebar(st, 'story')}
+                            title={`${st.title} — click for detail`}
+                            style={{
+                              borderLeft: `2px solid ${theme.color}`, background: 'var(--panel, #fafafa)',
+                              color: 'var(--text, #1a1a1a)', borderRadius: '0 4px 4px 0',
+                              padding: '2px 6px', fontSize: 10, cursor: 'pointer',
+                              opacity: Number(st.status) >= 4 ? 0.5 : 1,
+                            }}
+                          >
+                            <span style={{ color: 'var(--muted, #9ca3af)', marginRight: 4 }}>{st.ref}</span>
+                            {st.title}
+                          </div>
+                        ))}
                         {cellGoals.map((g) => (
                           <RoadmapChip
                             key={g.id} goal={g}
                             themeColor={resolveGoalThemeColor(g, GLOBAL_THEMES) || theme.color}
-                            onEdit={setEditingGoal}
+                            onEdit={(g) => showSidebar(g, 'goal')}
                             onDragStartGoal={setDragId}
                             onDragEndGoal={() => { setDragId(null); setDragOverCell(null); }}
                           />

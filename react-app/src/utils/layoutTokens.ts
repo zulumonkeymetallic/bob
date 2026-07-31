@@ -99,6 +99,15 @@ export const Z = {
    *  popovers. Bootstrap $zindex-offcanvas — which is exactly what these are. Must stay
    *  below modal-backdrop (1050) so dialogs opened from inside them still appear on top. */
   panel: 1045,
+
+  /**
+   * Dropdown menus that must clear page content. Above MaterialDesign.css's own
+   * `.dropdown-menu` at 1060 — which is why a menu sitting at `panel` (1045) still rendered
+   * BEHIND the roadmap grid and read as transparent. Below Bootstrap's tooltip (1080) so
+   * tooltips still win. A menu inside a `position: fixed` container is capped by that
+   * container's stacking context regardless, so this only decides order among siblings.
+   */
+  menu: 1075,
 } as const;
 
 /**
