@@ -1041,12 +1041,23 @@ const GoalRoadmapV6: React.FC = () => {
     return ((clamped - chartStart.getTime()) / DAY_MS) * dayWidth;
   }, [chartEnd, chartStart, dayWidth]);
 
+  /**
+   * Lane height grows with the longest title currently in view, so long goal names wrap onto a
+   * second or third line instead of being truncated.
+   *
+   * Uniform across lanes, not per-bar, and that is a limitation of the layout rather than a
+   * choice: lanes are absolutely positioned at `laneIndex * laneHeight`, so a per-row height
+   * would mean tracking a cumulative offset per lane. Sizing every lane to the worst case is
+   * the honest approximation — it costs vertical space on the short rows but never truncates.
+   */
   const laneHeight = useMemo(() => {
-    if (zoomLevel === 'week') return 92;
-    if (zoomLevel === 'month') return 84;
-    if (zoomLevel === 'quarter') return 74;
-    return 68;
-  }, [zoomLevel]);
+    const base = zoomLevel === 'week' ? 92 : zoomLevel === 'month' ? 84 : zoomLevel === 'quarter' ? 74 : 68;
+    const longest = tasks.reduce((max, t) => Math.max(max, String((t as any).text || '').length), 0);
+    // ~28 characters fit on one line of a typical bar; each further line needs ~16px. Capped
+    // at two extra lines so one pathological title cannot push every lane off the screen.
+    const extraLines = Math.min(2, Math.max(0, Math.ceil(longest / 28) - 1));
+    return base + extraLines * 16;
+  }, [zoomLevel, tasks]);
 
   const themeGroups = useMemo<ThemeLaneGroup[]>(() => {
     const grouped = new Map<string, {
