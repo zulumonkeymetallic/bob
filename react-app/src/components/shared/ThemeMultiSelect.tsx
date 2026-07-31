@@ -8,6 +8,7 @@
  *  - "All Themes" clears selection
  */
 
+import { Z } from '../../utils/layoutTokens';
 import React, { useState } from 'react';
 import { Dropdown } from 'react-bootstrap';
 import { GLOBAL_THEMES } from '../../constants/globalThemes';
@@ -59,7 +60,20 @@ export const ThemeMultiSelect: React.FC<ThemeMultiSelectProps> = ({
       </Dropdown.Toggle>
       {/* Explicit z-index below the notifications panel/GlobalSidebar (1000-1045) — see
           YearMultiSelect.tsx for the same fix and why it's needed. */}
-      <Dropdown.Menu style={{ maxHeight: 420, overflowY: 'auto', minWidth: 220, padding: '4px 0', zIndex: 900 }}>
+      {/* Explicit opaque background and a z-index above Bootstrap's 1000. Without both, the
+          menu was see-through — content behind it (Gantt bars, sprint chips) read straight
+          through the list — and z-index 900 put it UNDER anything using the default. */}
+      <Dropdown.Menu
+        renderOnMount
+        popperConfig={{ strategy: 'fixed' }}
+        style={{
+          maxHeight: 420, overflowY: 'auto', minWidth: 220, padding: '4px 0',
+          zIndex: Z.panel,
+          background: 'var(--card, #fff)',
+          border: '1px solid var(--line, #e5e7eb)',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+        }}
+      >
         {/* All Themes row */}
         <label
           className="d-flex align-items-center gap-2 px-3 py-1"

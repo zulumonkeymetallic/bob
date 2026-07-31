@@ -30,6 +30,8 @@ import {
   type RoadmapGranularity,
 } from '../../utils/roadmapSchedule';
 import EditGoalModal from '../EditGoalModal';
+import ThemeMultiSelect from '../shared/ThemeMultiSelect';
+import YearMultiSelect from '../shared/YearMultiSelect';
 import { useSprint } from '../../contexts/SprintContext';
 import {
   goalMatchesRoadmapFilters,
@@ -282,26 +284,19 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
                   onChange={(e) => setFilter('search', e.target.value)}
                 />
               </div>
-              <select
-                className="grv5-select"
-                value={filters.themeIds.length === 1 ? String(filters.themeIds[0]) : 'all'}
-                onChange={(e) => setFilter('themeIds', e.target.value === 'all' ? [] : [Number(e.target.value)])}
-              >
-                <option value="all">All Themes</option>
-                {GLOBAL_THEMES.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-              </select>
-              <div className="grv5-multiselect">
-                <label style={{ fontSize: 12, fontWeight: 600, marginRight: 6 }}>Years</label>
-                <select
-                  multiple
-                  className="grv5-select"
-                  style={{ minWidth: 120 }}
-                  value={filters.years.map(String)}
-                  onChange={(e) => setFilter('years', Array.from(e.target.selectedOptions).map((o) => Number(o.value)))}
-                >
-                  {availableYears.map((y) => <option key={y} value={y}>{y}</option>)}
-                </select>
-              </div>
+              <ThemeMultiSelect
+                selectedIds={filters.themeIds}
+                onChange={(ids) => setFilter('themeIds', ids)}
+                size="sm"
+                style={{ minWidth: 150 }}
+              />
+              <YearMultiSelect
+                availableYears={availableYears}
+                selectedYears={filters.years}
+                onChange={(years) => setFilter('years', years)}
+                allYears={filters.years.length === 0}
+                onAllYearsChange={(all) => setFilter('years', all ? [] : availableYears)}
+              />
               <label className="small text-nowrap d-flex align-items-center gap-1" style={{ marginBottom: 0 }}>
                 <input type="checkbox" checked={filters.withStoriesOnly}
                   onChange={(e) => setFilter('withStoriesOnly', e.target.checked)} />
