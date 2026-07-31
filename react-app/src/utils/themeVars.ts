@@ -4,15 +4,20 @@
 export const cssVar = (name: string) => `var(${name})`;
 
 // Common theme variables
+// Every one of these carries a fallback. Without one, `color: var(--muted)` is invalid at
+// computed-value time wherever --muted is not defined on the subtree, and `color` then falls
+// back to INHERIT rather than to nothing — which is how card action icons ended up rendering
+// white-on-white. A fallback only takes effect in exactly that broken case, so adding them
+// cannot change any subtree where the variables are properly defined.
 export const themeVars = {
-  bg: 'var(--bg)',
-  panel: 'var(--panel)',
-  card: 'var(--card)',
-  border: 'var(--line)',
-  text: 'var(--text)',
-  muted: 'var(--muted)',
-  brand: 'var(--brand)',
-  onAccent: 'var(--on-accent)'
+  bg: 'var(--bg, #f8f9fa)',
+  panel: 'var(--panel, #f3f4f6)',
+  card: 'var(--card, #ffffff)',
+  border: 'var(--line, #e5e7eb)',
+  text: 'var(--text, #1a1a1a)',
+  muted: 'var(--muted, #6b7280)',
+  brand: 'var(--brand, #5f77dc)',
+  onAccent: 'var(--on-accent, #ffffff)'
 };
 
 // Helper to create rgba using the card RGB triplet

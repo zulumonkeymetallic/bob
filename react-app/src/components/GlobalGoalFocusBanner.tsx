@@ -110,11 +110,14 @@ const GlobalGoalFocusBanner: React.FC = () => {
     for (const s of stories) {
       const gid = (s as any).goalId;
       if (!gid) continue;
+      // STORY status scale, not the task one: 0 backlog, 1 (and legacy 2, 3) in progress,
+      // 4 done. This read it as the task/goal scale — it skipped status 4 entirely, which
+      // DROPPED every completed story from the total, and counted status 3 as done, which is
+      // in-progress. A goal with 6 finished stories therefore reported 0/6 and 0%.
       const status = Number((s as any).status ?? 0);
-      if (status === 4) continue;
       const cur = map.get(gid) ?? { total: 0, done: 0 };
       cur.total++;
-      if (status === 3) cur.done++;
+      if (status >= 4) cur.done++;
       map.set(gid, cur);
     }
     return map;
