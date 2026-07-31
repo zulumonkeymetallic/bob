@@ -122,7 +122,7 @@ export function computeQuarterKey(ts: number | null | undefined): string | null 
 }
 
 export function quarterLabel(key: string): string {
-  if (key === UNSCHEDULED_COLUMN) return 'Unscheduled';
+  if (key === UNSCHEDULED_COLUMN) return 'Backlog';
   const [year, q] = key.split('-');
   return `${q} ${year}`;
 }
@@ -147,7 +147,7 @@ export function computePeriodKey(
 }
 
 export function periodLabel(key: string, g: RoadmapGranularity, sprints: RoadmapSprint[] = []): string {
-  if (key === UNSCHEDULED_COLUMN) return 'Unscheduled';
+  if (key === UNSCHEDULED_COLUMN) return 'Backlog';
   return g === 'sprint' ? sprintLabel(key, sprints) : quarterLabel(key);
 }
 
@@ -219,7 +219,7 @@ export function computeSprintKey(ts: number | null | undefined, sprints: Roadmap
 }
 
 export function sprintLabel(key: string, sprints: RoadmapSprint[]): string {
-  if (key === UNSCHEDULED_COLUMN) return 'Unscheduled';
+  if (key === UNSCHEDULED_COLUMN) return 'Backlog';
   const s = sprints.find((x) => x.id === key);
   return s?.name || s?.ref || 'Sprint';
 }

@@ -220,7 +220,7 @@ describe('sprint granularity', () => {
 
   it('labels a column with the sprint name', () => {
     expect(periodLabel('s3', 'sprint', sprints)).toBe('S48');
-    expect(periodLabel('unscheduled', 'sprint', sprints)).toBe('Unscheduled');
+    expect(periodLabel('unscheduled', 'sprint', sprints)).toBe('Backlog');
   });
 
   it('falls forward to the next unfinished sprint when none contains today', () => {

@@ -58,7 +58,10 @@ const RoadmapChip: React.FC<{
   onDragEndGoal: () => void;
 }> = ({ goal, themeColor, onEdit, onDragStartGoal, onDragEndGoal }) => {
   const g = goal as any;
-  const plannedStartKey = computeQuarterKey(typeof g.plannedStartDate === 'number' ? g.plannedStartDate : null);
+  // plannedStartDate is set on zero goals in the live data — startDate is what's actually
+  // populated (104 of 119 goals), so anchoring this on plannedStartDate meant the "Start Qx"
+  // annotation never rendered for anyone.
+  const plannedStartKey = computeQuarterKey(typeof g.startDate === 'number' ? g.startDate : null);
   const isDone = Number(g.status) === 4;
   const isActive = Number(g.status) === 1;
 
@@ -98,6 +101,80 @@ const RoadmapChip: React.FC<{
   );
 };
 
+/** ms epoch (any shape Firestore hands back) to a short "Mon 'YY" label, or null if unusable. */
+function shortDate(v: unknown): string | null {
+  const n = typeof v === 'number' ? v : Number(v);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return new Date(n).toLocaleDateString('en-GB', { month: 'short', year: '2-digit' });
+}
+
+/**
+ * Sprint-level goal lane label: title, description, story progress, KPIs/savings, and the
+ * planned window — the goal context you'd otherwise have to leave the roadmap to look up while
+ * deciding what to schedule against it.
+ */
+const GoalLaneLabel: React.FC<{
+  goal: Goal;
+  color: string;
+  stats?: { total: number; done: number };
+  pots: Record<string, { name: string; balance: number }>;
+}> = ({ goal, color, stats, pots }) => {
+  const g = goal as any;
+  const total = stats?.total ?? 0;
+  const done = stats?.done ?? 0;
+  const progressPercent = total > 0 ? Math.round((done / total) * 100) : 0;
+
+  const kpis = Array.isArray(g.kpis) ? g.kpis : [];
+  const kpiLabel = kpis.length > 0 ? `${kpis[0].name}: ${kpis[0].target}${kpis[0].unit ?? ''}` : null;
+
+  const potId = g.monzoPotId || g.linkedPotId || g.potId;
+  const potBalance = potId && pots[potId] ? pots[potId].balance : 0;
+  const estimated = Number(g.estimatedCost || 0);
+  const savingsPct = estimated > 0 && potId ? Math.min(100, Math.round(((potBalance / 100) / estimated) * 100)) : null;
+
+  const startLabel = shortDate(g.startDate);
+  const endLabel = shortDate(g.endDate || g.dueDate);
+  const dateRange = startLabel && endLabel ? `${startLabel} → ${endLabel}` : startLabel || endLabel;
+
+  const metaLine = [kpiLabel, savingsPct != null ? `Savings ${savingsPct}%` : null].filter(Boolean).join(' · ');
+
+  return (
+    <div>
+      <div style={{
+        overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box',
+        WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as any,
+      }}>
+        {goal.title || '(untitled)'}
+      </div>
+      {g.description && (
+        <div style={{
+          fontSize: 10, fontWeight: 400, color: 'var(--muted, #6b7280)', marginTop: 3,
+          overflow: 'hidden', textOverflow: 'ellipsis', display: '-webkit-box',
+          WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as any,
+        }}>
+          {g.description}
+        </div>
+      )}
+      {total > 0 && (
+        <>
+          <div style={{ height: 4, background: 'var(--line, #e5e7eb)', borderRadius: 2, marginTop: 5, overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${progressPercent}%`, background: color, borderRadius: 2 }} />
+          </div>
+          <div style={{ fontSize: 9, fontWeight: 400, color: 'var(--muted, #9ca3af)', marginTop: 2 }}>
+            {done}/{total} stories · {progressPercent}%
+          </div>
+        </>
+      )}
+      {metaLine && (
+        <div style={{ fontSize: 9, fontWeight: 400, color: 'var(--muted, #9ca3af)', marginTop: 1 }}>{metaLine}</div>
+      )}
+      {dateRange && (
+        <div style={{ fontSize: 9, fontWeight: 400, color: 'var(--muted, #9ca3af)', marginTop: 1 }}>{dateRange}</div>
+      )}
+    </div>
+  );
+};
+
 interface RoadmapGridProps {
   /** Hide the built-in filter row when the host already provides one (VisualCanvas does). */
   showFilters?: boolean;
@@ -113,6 +190,7 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
     setFilters((prev) => ({ ...prev, [key]: value }));
   const [stories, setStories] = useState<any[]>([]);
   const [focusGoalIds, setFocusGoalIds] = useState<Set<string>>(new Set());
+  const [pots, setPots] = useState<Record<string, { name: string; balance: number }>>({});
   const [fullScreen, setFullScreen] = useState(false);
   const shellRef = React.useRef<HTMLDivElement>(null);
   /**
@@ -171,11 +249,41 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
           snap.docs.forEach((d) => (d.data()?.goalIds || []).forEach((gid: string) => ids.add(gid)));
           setFocusGoalIds(ids);
         }),
+      // Backs the savings-progress line in the sprint-level goal lane — same source
+      // GlobalGoalFocusBanner reads for goal.estimatedCost vs pot balance.
+      onSnapshot(query(collection(db, 'monzo_pots'), where('ownerUid', '==', currentUser.uid)),
+        (snap) => {
+          const map: Record<string, { name: string; balance: number }> = {};
+          snap.docs.forEach((d) => {
+            const data = d.data() as any;
+            if (data.potId) map[data.potId] = { name: data.name || '', balance: data.balance || 0 };
+          });
+          setPots(map);
+        }),
     ];
     return () => unsubs.forEach((u) => u());
   }, [selfLoading, currentUser]);
 
   const sourceGoals = providedGoals ?? ownGoals;
+
+  /**
+   * Per-goal story completion, for the sprint-level lane label. Same STORY status scale as
+   * GlobalGoalFocusBanner (status >= 4 is done) — see the comment there for why this used to
+   * read the task/goal scale and reported 0% on goals that were actually finished.
+   */
+  const goalStoryStats = useMemo(() => {
+    const map = new Map<string, { total: number; done: number }>();
+    for (const st of stories) {
+      const gid = st.goalId;
+      if (!gid) continue;
+      const status = Number(st.status ?? 0);
+      const cur = map.get(gid) ?? { total: 0, done: 0 };
+      cur.total++;
+      if (status >= 4) cur.done++;
+      map.set(gid, cur);
+    }
+    return map;
+  }, [stories]);
 
   /** Story counts and sprint membership per goal — the inputs the filters need. */
   const filterContext = useMemo(() => {
@@ -204,11 +312,15 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
     return sourceGoals.filter((g) => goalMatchesRoadmapFilters(g, filters, filterContext));
   }, [sourceGoals, selfLoading, filters, filterContext]);
 
-  /** Years present in the data, for the multi-select — mirrors the Gantt's Years filter. */
+  /**
+   * Years present in the data, for the multi-select — mirrors the Gantt's Years filter.
+   * Falls back to startDate for the same reason the grid placement below does: a goal with
+   * only a start date still has a year worth filtering on.
+   */
   const availableYears = useMemo(() => {
     const ys = new Set<number>();
     for (const g of sourceGoals) {
-      const key = computeQuarterKey((g as any).endDate || (g as any).dueDate);
+      const key = computeQuarterKey((g as any).endDate || (g as any).dueDate || (g as any).startDate);
       if (key) ys.add(Number(key.split('-')[0]));
     }
     return [...ys].sort();
@@ -222,7 +334,7 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
     if (currentPeriodKey) keys.add(currentPeriodKey);
     for (const g of goals) {
       const k1 = computePeriodKey((g as any).endDate || (g as any).dueDate, granularity, sprints as any);
-      const k2 = computePeriodKey((g as any).plannedStartDate, granularity, sprints as any);
+      const k2 = computePeriodKey((g as any).startDate, granularity, sprints as any);
       if (k1) keys.add(k1);
       if (k2) keys.add(k2);
     }
@@ -252,11 +364,21 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
       }));
   }, [goals, rowAxis]);
 
+  const goalsById = useMemo(() => new Map(goals.map((g) => [g.id, g])), [goals]);
+  /** 240px at sprint granularity so the goal lane's progress/KPI/date detail has room; the
+   * plain theme label at quarter granularity doesn't need it. */
+  const labelColW = rowAxis === 'goal' ? 240 : THEME_COL_W;
+
   const grid = useMemo(() => {
     const m = new Map<string, Map<string, Goal[]>>();
     for (const g of goals) {
       const rowKey = rowAxis === 'theme' ? `theme-${Number((g as any).theme ?? 0)}` : `goal-${g.id}`;
-      const cell = computePeriodKey((g as any).endDate || (g as any).dueDate, granularity, sprints as any) ?? UNSCHEDULED_COLUMN;
+      // Falls back to startDate before giving up to Backlog: a goal with a start date but no
+      // end/due date does have a planned quarter, even though nothing had been anchoring its
+      // placement to it before.
+      const cell = computePeriodKey(
+        (g as any).endDate || (g as any).dueDate || (g as any).startDate, granularity, sprints as any,
+      ) ?? UNSCHEDULED_COLUMN;
       if (!m.has(rowKey)) m.set(rowKey, new Map());
       const row = m.get(rowKey)!;
       if (!row.has(cell)) row.set(cell, []);
@@ -276,8 +398,12 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
     const m = new Map<string, any[]>();
     if (granularity !== 'sprint') return m;
     for (const st of stories) {
-      if (!st.goalId || !st.sprintId) continue;
-      const key = `goal-${st.goalId}:${st.sprintId}`;
+      if (!st.goalId) continue;
+      // No sprintId — including one just cleared by a drag to this column — lands in
+      // UNSCHEDULED_COLUMN rather than being dropped. It used to be skipped outright, which
+      // made a story vanish the moment you dragged it out of a sprint: writing sprintId=null
+      // took it out of every bucket with nothing to put it back into.
+      const key = `goal-${st.goalId}:${st.sprintId || UNSCHEDULED_COLUMN}`;
       if (!m.has(key)) m.set(key, []);
       m.get(key)!.push(st);
     }
@@ -340,7 +466,11 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
               stories, focus goals, sprint scope. The Gantt's zoom / Quarter / Month / Week
               controls are deliberately absent — they change a timeline's granularity, and this
               grid's columns are quarters by definition. */}
-          <div className="grv5-toolbar" style={{ flexWrap: 'nowrap', overflowX: 'auto' }}>
+          {/* overflowX:auto with no matching overflowY forces the UA to resolve overflowY to
+              auto too (CSS Overflow §3) — with the row sized exactly to its 32px controls,
+              that auto-clipped every button's border and focus ring by a pixel or two. The
+              vertical padding gives it slack to clip nothing while still scrolling sideways. */}
+          <div className="grv5-toolbar" style={{ flexWrap: 'nowrap', overflowX: 'auto', overflowY: 'hidden', padding: '4px 2px' }}>
             <div className="grv5-filters">
               <div className="grv5-search">
                 <Search size={16} />
@@ -421,7 +551,12 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
         </div>
       )}
 
-      <div style={{ flex: 1, minHeight: 0, overflow: 'auto', background: 'var(--bg, #f8f9fa)', padding: '12px 16px' }}>
+      {/* No top padding here — it moves onto the header cells below. Padding on the SCROLL
+          CONTAINER, not the sticky header, leaves a strip at the container's inner top edge
+          that a sticky child can never cover (sticky only sticks as far as the padding edge),
+          so whatever row had scrolled to that band stayed uncovered and read as content
+          poking through above the header. */}
+      <div style={{ flex: 1, minHeight: 0, overflow: 'auto', background: 'var(--bg, #f8f9fa)', padding: '0 16px 12px' }}>
         {goals.length === 0 ? (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--muted, #6b7280)' }}>
             <Filter size={32} style={{ opacity: 0.4, marginBottom: 12 }} />
@@ -431,15 +566,17 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
           <div style={{ minWidth: 'max-content' }}>
             {/* Sticky on both axes: the quarter header stays visible while scrolling down,
                 and the theme column while scrolling right. Without this you lose track of which
-                quarter a column is as soon as the grid is taller or wider than the viewport. */}
-            <div style={{ display: 'flex', marginBottom: 2, position: 'sticky', top: 0, zIndex: 3 }}>
+                quarter a column is as soon as the grid is taller or wider than the viewport.
+                The 12px top padding lives on each cell (so its own opaque background paints
+                it) rather than on the row or the scroll container — see the comment above. */}
+            <div style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 3 }}>
               <div style={{
-                width: THEME_COL_W, flexShrink: 0, position: 'sticky', left: 0, zIndex: 4,
+                width: labelColW, flexShrink: 0, paddingTop: 12, position: 'sticky', left: 0, zIndex: 4,
                 background: 'var(--bg, #f8f9fa)',
               }} />
               {columns.map((qKey) => (
                 <div key={qKey} style={{
-                  width: COL_W, flexShrink: 0, padding: '5px 10px',
+                  width: COL_W, flexShrink: 0, padding: '17px 10px 5px',
                   fontSize: 11, fontWeight: 700, color: 'var(--text, #374151)',
                   borderLeft: '1px solid var(--line, #e5e7eb)',
                   background: qKey === currentPeriodKey ? 'var(--accent-soft, #dbeafe)' : 'var(--panel, #f1f5f9)',
@@ -455,16 +592,30 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
               const themeGoals = grid.get(theme.key);
               return (
                 <div key={theme.key} style={{ display: 'flex', marginBottom: 1 }}>
-                  <div style={{
-                    width: THEME_COL_W, flexShrink: 0, padding: '8px 10px',
-                    borderTop: `3px solid ${theme.color}`,
-                    // Opaque, not the usual 18% tint: a sticky column has cells sliding beneath
-                    // it, and a translucent background shows them through.
-                    background: `color-mix(in srgb, ${theme.color} 12%, var(--card, #fff))`,
-                    fontSize: 11, fontWeight: 700, color: theme.color,
-                    position: 'sticky', left: 0, zIndex: 2,
-                  }}>
-                    {theme.label}
+                  <div
+                    onClick={theme.goalId ? () => {
+                      const g = goalsById.get(theme.goalId!);
+                      if (g) showSidebar(g, 'goal');
+                    } : undefined}
+                    title={theme.goalId ? `${theme.label} — click for detail` : undefined}
+                    style={{
+                      width: labelColW, flexShrink: 0, padding: '8px 10px',
+                      borderTop: `3px solid ${theme.color}`,
+                      // Opaque, not the usual 18% tint: a sticky column has cells sliding beneath
+                      // it, and a translucent background shows them through.
+                      background: `color-mix(in srgb, ${theme.color} 12%, var(--card, #fff))`,
+                      fontSize: 11, fontWeight: 700, color: theme.color,
+                      position: 'sticky', left: 0, zIndex: 2,
+                      cursor: theme.goalId ? 'pointer' : undefined,
+                    }}>
+                    {theme.goalId && goalsById.get(theme.goalId) ? (
+                      <GoalLaneLabel
+                        goal={goalsById.get(theme.goalId)!}
+                        color={theme.color}
+                        stats={goalStoryStats.get(theme.goalId)}
+                        pots={pots}
+                      />
+                    ) : theme.label}
                   </div>
                   {columns.map((qKey) => {
                     const cellGoals = themeGoals?.get(qKey) || [];

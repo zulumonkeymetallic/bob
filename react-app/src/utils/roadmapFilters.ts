@@ -9,6 +9,10 @@
  */
 import type { Goal, Sprint } from '../types';
 
+/** Matches ThemeMultiSelect's own TRAVEL_THEME_ID — kept in sync manually since that constant
+ * lives in a component file this util shouldn't import from. */
+const TRAVEL_THEME_ID = 7;
+
 export interface RoadmapFilterState {
   search: string;
   /** Empty means all themes. */
@@ -77,7 +81,16 @@ export function goalMatchesRoadmapFilters(
 ): boolean {
   const g = goal as any;
 
-  if (filters.themeIds.length > 0 && !filters.themeIds.includes(Number(g.theme ?? 0))) return false;
+  if (filters.themeIds.length > 0) {
+    if (!filters.themeIds.includes(Number(g.theme ?? 0))) return false;
+  } else if (Number(g.theme ?? 0) === TRAVEL_THEME_ID) {
+    // "All Themes" hides Travel & Adventure by default, matching the picker's own default —
+    // ThemeMultiSelect already hides its checkbox behind a "+ Show travel" toggle, but until
+    // now that only hid the checkbox, not the goals themselves, so Travel goals still rendered
+    // under a filter state that claimed to show everything. Explicitly picking Travel in the
+    // multi-select still shows it, same as picking any other single theme.
+    return false;
+  }
 
   if (filters.years.length > 0) {
     const end = ms(g.endDate) ?? ms(g.targetDate) ?? ms(g.dueDate);
