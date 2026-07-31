@@ -9,6 +9,7 @@ import UnifiedRoadmapGanttView from './UnifiedRoadmapGanttView';
 import SprintPlanningMatrix from '../SprintPlanningMatrix';
 import SprintWeekPlanner from './SprintWeekPlanner';
 import RoadmapGrid from './RoadmapGrid';
+import { useFeatureFlag } from '../../hooks/useFeatureFlag';
 
 const toAnchorDate = (value: string | null) => {
   if (!value) return null;
@@ -27,6 +28,7 @@ const UnifiedPlannerLevels: React.FC = () => {
   const navigate = useNavigate();
   const query = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const level = normalizePlannerLevel(query.get('level'));
+  const consolidated = useFeatureFlag('roadmap_replaces_planner_levels');
   const embedded = query.get('embed') === '1' || query.get('embed') === 'true';
   const anchorDate = useMemo(() => {
     const explicit = toAnchorDate(query.get('anchor'));
@@ -43,12 +45,18 @@ const UnifiedPlannerLevels: React.FC = () => {
     return <UnifiedRoadmapGanttView initialSubView="gantt" />;
   }
 
+  // `year` rendered the same component as `gantt` — a straight duplicate. `quarter` overlapped
+  // what the roadmap does better. Both now point at the roadmap, behind a flag: setting
+  // roadmap_replaces_planner_levels false restores the original components, which are left
+  // in place untouched.
   if (level === 'year') {
-    return <UnifiedRoadmapGanttView initialSubView="roadmap" />;
+    return consolidated ? <RoadmapGrid /> : <UnifiedRoadmapGanttView initialSubView="roadmap" />;
   }
 
   if (level === 'quarter') {
-    return <UnifiedGoalPlannerLevels level={level} anchorDate={anchorDate} embedded={embedded} />;
+    return consolidated
+      ? <RoadmapGrid />
+      : <UnifiedGoalPlannerLevels level={level} anchorDate={anchorDate} embedded={embedded} />;
   }
 
   if (level === 'sprint') {

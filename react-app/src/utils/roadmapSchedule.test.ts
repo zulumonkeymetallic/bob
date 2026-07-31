@@ -4,6 +4,11 @@ import {
   rescheduleGoalToQuarter,
   DEFAULT_GOAL_DURATION_MS,
   roadmapColumnOrder,
+  computeMonthKey,
+  monthOrdinal,
+  rescheduleGoalToPeriod,
+  roadmapPeriodOrder,
+  ROADMAP_ROW_AXIS,
 } from './roadmapSchedule';
 
 const q = (key: string) => new Date(quarterMidTimestamp(key)!);
@@ -156,5 +161,53 @@ describe('roadmapColumnOrder', () => {
   it('still returns something usable when the current quarter is unknown', () => {
     expect(roadmapColumnOrder(['2026-Q1', '2026-Q2'], null))
       .toEqual(['unscheduled', '2026-Q1', '2026-Q2']);
+  });
+});
+
+describe('month granularity', () => {
+  it('pads the month so the ordinal sorts correctly', () => {
+    // '2026-M9' would sort after '2026-M10' lexically; the ordinal is what makes it right.
+    expect(computeMonthKey(new Date(2026, 8, 15).getTime())).toBe('2026-M09');
+    expect(monthOrdinal('2026-M09')! < monthOrdinal('2026-M10')!).toBe(true);
+  });
+
+  it('crosses a year boundary in order', () => {
+    expect(monthOrdinal('2026-M12')! < monthOrdinal('2027-M01')!).toBe(true);
+  });
+
+  it('rejects an impossible month', () => {
+    expect(monthOrdinal('2026-M13')).toBeNull();
+    expect(monthOrdinal('2026-M00')).toBeNull();
+  });
+
+  it('anchors a dropped goal inside the target month', () => {
+    const r = rescheduleGoalToPeriod('2027-M03', 'month', null, null)!;
+    const end = new Date(r.endDate);
+    expect(end.getFullYear()).toBe(2027);
+    expect(end.getMonth()).toBe(2);       // March
+    expect(r.startDate).toBeLessThan(r.endDate);
+  });
+
+  it('keeps the duration across a month move, like the quarter version', () => {
+    const day = 86_400_000;
+    const s = new Date(2026, 0, 1).getTime();
+    const r = rescheduleGoalToPeriod('2026-M08', 'month', s, s + 20 * day)!;
+    expect(r.endDate - r.startDate).toBe(20 * day);
+  });
+
+  it('orders month columns with Unscheduled first and one month of history', () => {
+    const cols = roadmapPeriodOrder(
+      ['2026-M05', '2026-M06', '2026-M07', '2026-M08'], '2026-M07', 'month');
+    expect(cols).toEqual(['unscheduled', '2026-M06', '2026-M07', '2026-M08']);
+  });
+
+  it('delegates to the quarter ordering when granularity is quarter', () => {
+    expect(roadmapPeriodOrder(['2026-Q2', '2026-Q3'], '2026-Q3', 'quarter'))
+      .toEqual(['unscheduled', '2026-Q2', '2026-Q3']);
+  });
+
+  it('pairs each granularity with the row axis that suits it', () => {
+    expect(ROADMAP_ROW_AXIS.quarter).toBe('theme');
+    expect(ROADMAP_ROW_AXIS.month).toBe('goal');
   });
 });

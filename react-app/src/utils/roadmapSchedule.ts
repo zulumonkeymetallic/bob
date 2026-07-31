@@ -101,3 +101,99 @@ export function roadmapColumnOrder(quarterKeys: string[], currentKey: string | n
 
   return [UNSCHEDULED_COLUMN, ...kept];
 }
+
+// ── Granularity ──────────────────────────────────────────────────────────────
+
+/**
+ * How wide a roadmap column is, and — deliberately coupled — what a ROW means.
+ *
+ * The row axis changes with the time axis because that is how planning horizon actually
+ * works: across a quarter you are balancing themes against each other, across a month you are
+ * asking which goals land when. A fixed row axis makes one of those two views useless.
+ *
+ * It stops at month. Days belong to the Calendar, which already has Google sync, real events
+ * and time-of-day placement; rebuilding that here would duplicate the strongest surface in the
+ * app with a worse version.
+ */
+export function computeQuarterKey(ts: number | null | undefined): string | null {
+  if (!ts || !Number.isFinite(ts)) return null;
+  const d = new Date(ts);
+  return `${d.getFullYear()}-Q${Math.ceil((d.getMonth() + 1) / 3)}`;
+}
+
+export function quarterLabel(key: string): string {
+  if (key === UNSCHEDULED_COLUMN) return 'Unscheduled';
+  const [year, q] = key.split('-');
+  return `${q} ${year}`;
+}
+
+export type RoadmapGranularity = 'quarter' | 'month';
+
+export const ROADMAP_ROW_AXIS: Record<RoadmapGranularity, 'theme' | 'goal'> = {
+  quarter: 'theme',
+  month: 'goal',
+};
+
+export function computeMonthKey(ts: number | null | undefined): string | null {
+  if (!ts || !Number.isFinite(ts)) return null;
+  const d = new Date(ts);
+  return `${d.getFullYear()}-M${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+export function monthOrdinal(key: string): number | null {
+  const m = /^(\d{4})-M(0[1-9]|1[0-2])$/.exec(key);
+  return m ? Number(m[1]) * 12 + (Number(m[2]) - 1) : null;
+}
+
+export function monthLabel(key: string): string {
+  const m = /^(\d{4})-M(\d{2})$/.exec(key);
+  if (!m) return key;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, 1);
+  return d.toLocaleString(undefined, { month: 'short', year: 'numeric' });
+}
+
+/** Period key for a timestamp at the given granularity. */
+export function computePeriodKey(ts: number | null | undefined, g: RoadmapGranularity): string | null {
+  return g === 'month' ? computeMonthKey(ts) : computeQuarterKey(ts);
+}
+
+export function periodLabel(key: string, g: RoadmapGranularity): string {
+  if (key === UNSCHEDULED_COLUMN) return 'Unscheduled';
+  return g === 'month' ? monthLabel(key) : quarterLabel(key);
+}
+
+/** Mid-period timestamp — the anchor a dropped goal's end date takes. */
+export function periodMidTimestamp(key: string, g: RoadmapGranularity): number | null {
+  if (g !== 'month') return quarterMidTimestamp(key);
+  const m = /^(\d{4})-M(\d{2})$/.exec(key);
+  if (!m) return null;
+  return new Date(Number(m[1]), Number(m[2]) - 1, 15, 12, 0, 0).getTime();
+}
+
+/** Granularity-aware sibling of rescheduleGoalToQuarter. Same end-anchored rule. */
+export function rescheduleGoalToPeriod(
+  key: string, g: RoadmapGranularity, prevStart: unknown, prevEnd: unknown,
+): RescheduledDates | null {
+  const end = periodMidTimestamp(key, g);
+  if (end == null) return null;
+  return { startDate: end - goalDurationMs(prevStart, prevEnd), endDate: end };
+}
+
+/** Column order at either granularity: [Unscheduled, P(n-1), P(n), P(n+1), ...]. */
+export function roadmapPeriodOrder(
+  keys: string[], currentKey: string | null, g: RoadmapGranularity,
+): string[] {
+  if (g !== 'month') return roadmapColumnOrder(keys, currentKey);
+
+  const ord = monthOrdinal;
+  const cur = currentKey ? ord(currentKey) : null;
+  const sorted = [...new Set(keys)].filter((k) => ord(k) != null).sort((a, b) => ord(a)! - ord(b)!);
+  if (cur == null) return [UNSCHEDULED_COLUMN, ...sorted];
+
+  const kept = sorted.filter((k) => ord(k)! >= cur - 1);
+  if (currentKey && !kept.includes(currentKey)) {
+    kept.push(currentKey);
+    kept.sort((a, b) => ord(a)! - ord(b)!);
+  }
+  return [UNSCHEDULED_COLUMN, ...kept];
+}

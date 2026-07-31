@@ -19,9 +19,15 @@ import type { Goal } from '../../types';
 import { GLOBAL_THEMES } from '../../constants/globalThemes';
 import { goalThemeColor as resolveGoalThemeColor } from '../../utils/storyCardFormatting';
 import {
-  rescheduleGoalToQuarter as computeGoalDates,
-  roadmapColumnOrder,
+  rescheduleGoalToPeriod,
+  roadmapPeriodOrder,
+  computePeriodKey,
+  periodLabel,
+  ROADMAP_ROW_AXIS,
   UNSCHEDULED_COLUMN,
+  computeQuarterKey,
+  quarterLabel,
+  type RoadmapGranularity,
 } from '../../utils/roadmapSchedule';
 import EditGoalModal from '../EditGoalModal';
 import { useSprint } from '../../contexts/SprintContext';
@@ -37,18 +43,6 @@ import { Z } from '../../utils/layoutTokens';
 const GOAL_KIND_ICON: Record<string, string> = {
   focus: '◆', umbrella: '◈', phase: '◉', leaf: '○',
 };
-
-export function computeQuarterKey(ts: number | null | undefined): string | null {
-  if (!ts || !Number.isFinite(ts)) return null;
-  const d = new Date(ts);
-  return `${d.getFullYear()}-Q${Math.ceil((d.getMonth() + 1) / 3)}`;
-}
-
-export function quarterLabel(key: string): string {
-  if (key === UNSCHEDULED_COLUMN) return 'Unscheduled';
-  const [year, q] = key.split('-');
-  return `${q} ${year}`;
-}
 
 const COL_W = 210;
 const THEME_COL_W = 168;
@@ -117,6 +111,8 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
   const [stories, setStories] = useState<any[]>([]);
   const [focusGoalIds, setFocusGoalIds] = useState<Set<string>>(new Set());
   const [fullScreen, setFullScreen] = useState(false);
+  const [granularity, setGranularity] = useState<RoadmapGranularity>('quarter');
+  const rowAxis = ROADMAP_ROW_AXIS[granularity];
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragOverCell, setDragOverCell] = useState<string | null>(null);
@@ -188,37 +184,56 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
     return [...ys].sort();
   }, [sourceGoals]);
 
-  const currentQuarterKey = useMemo(() => computeQuarterKey(Date.now()), []);
+  const currentPeriodKey = useMemo(
+    () => computePeriodKey(Date.now(), granularity), [granularity]);
 
   const columns = useMemo(() => {
     const keys = new Set<string>();
-    if (currentQuarterKey) keys.add(currentQuarterKey);
+    if (currentPeriodKey) keys.add(currentPeriodKey);
     for (const g of goals) {
-      const k1 = computeQuarterKey((g as any).endDate || (g as any).dueDate);
-      const k2 = computeQuarterKey((g as any).plannedStartDate);
+      const k1 = computePeriodKey((g as any).endDate || (g as any).dueDate, granularity);
+      const k2 = computePeriodKey((g as any).plannedStartDate, granularity);
       if (k1) keys.add(k1);
       if (k2) keys.add(k2);
     }
-    return roadmapColumnOrder([...keys], currentQuarterKey);
-  }, [goals, currentQuarterKey]);
+    return roadmapPeriodOrder([...keys], currentPeriodKey, granularity);
+  }, [goals, currentPeriodKey, granularity]);
 
-  const themes = useMemo(
-    () => GLOBAL_THEMES.filter((t) => goals.some((g) => Number((g as any).theme ?? 0) === t.id)),
-    [goals],
-  );
+  /**
+   * Rows are themes at quarter granularity and individual goals at month granularity. Across a
+   * quarter you are balancing themes; across a month you are asking which goals land when, and
+   * a theme row there just stacks unrelated goals on top of each other.
+   */
+  const rows = useMemo(() => {
+    if (rowAxis === 'theme') {
+      return GLOBAL_THEMES
+        .filter((t) => goals.some((g) => Number((g as any).theme ?? 0) === t.id))
+        .map((t) => ({ key: `theme-${t.id}`, label: t.name, color: t.color, themeId: t.id, goalId: null as string | null }));
+    }
+    return goals
+      .slice()
+      .sort((a, b) => (a.title || '').localeCompare(b.title || ''))
+      .map((g) => ({
+        key: `goal-${g.id}`,
+        label: g.title || '(untitled)',
+        color: resolveGoalThemeColor(g, GLOBAL_THEMES) || 'var(--brand, #6366f1)',
+        themeId: Number((g as any).theme ?? 0),
+        goalId: g.id,
+      }));
+  }, [goals, rowAxis]);
 
   const grid = useMemo(() => {
-    const m = new Map<number, Map<string, Goal[]>>();
+    const m = new Map<string, Map<string, Goal[]>>();
     for (const g of goals) {
-      const themeId = Number((g as any).theme ?? 0);
-      const cell = computeQuarterKey((g as any).endDate || (g as any).dueDate) ?? UNSCHEDULED_COLUMN;
-      if (!m.has(themeId)) m.set(themeId, new Map());
-      const row = m.get(themeId)!;
+      const rowKey = rowAxis === 'theme' ? `theme-${Number((g as any).theme ?? 0)}` : `goal-${g.id}`;
+      const cell = computePeriodKey((g as any).endDate || (g as any).dueDate, granularity) ?? UNSCHEDULED_COLUMN;
+      if (!m.has(rowKey)) m.set(rowKey, new Map());
+      const row = m.get(rowKey)!;
       if (!row.has(cell)) row.set(cell, []);
       row.get(cell)!.push(g);
     }
     return m;
-  }, [goals]);
+  }, [goals, rowAxis, granularity]);
 
   /**
    * A drop writes BOTH goal dates. Only endDate used to be written, which left startDate stale
@@ -232,7 +247,7 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
         await updateDoc(doc(db, 'goals', goalId), { endDate: null, dueDate: null, updatedAt: serverTimestamp() } as any);
         return;
       }
-      const next = computeGoalDates(qKey, (goal as any).startDate, (goal as any).endDate ?? (goal as any).dueDate);
+      const next = rescheduleGoalToPeriod(qKey, granularity, (goal as any).startDate, (goal as any).endDate ?? (goal as any).dueDate);
       if (!next) return;
       await updateDoc(doc(db, 'goals', goalId), {
         startDate: next.startDate, endDate: next.endDate, updatedAt: serverTimestamp(),
@@ -303,6 +318,26 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
                 Focus goals only
               </label>
             </div>
+            {/* Granularity also flips the row axis — themes across a quarter, goals across a
+                month. It deliberately stops at month: days belong to the Calendar. */}
+            <div className="btn-group btn-group-sm" role="group" aria-label="Granularity" style={{ flexShrink: 0 }}>
+              {(['quarter', 'month'] as const).map((g) => (
+                <button
+                  key={g}
+                  type="button"
+                  className="grv5-select"
+                  style={{
+                    cursor: 'pointer', padding: '0 10px', textTransform: 'capitalize',
+                    background: granularity === g ? 'var(--brand, #5f77dc)' : undefined,
+                    color: granularity === g ? '#fff' : undefined,
+                  }}
+                  onClick={() => setGranularity(g)}
+                  title={g === 'quarter' ? 'Quarters, one row per theme' : 'Months, one row per goal'}
+                >
+                  {g}
+                </button>
+              ))}
+            </div>
             {hasActiveRoadmapFilters(filters) && (
               <button type="button" className="grv5-select" style={{ cursor: 'pointer', padding: '0 10px' }}
                 onClick={() => setFilters(EMPTY_ROADMAP_FILTERS)}>
@@ -342,19 +377,19 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
                   width: COL_W, flexShrink: 0, padding: '5px 10px',
                   fontSize: 11, fontWeight: 700, color: 'var(--text, #374151)',
                   borderLeft: '1px solid var(--line, #e5e7eb)',
-                  background: qKey === currentQuarterKey ? 'var(--accent-soft, #dbeafe)' : 'var(--panel, #f1f5f9)',
+                  background: qKey === currentPeriodKey ? 'var(--accent-soft, #dbeafe)' : 'var(--panel, #f1f5f9)',
                   position: 'sticky', top: 0,
                 }}>
-                  {quarterLabel(qKey)}
-                  {qKey === currentQuarterKey && <span style={{ marginLeft: 5, fontSize: 9, color: 'var(--brand, #3b82f6)' }}>▶ now</span>}
+                  {periodLabel(qKey, granularity)}
+                  {qKey === currentPeriodKey && <span style={{ marginLeft: 5, fontSize: 9, color: 'var(--brand, #3b82f6)' }}>▶ now</span>}
                 </div>
               ))}
             </div>
 
-            {themes.map((theme) => {
-              const themeGoals = grid.get(theme.id);
+            {rows.map((theme) => {
+              const themeGoals = grid.get(theme.key);
               return (
-                <div key={theme.id} style={{ display: 'flex', marginBottom: 1 }}>
+                <div key={theme.key} style={{ display: 'flex', marginBottom: 1 }}>
                   <div style={{
                     width: THEME_COL_W, flexShrink: 0, padding: '8px 10px',
                     borderTop: `3px solid ${theme.color}`,
@@ -364,11 +399,11 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
                     fontSize: 11, fontWeight: 700, color: theme.color,
                     position: 'sticky', left: 0, zIndex: 2,
                   }}>
-                    {theme.name}
+                    {theme.label}
                   </div>
                   {columns.map((qKey) => {
                     const cellGoals = themeGoals?.get(qKey) || [];
-                    const cellId = `${theme.id}:${qKey}`;
+                    const cellId = `${theme.key}:${qKey}`;
                     const isDropTarget = dragId != null && dragOverCell === cellId;
                     return (
                       <div

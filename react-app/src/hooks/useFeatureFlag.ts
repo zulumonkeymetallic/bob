@@ -28,6 +28,11 @@ const DEFAULT_FLAGS: Record<string, boolean> = {
    * if the shell misbehaves on a device we have not seen.
    */
   tablet_shell: true,
+  /**
+   * Roadmap absorbs the `year` and `quarter` planner levels. Set false to route those back to
+   * their original components, which are still present and unmodified — that is the rollback.
+   */
+  roadmap_replaces_planner_levels: true,
 };
 
 interface FeatureFlagState {
