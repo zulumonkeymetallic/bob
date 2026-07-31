@@ -87,7 +87,7 @@ const WeeklyPlannerSummaryCard: React.FC = () => {
               <Badge bg="warning" text="dark">Deferred {Number(planningSummary?.acceptedDefers || 0)}</Badge>
             </div>
             <Button size="sm" variant="outline-primary" onClick={() => navigate('/planner?level=week')}>
-              Open 4-day planner
+              Open weekly plan
             </Button>
           </>
         )}

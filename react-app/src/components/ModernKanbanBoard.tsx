@@ -1643,8 +1643,8 @@ const ModernKanbanBoard: React.FC<ModernKanbanBoardProps> = ({ onItemSelect, spr
           <Button
             variant="outline-secondary"
             onClick={handleOpenSevenDayPlanner}
-            aria-label="Open 4-day planner"
-            title="Open 4-day planner"
+            aria-label="Open weekly plan"
+            title="Open weekly plan"
             className="btn-icon-themed"
           >
             <Clock3 size={16} />

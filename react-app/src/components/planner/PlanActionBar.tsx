@@ -34,7 +34,7 @@ const PLAN_LEVELS: PlanDestination[] = [
   { level: 'year', label: 'Year Planner' },
   { level: 'quarter', label: 'Quarter Planner' },
   { level: 'sprint', label: 'Multi Sprint Planner' },
-  { level: 'week', label: '4-Day Planner' },
+  { level: 'week', label: 'Weekly Plan' },
   { level: 'calendar', label: 'Calendar' },
 ];
 

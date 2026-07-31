@@ -257,8 +257,12 @@ const SprintWeekPlanner: React.FC<SprintWeekPlannerProps> = ({ anchorDate }) => 
     return items
       .filter((item) => {
         if (item.kind === 'event') return false;
+        // Only an actual calendar block/instance counts as scheduled. dueAt used to disqualify
+        // an item too — but dueAt is just a deadline (story.targetDate/dueDate/plannedStartDate
+        // when there's no linked block, see plannerItems.ts), not proof the item has a slot on
+        // the calendar. That silently hid every item that had a due date but was never actually
+        // placed — including, for an overdue sprint, exactly the stories most needing attention.
         if (item.scheduledBlockId || item.scheduledInstanceId) return false;
-        if (item.dueAt != null) return false;
         const itemSprintId = item.rawTask?.sprintId || item.rawStory?.sprintId;
         return itemSprintId === selectedSprintId;
       })

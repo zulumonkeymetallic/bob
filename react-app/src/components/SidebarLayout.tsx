@@ -173,7 +173,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Year Planner', path: '/planner?level=year', icon: 'route' },
         { label: 'Gannt chart', path: '/planner?level=gantt', icon: 'stream' },
         { label: 'Multi Sprint Planner', path: '/planner?level=sprint', icon: 'th' },
-        { label: '4-Day Planner', path: '/planner?level=week', icon: 'th-large' },
+        { label: 'Weekly Plan', path: '/planner?level=week', icon: 'th-large' },
       ],
     },
     {
@@ -249,7 +249,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       items: [
         { label: 'Calendar', path: '/calendar', icon: 'calendar' },
         { label: 'Weekly Capacity', path: '/calendar/planner', icon: 'palette' },
-        { label: '4-Day Planner', path: '/planner?level=week', icon: 'th-large' },
+        { label: 'Weekly Plan', path: '/planner?level=week', icon: 'th-large' },
         { label: 'Sprint Capacity', path: '/sprints/capacity', icon: 'chart-pie' },
         { label: 'Google Integration', path: '/calendar/integration', icon: 'google' }
       ]

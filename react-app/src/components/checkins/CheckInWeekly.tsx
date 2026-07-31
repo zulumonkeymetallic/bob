@@ -606,7 +606,7 @@ const CheckInWeekly: React.FC = () => {
               <div>
                 <div className="fw-semibold">Weekly Review Tools</div>
                 <div className="text-muted small">
-                  Use Weekly Capacity and the 4-day planner together before locking next week.
+                  Use Weekly Capacity and the weekly plan together before locking next week.
                 </div>
               </div>
               <div className="d-flex flex-wrap gap-2">
@@ -614,7 +614,7 @@ const CheckInWeekly: React.FC = () => {
                   Weekly Capacity
                 </Button>
                 <Button size="sm" variant="outline-primary" onClick={() => navigate('/planner?level=week')}>
-                  4-Day Planner
+                  Weekly Plan
                 </Button>
                 <Button size="sm" variant="outline-secondary" onClick={() => navigate('/planner?level=sprint')}>
                   Multi Sprint Planner
@@ -625,7 +625,7 @@ const CheckInWeekly: React.FC = () => {
           <WeeklyPlannerSurface
             weekStart={planningWeekStart}
             embedded
-            title={`4-Day Planner · Week of ${format(planningWeekStart, 'dd MMM yyyy')}`}
+            title={`Weekly Plan · Week of ${format(planningWeekStart, 'dd MMM yyyy')}`}
             visibleDays={4}
             initialDetailLevel="minimal"
             hideGoalTextWhenMinimal

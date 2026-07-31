@@ -829,11 +829,11 @@ const WeeklyThemePlanner: React.FC = () => {
                         variant="outline-secondary"
                         onClick={() => navigate('/planner?level=week')}
                         disabled={saving || applying || deltaReplanLoading || nightlyRunning || seedLoading}
-                        title="Open 4-day planner."
+                        title="Open weekly plan."
                         style={{ whiteSpace: 'nowrap' }}
                     >
                         <Clock size={14} className="me-1" />
-                        4-day view
+                        Weekly plan
                     </Button>
                     <Button
                         size="sm"
@@ -916,11 +916,11 @@ const WeeklyThemePlanner: React.FC = () => {
                             size="sm"
                             variant="outline-secondary"
                             onClick={() => navigate('/planner?level=week')}
-                            title="Open 4-day planner."
+                            title="Open weekly plan."
                             style={{ whiteSpace: 'nowrap' }}
                         >
                             <Clock size={14} className="me-1" />
-                            4-day view
+                            Weekly plan
                         </Button>
                     </div>
                 )}
