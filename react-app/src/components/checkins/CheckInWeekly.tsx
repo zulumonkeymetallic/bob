@@ -10,6 +10,8 @@ import type { FocusGoal, Goal } from '../../types';
 import { getGoalDisplayPath, getProtectedFocusGoalIds, isGoalInHierarchySet } from '../../utils/goalHierarchy';
 import { getKpiHealthRollupLabel, getKpiStateBadge } from '../../utils/kpiDisplay';
 import WeeklyPlannerSurface from '../planner/WeeklyPlannerSurface';
+import SprintPlannerWizard from '../sprints/SprintPlannerWizard';
+import { useSprint } from '../../contexts/SprintContext';
 
 interface GoalMetricDoc {
   goalId: string;
@@ -97,7 +99,20 @@ const toNumber = (value: any): number | null => {
 const CheckInWeekly: React.FC = () => {
   const { currentUser } = useAuth();
   const navigate = useNavigate();
+  const { sprints } = useSprint();
   const [mode, setMode] = useState<'reflect' | 'plan'>('reflect');
+  const [showPlanningWizard, setShowPlanningWizard] = useState(false);
+
+  /** The wizard plans whichever sprint hasn't started yet — the thing "next week" actually
+   * means from this check-in. Falls back to null (wizard then creates a new sprint) when
+   * there's nothing already scheduled ahead. */
+  const nextSprint = useMemo(() => {
+    const now = Date.now();
+    const upcoming = sprints
+      .filter((s) => Number((s as any).startDate || 0) > now)
+      .sort((a, b) => Number((a as any).startDate || 0) - Number((b as any).startDate || 0));
+    return upcoming[0] || null;
+  }, [sprints]);
   const [weekStart, setWeekStart] = useState<Date>(() =>
     startOfWeek(addDays(new Date(), -7), { weekStartsOn: 1 }),
   );
@@ -610,6 +625,9 @@ const CheckInWeekly: React.FC = () => {
                 </div>
               </div>
               <div className="d-flex flex-wrap gap-2">
+                <Button size="sm" variant="primary" onClick={() => setShowPlanningWizard(true)}>
+                  Weekly Planning Wizard
+                </Button>
                 <Button size="sm" variant="outline-secondary" onClick={() => navigate('/calendar/planner')}>
                   Weekly Capacity
                 </Button>
@@ -977,6 +995,16 @@ const CheckInWeekly: React.FC = () => {
             </Row>
           </div>
         </>
+      )}
+
+      {showPlanningWizard && (
+        <SprintPlannerWizard
+          show={showPlanningWizard}
+          onHide={() => setShowPlanningWizard(false)}
+          existingSprint={nextSprint}
+          currentUserId={currentUser?.uid}
+          onComplete={() => setShowPlanningWizard(false)}
+        />
       )}
     </div>
   );
