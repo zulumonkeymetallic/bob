@@ -24,6 +24,13 @@ import {
   UNSCHEDULED_COLUMN,
 } from '../../utils/roadmapSchedule';
 import EditGoalModal from '../EditGoalModal';
+import { useSprint } from '../../contexts/SprintContext';
+import {
+  goalMatchesRoadmapFilters,
+  hasActiveRoadmapFilters,
+  EMPTY_ROADMAP_FILTERS,
+  type RoadmapFilterState,
+} from '../../utils/roadmapFilters';
 import '../visualization/GoalRoadmapV5.css';
 import { Z } from '../../utils/layoutTokens';
 
@@ -104,17 +111,17 @@ interface RoadmapGridProps {
 const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: providedGoals }) => {
   const { currentUser } = useAuth();
   const [ownGoals, setOwnGoals] = useState<Goal[]>([]);
-  const [search, setSearch] = useState('');
-  const [themeFilter, setThemeFilter] = useState<'all' | number>('all');
-  const [yearFilter, setYearFilter] = useState<number[]>([]);
-  // Goal status 1 is "Work in Progress" — the old "Active only" label said nothing about which
-  // of the five goal statuses it meant.
-  const [inProgressOnly, setInProgressOnly] = useState(false);
+  const [filters, setFilters] = useState<RoadmapFilterState>(EMPTY_ROADMAP_FILTERS);
+  const setFilter = <K extends keyof RoadmapFilterState>(key: K, value: RoadmapFilterState[K]) =>
+    setFilters((prev) => ({ ...prev, [key]: value }));
+  const [stories, setStories] = useState<any[]>([]);
+  const [focusGoalIds, setFocusGoalIds] = useState<Set<string>>(new Set());
   const [fullScreen, setFullScreen] = useState(false);
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragOverCell, setDragOverCell] = useState<string | null>(null);
 
+  const { sprints, selectedSprintId } = useSprint();
   const selfLoading = providedGoals === undefined;
 
   useEffect(() => {
@@ -126,23 +133,50 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
     return () => unsub();
   }, [selfLoading, currentUser]);
 
+  // Stories and focus goals back "Goals with stories", "Focus goals only" and the sprint scope.
+  useEffect(() => {
+    if (!selfLoading || !currentUser?.uid) return;
+    const unsubs = [
+      onSnapshot(query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid)),
+        (snap) => setStories(snap.docs.map((d) => ({ id: d.id, ...d.data() })))),
+      onSnapshot(query(collection(db, 'focusGoals'), where('ownerUid', '==', currentUser.uid)),
+        (snap) => {
+          const ids = new Set<string>();
+          snap.docs.forEach((d) => (d.data()?.goalIds || []).forEach((gid: string) => ids.add(gid)));
+          setFocusGoalIds(ids);
+        }),
+    ];
+    return () => unsubs.forEach((u) => u());
+  }, [selfLoading, currentUser]);
+
   const sourceGoals = providedGoals ?? ownGoals;
+
+  /** Story counts and sprint membership per goal — the inputs the filters need. */
+  const filterContext = useMemo(() => {
+    const storyCountByGoal: Record<string, number> = {};
+    const sprintIdsByGoal: Record<string, Set<string>> = {};
+    for (const st of stories) {
+      const gid = st.goalId;
+      if (!gid) continue;
+      storyCountByGoal[gid] = (storyCountByGoal[gid] || 0) + 1;
+      if (st.sprintId) {
+        if (!sprintIdsByGoal[gid]) sprintIdsByGoal[gid] = new Set();
+        sprintIdsByGoal[gid].add(st.sprintId);
+      }
+    }
+    return {
+      storyCountByGoal,
+      sprintIdsByGoal,
+      focusGoalIds,
+      selectedSprint: sprints.find((sp) => sp.id === selectedSprintId) || null,
+      allGoals: sourceGoals,
+    };
+  }, [stories, focusGoalIds, sprints, selectedSprintId, sourceGoals]);
 
   const goals = useMemo(() => {
     if (!selfLoading) return sourceGoals;   // host has already filtered
-    const s = search.trim().toLowerCase();
-    return sourceGoals.filter((g) => {
-      if (inProgressOnly && Number(g.status) !== 1) return false;
-      if (themeFilter !== 'all' && Number((g as any).theme ?? 0) !== themeFilter) return false;
-      if (yearFilter.length > 0) {
-        const key = computeQuarterKey((g as any).endDate || (g as any).dueDate);
-        // Unscheduled goals have no year, so a year filter necessarily excludes them.
-        if (!key || !yearFilter.includes(Number(key.split('-')[0]))) return false;
-      }
-      if (s && !g.title?.toLowerCase().includes(s)) return false;
-      return true;
-    });
-  }, [sourceGoals, selfLoading, search, inProgressOnly, themeFilter, yearFilter]);
+    return sourceGoals.filter((g) => goalMatchesRoadmapFilters(g, filters, filterContext));
+  }, [sourceGoals, selfLoading, filters, filterContext]);
 
   /** Years present in the data, for the multi-select — mirrors the Gantt's Years filter. */
   const availableYears = useMemo(() => {
@@ -219,20 +253,24 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
           {/* Deliberately the Gantt's own markup and classes (grv5-filters / grv5-search /
               grv5-select) rather than Bootstrap equivalents, so the two views are visually
               identical and share one stylesheet. GoalRoadmapV5.css is imported for them. */}
+          {/* Same filter set as the Gantt (GoalRoadmapV6): search, theme, years, goals with
+              stories, focus goals, sprint scope. The Gantt's zoom / Quarter / Month / Week
+              controls are deliberately absent — they change a timeline's granularity, and this
+              grid's columns are quarters by definition. */}
           <div className="grv5-toolbar" style={{ flexWrap: 'nowrap', overflowX: 'auto' }}>
             <div className="grv5-filters">
               <div className="grv5-search">
                 <Search size={16} />
                 <input
-                  placeholder="Search..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search goals..."
+                  value={filters.search}
+                  onChange={(e) => setFilter('search', e.target.value)}
                 />
               </div>
               <select
                 className="grv5-select"
-                value={String(themeFilter)}
-                onChange={(e) => setThemeFilter(e.target.value === 'all' ? 'all' : Number(e.target.value))}
+                value={filters.themeIds.length === 1 ? String(filters.themeIds[0]) : 'all'}
+                onChange={(e) => setFilter('themeIds', e.target.value === 'all' ? [] : [Number(e.target.value)])}
               >
                 <option value="all">All Themes</option>
                 {GLOBAL_THEMES.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
@@ -242,27 +280,38 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
                 <select
                   multiple
                   className="grv5-select"
-                  style={{ minWidth: 140 }}
-                  value={yearFilter.map(String)}
-                  onChange={(e) => setYearFilter(Array.from(e.target.selectedOptions).map((o) => Number(o.value)))}
+                  style={{ minWidth: 120 }}
+                  value={filters.years.map(String)}
+                  onChange={(e) => setFilter('years', Array.from(e.target.selectedOptions).map((o) => Number(o.value)))}
                 >
                   {availableYears.map((y) => <option key={y} value={y}>{y}</option>)}
                 </select>
               </div>
               <label className="small text-nowrap d-flex align-items-center gap-1" style={{ marginBottom: 0 }}>
-                <input
-                  type="checkbox"
-                  checked={inProgressOnly}
-                  onChange={(e) => setInProgressOnly(e.target.checked)}
-                />
-                <span title="Goal status is Work in Progress">In progress only</span>
+                <input type="checkbox" checked={filters.withStoriesOnly}
+                  onChange={(e) => setFilter('withStoriesOnly', e.target.checked)} />
+                Goals with stories
+              </label>
+              <label className="small text-nowrap d-flex align-items-center gap-1" style={{ marginBottom: 0 }}>
+                <input type="checkbox" checked={filters.limitToSprint}
+                  onChange={(e) => setFilter('limitToSprint', e.target.checked)} />
+                Limit to selected sprint
+              </label>
+              <label className="small text-nowrap d-flex align-items-center gap-1" style={{ marginBottom: 0 }}>
+                <input type="checkbox" checked={filters.focusOnly}
+                  onChange={(e) => setFilter('focusOnly', e.target.checked)} />
+                Focus goals only
               </label>
             </div>
+            {hasActiveRoadmapFilters(filters) && (
+              <button type="button" className="grv5-select" style={{ cursor: 'pointer', padding: '0 10px' }}
+                onClick={() => setFilters(EMPTY_ROADMAP_FILTERS)}>
+                Clear filters
+              </button>
+            )}
             <span className="text-muted small text-nowrap">{goals.length} goals</span>
             <button
-              type="button"
-              className="grv5-select"
-              style={{ cursor: 'pointer', padding: '0 10px' }}
+              type="button" className="grv5-select" style={{ cursor: 'pointer', padding: '0 10px' }}
               onClick={() => setFullScreen((v) => !v)}
               title={fullScreen ? 'Exit full screen' : 'Full screen'}
             >
