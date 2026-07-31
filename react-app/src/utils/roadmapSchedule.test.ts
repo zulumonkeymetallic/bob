@@ -9,6 +9,9 @@ import {
   rescheduleGoalToPeriod,
   roadmapPeriodOrder,
   ROADMAP_ROW_AXIS,
+  computeSprintKey,
+  roadmapSprintOrder,
+  periodLabel,
 } from './roadmapSchedule';
 
 const q = (key: string) => new Date(quarterMidTimestamp(key)!);
@@ -209,5 +212,73 @@ describe('month granularity', () => {
   it('pairs each granularity with the row axis that suits it', () => {
     expect(ROADMAP_ROW_AXIS.quarter).toBe('theme');
     expect(ROADMAP_ROW_AXIS.month).toBe('goal');
+  });
+});
+
+describe('sprint granularity', () => {
+  const day = 86_400_000;
+  // Anchored on the real clock, not a fixed date: roadmapSprintOrder defaults to Date.now(),
+  // so a hardcoded fixture silently rots as time passes it.
+  const base = Date.now();
+  const sprints = [
+    { id: 's1', name: 'S46', startDate: base - 30 * day, endDate: base - 16 * day },
+    { id: 's2', name: 'S47', startDate: base - 15 * day, endDate: base - day },
+    { id: 's3', name: 'S48', startDate: base, endDate: base + 14 * day },   // contains "now"
+    { id: 's4', name: 'S49', startDate: base + 15 * day, endDate: base + 29 * day },
+  ];
+  const now = base + 2 * day;
+
+  it('finds the sprint whose window contains the date', () => {
+    expect(computeSprintKey(base + 5 * day, sprints)).toBe('s3');
+    expect(computeSprintKey(base - 20 * day, sprints)).toBe('s1');
+  });
+
+  it('returns null outside every sprint rather than guessing', () => {
+    expect(computeSprintKey(base + 500 * day, sprints)).toBeNull();
+    expect(computeSprintKey(null, sprints)).toBeNull();
+  });
+
+  it('ignores sprints with unusable dates', () => {
+    expect(computeSprintKey(base, [{ id: 'x', startDate: null, endDate: undefined }])).toBeNull();
+  });
+
+  it('orders columns Unscheduled, previous, current, future', () => {
+    expect(roadmapSprintOrder(sprints, now)).toEqual(['unscheduled', 's2', 's3', 's4']);
+  });
+
+  it('keeps a sprint column even when no goal lands in it', () => {
+    // The column comes from the sprint list, not from the data — you must be able to drag INTO
+    // an empty sprint.
+    expect(roadmapPeriodOrder([], null, 'sprint', sprints)).toContain('s3');
+  });
+
+  it('anchors a dropped goal to the middle of the target sprint', () => {
+    const r = rescheduleGoalToPeriod('s3', 'sprint', null, null, sprints)!;
+    expect(r.endDate).toBeGreaterThanOrEqual(base);
+    expect(r.endDate).toBeLessThanOrEqual(base + 14 * day);
+  });
+
+  it('preserves duration across a sprint move, like every other granularity', () => {
+    const s = new Date(2026, 0, 1).getTime();
+    const r = rescheduleGoalToPeriod('s4', 'sprint', s, s + 20 * day, sprints)!;
+    expect(r.endDate - r.startDate).toBe(20 * day);
+  });
+
+  it('declines to write when the sprint has no dates', () => {
+    expect(rescheduleGoalToPeriod('nope', 'sprint', null, null, sprints)).toBeNull();
+  });
+
+  it('labels a column with the sprint name', () => {
+    expect(periodLabel('s3', 'sprint', sprints)).toBe('S48');
+    expect(periodLabel('unscheduled', 'sprint', sprints)).toBe('Unscheduled');
+  });
+
+  it('falls forward to the next unfinished sprint when none contains today', () => {
+    const past = sprints.slice(0, 2);
+    expect(roadmapSprintOrder(past, base - 40 * day)).toEqual(['unscheduled', 's1', 's2']);
+  });
+
+  it('uses theme rows, not goal rows — a sprint grid with 100+ rows is unusable', () => {
+    expect(ROADMAP_ROW_AXIS.sprint).toBe('theme');
   });
 });

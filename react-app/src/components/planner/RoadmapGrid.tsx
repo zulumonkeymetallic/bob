@@ -187,19 +187,19 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
   }, [sourceGoals]);
 
   const currentPeriodKey = useMemo(
-    () => computePeriodKey(Date.now(), granularity), [granularity]);
+    () => computePeriodKey(Date.now(), granularity, sprints as any), [granularity, sprints]);
 
   const columns = useMemo(() => {
     const keys = new Set<string>();
     if (currentPeriodKey) keys.add(currentPeriodKey);
     for (const g of goals) {
-      const k1 = computePeriodKey((g as any).endDate || (g as any).dueDate, granularity);
-      const k2 = computePeriodKey((g as any).plannedStartDate, granularity);
+      const k1 = computePeriodKey((g as any).endDate || (g as any).dueDate, granularity, sprints as any);
+      const k2 = computePeriodKey((g as any).plannedStartDate, granularity, sprints as any);
       if (k1) keys.add(k1);
       if (k2) keys.add(k2);
     }
-    return roadmapPeriodOrder([...keys], currentPeriodKey, granularity);
-  }, [goals, currentPeriodKey, granularity]);
+    return roadmapPeriodOrder([...keys], currentPeriodKey, granularity, sprints as any);
+  }, [goals, currentPeriodKey, granularity, sprints]);
 
   /**
    * Rows are themes at quarter granularity and individual goals at month granularity. Across a
@@ -228,14 +228,14 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
     const m = new Map<string, Map<string, Goal[]>>();
     for (const g of goals) {
       const rowKey = rowAxis === 'theme' ? `theme-${Number((g as any).theme ?? 0)}` : `goal-${g.id}`;
-      const cell = computePeriodKey((g as any).endDate || (g as any).dueDate, granularity) ?? UNSCHEDULED_COLUMN;
+      const cell = computePeriodKey((g as any).endDate || (g as any).dueDate, granularity, sprints as any) ?? UNSCHEDULED_COLUMN;
       if (!m.has(rowKey)) m.set(rowKey, new Map());
       const row = m.get(rowKey)!;
       if (!row.has(cell)) row.set(cell, []);
       row.get(cell)!.push(g);
     }
     return m;
-  }, [goals, rowAxis, granularity]);
+  }, [goals, rowAxis, granularity, sprints]);
 
   /**
    * A drop writes BOTH goal dates. Only endDate used to be written, which left startDate stale
@@ -249,7 +249,7 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
         await updateDoc(doc(db, 'goals', goalId), { endDate: null, dueDate: null, updatedAt: serverTimestamp() } as any);
         return;
       }
-      const next = rescheduleGoalToPeriod(qKey, granularity, (goal as any).startDate, (goal as any).endDate ?? (goal as any).dueDate);
+      const next = rescheduleGoalToPeriod(qKey, granularity, (goal as any).startDate, (goal as any).endDate ?? (goal as any).dueDate, sprints as any);
       if (!next) return;
       await updateDoc(doc(db, 'goals', goalId), {
         startDate: next.startDate, endDate: next.endDate, updatedAt: serverTimestamp(),
@@ -257,7 +257,10 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
     } catch (err) {
       console.error('Failed to reschedule goal', goalId, err);
     }
-  }, [goals]);
+    // granularity and sprints MUST be dependencies: without them a drop captured the
+    // granularity in force when the callback was first created, so switching to sprint
+    // columns and dragging wrote quarter dates.
+  }, [goals, granularity, sprints]);
 
   return (
     <div style={fullScreen
@@ -313,10 +316,11 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
                 Focus goals only
               </label>
             </div>
-            {/* Granularity also flips the row axis — themes across a quarter, goals across a
-                month. It deliberately stops at month: days belong to the Calendar. */}
+            {/* Granularity also flips the row axis — themes across a quarter and a sprint,
+                goals across a month. It deliberately stops at sprint: days belong to the
+                Calendar, and story-level sprint capacity belongs to /planner?level=sprint. */}
             <div className="btn-group btn-group-sm" role="group" aria-label="Granularity" style={{ flexShrink: 0 }}>
-              {(['quarter', 'month'] as const).map((g) => (
+              {(['quarter', 'month', 'sprint'] as const).map((g) => (
                 <button
                   key={g}
                   type="button"
@@ -327,7 +331,11 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
                     color: granularity === g ? '#fff' : undefined,
                   }}
                   onClick={() => setGranularity(g)}
-                  title={g === 'quarter' ? 'Quarters, one row per theme' : 'Months, one row per goal'}
+                  title={
+                    g === 'quarter' ? 'Quarters, one row per theme'
+                      : g === 'month' ? 'Months, one row per goal'
+                        : 'Sprints, one row per theme'
+                  }
                 >
                   {g}
                 </button>
@@ -375,7 +383,7 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
                   background: qKey === currentPeriodKey ? 'var(--accent-soft, #dbeafe)' : 'var(--panel, #f1f5f9)',
                   position: 'sticky', top: 0,
                 }}>
-                  {periodLabel(qKey, granularity)}
+                  {periodLabel(qKey, granularity, sprints as any)}
                   {qKey === currentPeriodKey && <span style={{ marginLeft: 5, fontSize: 9, color: 'var(--brand, #3b82f6)' }}>▶ now</span>}
                 </div>
               ))}

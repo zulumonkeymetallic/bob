@@ -127,11 +127,15 @@ export function quarterLabel(key: string): string {
   return `${q} ${year}`;
 }
 
-export type RoadmapGranularity = 'quarter' | 'month';
+export type RoadmapGranularity = 'quarter' | 'month' | 'sprint';
 
 export const ROADMAP_ROW_AXIS: Record<RoadmapGranularity, 'theme' | 'goal'> = {
   quarter: 'theme',
+  // Month is the goal-level horizon: across a month you are asking which goals land when.
   month: 'goal',
+  // Sprint goes back to themes on purpose. Sprint planning is a balance question — is this
+  // sprint spread sanely across themes — and goal rows would put 100+ rows on a 5-column grid.
+  sprint: 'theme',
 };
 
 export function computeMonthKey(ts: number | null | undefined): string | null {
@@ -153,17 +157,24 @@ export function monthLabel(key: string): string {
 }
 
 /** Period key for a timestamp at the given granularity. */
-export function computePeriodKey(ts: number | null | undefined, g: RoadmapGranularity): string | null {
+export function computePeriodKey(
+  ts: number | null | undefined, g: RoadmapGranularity, sprints: RoadmapSprint[] = [],
+): string | null {
+  if (g === 'sprint') return computeSprintKey(ts, sprints);
   return g === 'month' ? computeMonthKey(ts) : computeQuarterKey(ts);
 }
 
-export function periodLabel(key: string, g: RoadmapGranularity): string {
+export function periodLabel(key: string, g: RoadmapGranularity, sprints: RoadmapSprint[] = []): string {
   if (key === UNSCHEDULED_COLUMN) return 'Unscheduled';
+  if (g === 'sprint') return sprintLabel(key, sprints);
   return g === 'month' ? monthLabel(key) : quarterLabel(key);
 }
 
 /** Mid-period timestamp — the anchor a dropped goal's end date takes. */
-export function periodMidTimestamp(key: string, g: RoadmapGranularity): number | null {
+export function periodMidTimestamp(
+  key: string, g: RoadmapGranularity, sprints: RoadmapSprint[] = [],
+): number | null {
+  if (g === 'sprint') return sprintMidTimestamp(key, sprints);
   if (g !== 'month') return quarterMidTimestamp(key);
   const m = /^(\d{4})-M(\d{2})$/.exec(key);
   if (!m) return null;
@@ -173,8 +184,9 @@ export function periodMidTimestamp(key: string, g: RoadmapGranularity): number |
 /** Granularity-aware sibling of rescheduleGoalToQuarter. Same end-anchored rule. */
 export function rescheduleGoalToPeriod(
   key: string, g: RoadmapGranularity, prevStart: unknown, prevEnd: unknown,
+  sprints: RoadmapSprint[] = [],
 ): RescheduledDates | null {
-  const end = periodMidTimestamp(key, g);
+  const end = periodMidTimestamp(key, g, sprints);
   if (end == null) return null;
   return { startDate: end - goalDurationMs(prevStart, prevEnd), endDate: end };
 }
@@ -182,7 +194,11 @@ export function rescheduleGoalToPeriod(
 /** Column order at either granularity: [Unscheduled, P(n-1), P(n), P(n+1), ...]. */
 export function roadmapPeriodOrder(
   keys: string[], currentKey: string | null, g: RoadmapGranularity,
+  sprints: RoadmapSprint[] = [],
 ): string[] {
+  // Sprint columns come from the sprint list, not from the keys present in the data — an empty
+  // sprint still needs a column to drag INTO.
+  if (g === 'sprint') return roadmapSprintOrder(sprints);
   if (g !== 'month') return roadmapColumnOrder(keys, currentKey);
 
   const ord = monthOrdinal;
@@ -196,4 +212,78 @@ export function roadmapPeriodOrder(
     kept.sort((a, b) => ord(a)! - ord(b)!);
   }
   return [UNSCHEDULED_COLUMN, ...kept];
+}
+
+// ── Sprint granularity ───────────────────────────────────────────────────────
+
+/**
+ * Sprints as roadmap columns.
+ *
+ * Unlike quarters and months, a sprint is NOT derivable from a timestamp — it is a named,
+ * user-defined, irregular window. So every sprint-aware helper takes the sprint list, and the
+ * column key is the sprint's document id rather than an encoded date. That is the whole reason
+ * sprint could not just be another case in the existing period functions.
+ *
+ * This is the goal-level view of a sprint. The story-level capacity board at
+ * /planner?level=sprint (points, free capacity, over-commitment) is a different altitude and is
+ * deliberately NOT reproduced here.
+ */
+export interface RoadmapSprint {
+  id: string;
+  name?: string;
+  ref?: string;
+  startDate?: unknown;
+  endDate?: unknown;
+}
+
+const sprintWindow = (s: RoadmapSprint): { start: number; end: number } | null => {
+  const start = finite(s.startDate);
+  const end = finite(s.endDate);
+  return start != null && end != null && end >= start ? { start, end } : null;
+};
+
+/** The sprint whose window contains ts. Overlapping sprints resolve to the earliest start. */
+export function computeSprintKey(ts: number | null | undefined, sprints: RoadmapSprint[]): string | null {
+  const t = finite(ts);
+  if (t == null) return null;
+  const hit = sprints
+    .map((s) => ({ s, w: sprintWindow(s) }))
+    .filter((x) => x.w && t >= x.w.start && t <= x.w.end)
+    .sort((a, b) => a.w!.start - b.w!.start)[0];
+  return hit ? hit.s.id : null;
+}
+
+export function sprintLabel(key: string, sprints: RoadmapSprint[]): string {
+  if (key === UNSCHEDULED_COLUMN) return 'Unscheduled';
+  const s = sprints.find((x) => x.id === key);
+  return s?.name || s?.ref || 'Sprint';
+}
+
+/** Mid-sprint — the anchor a dropped goal's end date takes, matching the quarter/month rule. */
+export function sprintMidTimestamp(key: string, sprints: RoadmapSprint[]): number | null {
+  const w = sprints.find((x) => x.id === key);
+  const win = w ? sprintWindow(w) : null;
+  return win ? win.start + (win.end - win.start) / 2 : null;
+}
+
+/**
+ * Sprint columns in date order: [Unscheduled, previous, current, future...].
+ *
+ * Same one-period-of-history rule as quarters and months, but "current" is found by date
+ * window rather than computed, and sprints with no usable dates are dropped — they cannot be
+ * placed on a time axis at all.
+ */
+export function roadmapSprintOrder(sprints: RoadmapSprint[], nowTs: number = Date.now()): string[] {
+  const dated = sprints
+    .map((s) => ({ id: s.id, w: sprintWindow(s) }))
+    .filter((x): x is { id: string; w: { start: number; end: number } } => x.w != null)
+    .sort((a, b) => a.w.start - b.w.start);
+
+  const curIdx = dated.findIndex((x) => nowTs >= x.w.start && nowTs <= x.w.end);
+  // No sprint contains today: fall back to the first that has not yet ended, so the columns
+  // still open on what is next rather than on ancient history.
+  const anchor = curIdx >= 0 ? curIdx : dated.findIndex((x) => x.w.end >= nowTs);
+  const from = anchor > 0 ? anchor - 1 : 0;
+
+  return [UNSCHEDULED_COLUMN, ...dated.slice(anchor < 0 ? Math.max(0, dated.length - 1) : from).map((x) => x.id)];
 }

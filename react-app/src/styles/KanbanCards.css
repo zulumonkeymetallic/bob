@@ -236,6 +236,10 @@
   border: 1px solid var(--line);
   background: rgba(var(--card-rgb), 0.85);
   font-weight: 600;
+  /* Explicit colour. Without it the badge inherited from whatever ancestor happened to set a
+     colour, so identical badges rendered black on one card and near-invisible on the next
+     depending on where they sat. The background is theme-aware, so the text must be too. */
+  color: var(--text);
 }
 
 .kanban-card__meta-badge--top3 {
