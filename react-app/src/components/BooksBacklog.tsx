@@ -10,7 +10,6 @@ import { Goal, Sprint } from '../types';
 import { findSprintForDate } from '../utils/taskSprintHelpers';
 import { generateRef } from '../utils/referenceGenerator';
 import { planningSprints } from '../utils/sprintFilter';
-import WorkSurfaceNav from './common/WorkSurfaceNav';
 
 interface BookItem {
   id: string;
@@ -315,9 +314,7 @@ const BooksBacklog: React.FC = () => {
           <h5 className="mb-1">Books Backlog</h5>
           <div className="text-muted small">Imported from Hardcover — generate stories and link goals later.</div>
         </div>
-        <div className="d-flex flex-wrap gap-2 align-items-center">
-          <WorkSurfaceNav inline />
-          <Form.Control size="sm" placeholder="Search books" value={search} onChange={(e) => setSearch(e.target.value)} style={{ width: 200 }} />
+        <div className="d-flex flex-wrap gap-2 align-items-center">          <Form.Control size="sm" placeholder="Search books" value={search} onChange={(e) => setSearch(e.target.value)} style={{ width: 200 }} />
           <Form.Select size="sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as any)} style={{ width: 180 }}>
             <option value="all">All</option>
             <option value="to-read">To Read</option>

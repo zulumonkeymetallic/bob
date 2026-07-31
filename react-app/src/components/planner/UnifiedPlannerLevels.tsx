@@ -6,7 +6,6 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { buildPlannerPath, normalizePlannerLevel, plannerLevelLabel, type UnifiedPlannerLevel } from '../../utils/plannerRoutes';
 import UnifiedGoalPlannerLevels from './UnifiedGoalPlannerLevels';
 import UnifiedRoadmapGanttView from './UnifiedRoadmapGanttView';
-import PlanActionBar from './PlanActionBar';
 import SprintPlanningMatrix from '../SprintPlanningMatrix';
 import SprintWeekPlanner from './SprintWeekPlanner';
 import RoadmapGrid from './RoadmapGrid';
@@ -72,9 +71,7 @@ const UnifiedPlannerLevels: React.FC = () => {
               </Badge>
             </div>
             <Card className="shadow-sm border-0 mb-3">
-              <Card.Body className="py-2">
-                <PlanActionBar />
-              </Card.Body>
+              <Card.Body className="py-2">              </Card.Body>
             </Card>
           </>
         )}

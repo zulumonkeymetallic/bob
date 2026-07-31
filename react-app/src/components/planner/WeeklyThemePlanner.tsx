@@ -10,7 +10,6 @@ import { useNavigate } from 'react-router-dom';
 import { addWeeks, format, parseISO, startOfWeek, subWeeks } from 'date-fns';
 import { db, functions } from '../../firebase';
 import './WeeklyThemePlanner.css';
-import PlanActionBar from './PlanActionBar';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const START_MINUTES = (4 * 60) + 30;
@@ -739,9 +738,7 @@ const WeeklyThemePlanner: React.FC = () => {
         <Container fluid className="p-4">
             <div className="mb-3">
                 <h2 className="mb-2">Weekly Capacity</h2>
-                <div className="mb-2">
-                    <PlanActionBar />
-                </div>
+                <div className="mb-2">                </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, paddingBottom: 4, alignItems: 'center' }}>
                     <Button
                         variant={fitnessBlocksAutoCreate ? 'success' : 'outline-secondary'}

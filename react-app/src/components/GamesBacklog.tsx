@@ -10,7 +10,6 @@ import { useSprint } from '../contexts/SprintContext';
 import { Goal, Sprint } from '../types';
 import { findSprintForDate } from '../utils/taskSprintHelpers';
 import { generateRef } from '../utils/referenceGenerator';
-import WorkSurfaceNav from './common/WorkSurfaceNav';
 
 interface SteamGame {
   id: string;
@@ -572,9 +571,7 @@ const GamesBacklog: React.FC = () => {
         </div>
         <div className="d-flex flex-wrap gap-2 align-items-center">
           {/* Lightweight quick-jump nav, consistent placement with Goals/Stories/Tasks.
-              Per Jim, 2026-07-23. */}
-          <WorkSurfaceNav inline />
-          <Form.Control size="sm" placeholder="Search games" value={search} onChange={(e) => setSearch(e.target.value)} style={{ width: 200 }} />
+              Per Jim, 2026-07-23. */}          <Form.Control size="sm" placeholder="Search games" value={search} onChange={(e) => setSearch(e.target.value)} style={{ width: 200 }} />
           <Form.Select size="sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as any)} style={{ width: 160 }}>
             <option value="all">All games</option>
             <option value="unconverted">Backlog only</option>

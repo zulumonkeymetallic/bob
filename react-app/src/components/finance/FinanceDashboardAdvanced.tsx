@@ -10,7 +10,6 @@ import { PremiumCard } from '../common/PremiumCard';
 import ReactECharts from 'echarts-for-react';
 import TransactionsList from './TransactionsList';
 import { normalizeMerchantKey } from './financeInsights';
-import WorkSurfaceNav from '../common/WorkSurfaceNav';
 import {
     TrendingUp,
     PieChart as PieIcon,
@@ -3004,9 +3003,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
                 <div className="d-flex flex-wrap gap-2 align-items-center">
                     {/* Lightweight quick-jump nav, consistent placement with Goals/Stories/
-                        Tasks. Per Jim, 2026-07-23. */}
-                    <WorkSurfaceNav inline />
-                    <ButtonGroup>
+                        Tasks. Per Jim, 2026-07-23. */}                    <ButtonGroup>
                         <Button variant={filter === '7d' ? 'primary' : 'outline-secondary'} onClick={() => setFilter('7d')}>7D</Button>
                         <Button variant={filter === '30d' ? 'primary' : 'outline-secondary'} onClick={() => setFilter('30d')}>30D</Button>
                         <Button variant={filter === '60d' ? 'primary' : 'outline-secondary'} onClick={() => setFilter('60d')}>60D</Button>

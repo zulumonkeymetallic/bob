@@ -13,7 +13,6 @@ import EditTaskModal from '../EditTaskModal';
 import EditStoryModal from '../EditStoryModal';
 import { callDeltaReplan } from '../../utils/plannerOrchestration';
 import { isRecurringDueOnDate, resolveTaskDueMs } from '../../utils/recurringTaskDue';
-import WorkSurfaceNav from '../common/WorkSurfaceNav';
 import FitnessStripWidget from '../dashboard/FitnessStripWidget';
 import './CheckInDaily.css';
 
@@ -1492,7 +1491,6 @@ const CheckInDaily: React.FC<CheckInDailyProps> = ({ embedded = false, fixedDate
 
   return (
     <div className={`daily-checkin-shell ${embedded ? 'daily-checkin-shell--embedded' : ''}`}>
-      {!embedded && <WorkSurfaceNav />}
       <div className="daily-checkin-hero">
         <div>
           <div className="daily-checkin-hero__eyebrow">Daily Check-in</div>

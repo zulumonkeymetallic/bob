@@ -11,7 +11,6 @@
  * filter state, none of which a planner level has or wants.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Form } from 'react-bootstrap';
 import { collection, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { Filter, Maximize2, Minimize2, Search } from 'lucide-react';
 import { db } from '../../firebase';
@@ -25,7 +24,7 @@ import {
   UNSCHEDULED_COLUMN,
 } from '../../utils/roadmapSchedule';
 import EditGoalModal from '../EditGoalModal';
-import PlanActionBar from './PlanActionBar';
+import '../visualization/GoalRoadmapV5.css';
 import { Z } from '../../utils/layoutTokens';
 
 const GOAL_KIND_ICON: Record<string, string> = {
@@ -215,48 +214,60 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
           display: 'flex', flexDirection: 'column' }
       : { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       {showFilters && (
-        <div className="d-flex flex-column gap-2 px-3 pt-2" style={{ flexShrink: 0 }}>
-          <PlanActionBar />
-          {/* Same filter set as the Gantt — search, theme, years — so switching between the two
+        <div className="d-flex flex-column gap-2 px-3 pt-2" style={{ flexShrink: 0 }}>          {/* Same filter set as the Gantt — search, theme, years — so switching between the two
               views does not mean relearning the controls. */}
-          <div className="d-flex align-items-center gap-2 flex-nowrap" style={{ overflowX: 'auto' }}>
-            <div className="position-relative" style={{ flexShrink: 0 }}>
-              <Search size={13} style={{ position: 'absolute', left: 8, top: 8, opacity: 0.5 }} />
-              <Form.Control
-                size="sm" placeholder="Search goals…" value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                style={{ maxWidth: 200, paddingLeft: 26 }}
-              />
+          {/* Deliberately the Gantt's own markup and classes (grv5-filters / grv5-search /
+              grv5-select) rather than Bootstrap equivalents, so the two views are visually
+              identical and share one stylesheet. GoalRoadmapV5.css is imported for them. */}
+          <div className="grv5-toolbar" style={{ flexWrap: 'nowrap', overflowX: 'auto' }}>
+            <div className="grv5-filters">
+              <div className="grv5-search">
+                <Search size={16} />
+                <input
+                  placeholder="Search..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </div>
+              <select
+                className="grv5-select"
+                value={String(themeFilter)}
+                onChange={(e) => setThemeFilter(e.target.value === 'all' ? 'all' : Number(e.target.value))}
+              >
+                <option value="all">All Themes</option>
+                {GLOBAL_THEMES.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+              <div className="grv5-multiselect">
+                <label style={{ fontSize: 12, fontWeight: 600, marginRight: 6 }}>Years</label>
+                <select
+                  multiple
+                  className="grv5-select"
+                  style={{ minWidth: 140 }}
+                  value={yearFilter.map(String)}
+                  onChange={(e) => setYearFilter(Array.from(e.target.selectedOptions).map((o) => Number(o.value)))}
+                >
+                  {availableYears.map((y) => <option key={y} value={y}>{y}</option>)}
+                </select>
+              </div>
+              <label className="small text-nowrap d-flex align-items-center gap-1" style={{ marginBottom: 0 }}>
+                <input
+                  type="checkbox"
+                  checked={inProgressOnly}
+                  onChange={(e) => setInProgressOnly(e.target.checked)}
+                />
+                <span title="Goal status is Work in Progress">In progress only</span>
+              </label>
             </div>
-            <Form.Select
-              size="sm" style={{ maxWidth: 170, flexShrink: 0 }} value={String(themeFilter)}
-              onChange={(e) => setThemeFilter(e.target.value === 'all' ? 'all' : Number(e.target.value))}
-            >
-              <option value="all">All Themes</option>
-              {GLOBAL_THEMES.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </Form.Select>
-            <Form.Select
-              size="sm" style={{ maxWidth: 150, flexShrink: 0 }}
-              value={yearFilter.length === 1 ? String(yearFilter[0]) : 'all'}
-              onChange={(e) => setYearFilter(e.target.value === 'all' ? [] : [Number(e.target.value)])}
-            >
-              <option value="all">All years</option>
-              {availableYears.map((y) => <option key={y} value={y}>{y}</option>)}
-            </Form.Select>
-            <Form.Check
-              type="switch" id="roadmap-in-progress" label="In progress only"
-              title="Goal status is Work in Progress"
-              checked={inProgressOnly} onChange={(e) => setInProgressOnly(e.target.checked)}
-              className="text-nowrap small" style={{ flexShrink: 0 }}
-            />
-            <span className="text-muted small text-nowrap ms-auto">{goals.length} goals</span>
-            <Button
-              size="sm" variant="outline-secondary" style={{ flexShrink: 0 }}
+            <span className="text-muted small text-nowrap">{goals.length} goals</span>
+            <button
+              type="button"
+              className="grv5-select"
+              style={{ cursor: 'pointer', padding: '0 10px' }}
               onClick={() => setFullScreen((v) => !v)}
               title={fullScreen ? 'Exit full screen' : 'Full screen'}
             >
               {fullScreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-            </Button>
+            </button>
           </div>
         </div>
       )}
@@ -269,14 +280,21 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
           </div>
         ) : (
           <div style={{ minWidth: 'max-content' }}>
-            <div style={{ display: 'flex', marginBottom: 2 }}>
-              <div style={{ width: THEME_COL_W, flexShrink: 0 }} />
+            {/* Sticky on both axes: the quarter header stays visible while scrolling down,
+                and the theme column while scrolling right. Without this you lose track of which
+                quarter a column is as soon as the grid is taller or wider than the viewport. */}
+            <div style={{ display: 'flex', marginBottom: 2, position: 'sticky', top: 0, zIndex: 3 }}>
+              <div style={{
+                width: THEME_COL_W, flexShrink: 0, position: 'sticky', left: 0, zIndex: 4,
+                background: 'var(--bg, #f8f9fa)',
+              }} />
               {columns.map((qKey) => (
                 <div key={qKey} style={{
                   width: COL_W, flexShrink: 0, padding: '5px 10px',
                   fontSize: 11, fontWeight: 700, color: 'var(--text, #374151)',
                   borderLeft: '1px solid var(--line, #e5e7eb)',
                   background: qKey === currentQuarterKey ? 'var(--accent-soft, #dbeafe)' : 'var(--panel, #f1f5f9)',
+                  position: 'sticky', top: 0,
                 }}>
                   {quarterLabel(qKey)}
                   {qKey === currentQuarterKey && <span style={{ marginLeft: 5, fontSize: 9, color: 'var(--brand, #3b82f6)' }}>▶ now</span>}
@@ -290,8 +308,12 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
                 <div key={theme.id} style={{ display: 'flex', marginBottom: 1 }}>
                   <div style={{
                     width: THEME_COL_W, flexShrink: 0, padding: '8px 10px',
-                    borderTop: `3px solid ${theme.color}`, background: `${theme.color}18`,
+                    borderTop: `3px solid ${theme.color}`,
+                    // Opaque, not the usual 18% tint: a sticky column has cells sliding beneath
+                    // it, and a translucent background shows them through.
+                    background: `color-mix(in srgb, ${theme.color} 12%, var(--card, #fff))`,
                     fontSize: 11, fontWeight: 700, color: theme.color,
+                    position: 'sticky', left: 0, zIndex: 2,
                   }}>
                     {theme.name}
                   </div>

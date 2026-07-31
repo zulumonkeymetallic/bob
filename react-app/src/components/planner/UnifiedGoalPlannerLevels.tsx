@@ -34,7 +34,6 @@ import GoalPlanningWorkspaceModal from '../GoalPlanningWorkspaceModal';
 import ConfirmSprintChangesModal from '../visualization/ConfirmSprintChangesModal';
 import GoalMultiSelect from '../shared/GoalMultiSelect';
 import ThemeMultiSelect from '../shared/ThemeMultiSelect';
-import PlanActionBar from './PlanActionBar';
 import { getEntityAiScore, isTop3Story, isTop3Task } from '../../utils/top3';
 
 export type GoalPlannerLevel = 'year' | 'quarter';
@@ -650,9 +649,7 @@ const UnifiedGoalPlannerLevels: React.FC<UnifiedGoalPlannerLevelsProps> = ({
 
       {!embedded && (
         <Card className="shadow-sm border-0 mb-3">
-          <Card.Body className="py-2">
-            <PlanActionBar />
-          </Card.Body>
+          <Card.Body className="py-2">          </Card.Body>
         </Card>
       )}
 

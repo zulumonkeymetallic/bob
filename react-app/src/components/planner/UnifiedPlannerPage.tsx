@@ -78,7 +78,6 @@ import EditStoryModal from '../EditStoryModal';
 import DeferItemModal from '../DeferItemModal';
 import DayCapacityWarningBanner from './DayCapacityWarningBanner';
 import { useSidebar } from '../../contexts/SidebarContext';
-import PlanActionBar from './PlanActionBar';
 import UnifiedPlannerLevels from './UnifiedPlannerLevels';
 import { normalizePlannerLevel } from '../../utils/plannerRoutes';
 import { applyPlannerDefer, type PlannerDeferPayload } from '../../utils/plannerDeferral';
@@ -1874,9 +1873,7 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
                 >
                   {orchestrationLoading ? <Spinner size="sm" animation="border" className="me-1" /> : <Sparkles size={14} className="me-1" />}
                   Full replan
-                </Button>
-                <PlanActionBar />
-                <Button size="sm" variant="outline-primary" onClick={() => openComposerForSlot(new Date(), addMinutes(new Date(), 60))} title="Create a new calendar entry">
+                </Button>                <Button size="sm" variant="outline-primary" onClick={() => openComposerForSlot(new Date(), addMinutes(new Date(), 60))} title="Create a new calendar entry">
                   + New Entry
                 </Button>
                 <Button

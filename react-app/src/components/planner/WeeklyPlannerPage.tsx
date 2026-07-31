@@ -4,7 +4,6 @@ import { addDays, addWeeks, format, startOfWeek } from 'date-fns';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useSprint } from '../../contexts/SprintContext';
 import WeeklyPlannerSurface from './WeeklyPlannerSurface';
-import PlanActionBar from './PlanActionBar';
 import { useDetailLevel } from '../../contexts/DetailLevelContext';
 
 const WeeklyPlannerPage: React.FC = () => {
@@ -76,9 +75,7 @@ const WeeklyPlannerPage: React.FC = () => {
       </div>
 
       <Card className="shadow-sm border-0 mb-3">
-        <Card.Body className="py-2">
-          <PlanActionBar />
-        </Card.Body>
+        <Card.Body className="py-2">        </Card.Body>
       </Card>
 
       {isPlanningPromptWeek && (

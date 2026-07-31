@@ -26,7 +26,6 @@ import { useSidebar } from '../contexts/SidebarContext';
 import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import { computeWindowExpectedProgress, evaluateGoalTargetStatus } from '../utils/goalKpiStatus';
 import { goalNeedsLinkedPot } from '../utils/goalCost';
-import WorkSurfaceNav from './common/WorkSurfaceNav';
 
 interface GoalsManagementProps {
   /** When true, fills its container's height instead of assuming the full viewport — for
@@ -732,10 +731,6 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
             )}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: deviceInfo.isMobile ? 8 : 12, flexWrap: 'wrap' }}>
-            {/* Lightweight WorkSurfaceNav moved onto this row, to the left of the
-                collapse/List/Cards/Add buttons — was its own row above, wasting vertical
-                space. Per Jim, 2026-07-23. */}
-            {!embedded && !deviceInfo.isMobile && <WorkSurfaceNav inline />}
             {!deviceInfo.isMobile && (
             <Button
               size="sm"

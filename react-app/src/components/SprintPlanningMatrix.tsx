@@ -25,7 +25,6 @@ import DeferItemModal from './DeferItemModal';
 import { buildSprintCapacitySummary, storyPoints } from '../utils/plannerCapacity';
 import { schedulePlannerItem as schedulePlannerItemMutation } from '../utils/plannerScheduling';
 import { parseBooleanParam, parseIdListParam, parseNumberListParam } from '../utils/planningQuery';
-import PlanActionBar from './planner/PlanActionBar';
 import ThemeMultiSelect from './shared/ThemeMultiSelect';
 import GoalMultiSelect from './shared/GoalMultiSelect';
 import { useDetailLevel, type DetailLevel } from '../contexts/DetailLevelContext';
@@ -897,9 +896,7 @@ const SprintPlanningMatrix: React.FC = () => {
                 </Badge>
               </div>
               
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-                <PlanActionBar />
-                <Button
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>                <Button
                   variant="outline-secondary"
                   size="sm"
                   onClick={() => {

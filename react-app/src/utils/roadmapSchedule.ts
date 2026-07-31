@@ -76,15 +76,12 @@ export function quarterOrdinal(key: string): number | null {
 export const UNSCHEDULED_COLUMN = 'unscheduled';
 
 /**
- * Column order for the roadmap grid.
+ * Column order for the roadmap grid: [Unscheduled, Q(n-1), Q(n), Q(n+1), ...].
  *
- * Two deliberate choices, both about making a drag short:
- *  - History is trimmed to a single quarter before the current one. Older quarters are done
- *    with, and keeping them pushes the columns you actually plan into off the right edge.
- *  - Unscheduled sits immediately BEFORE the current quarter rather than last. It is the pile
- *    you drag OUT of, and it was previously the furthest possible point from the target.
- *
- * Result: [Q(n-1), Unscheduled, Q(n), Q(n+1), ...].
+ * Unscheduled leads, immediately after the theme label, because it is the pile you drag OUT
+ * of — putting it first means the source is always in the same place and never scrolls away.
+ * One quarter of history is kept after it; anything older is finished with and only pushes the
+ * quarters you actually plan into off the right edge.
  */
 export function roadmapColumnOrder(quarterKeys: string[], currentKey: string | null): string[] {
   const cur = currentKey ? quarterOrdinal(currentKey) : null;
@@ -93,14 +90,14 @@ export function roadmapColumnOrder(quarterKeys: string[], currentKey: string | n
     .filter((k) => quarterOrdinal(k) != null)
     .sort((a, b) => quarterOrdinal(a)! - quarterOrdinal(b)!);
 
-  if (cur == null) return [...sorted, UNSCHEDULED_COLUMN];
+  if (cur == null) return [UNSCHEDULED_COLUMN, ...sorted];
 
   const kept = sorted.filter((k) => quarterOrdinal(k)! >= cur - 1);
-  const previous = kept.filter((k) => quarterOrdinal(k)! < cur);
-  const currentAndLater = kept.filter((k) => quarterOrdinal(k)! >= cur);
-
   // The current quarter always gets a column, even with nothing scheduled in it.
-  if (currentKey && !currentAndLater.includes(currentKey)) currentAndLater.unshift(currentKey);
+  if (currentKey && !kept.includes(currentKey)) {
+    kept.push(currentKey);
+    kept.sort((a, b) => quarterOrdinal(a)! - quarterOrdinal(b)!);
+  }
 
-  return [...previous, UNSCHEDULED_COLUMN, ...currentAndLater];
+  return [UNSCHEDULED_COLUMN, ...kept];
 }

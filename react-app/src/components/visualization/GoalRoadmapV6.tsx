@@ -24,7 +24,6 @@ import { buildGoalTimelineImpactPlan } from './goalTimelineImpact';
 import { applyGoalTimelineChanges } from '../../utils/goalTimelineChanges';
 import { parseBooleanParam, parseIdListParam, parseNumberListParam } from '../../utils/planningQuery';
 import { getGoalAncestors, getGoalDisplayPath, isGoalInHierarchySet } from '../../utils/goalHierarchy';
-import PlanActionBar from '../planner/PlanActionBar';
 
 interface GanttTask {
   id: string;
@@ -1910,9 +1909,7 @@ const GoalRoadmapV6: React.FC = () => {
         <div className="grv6-header">
           <div className="grv6-title-stack">
             <h1 className="grv6-title">Goal Roadmap V6</h1>
-            <div style={{ marginTop: 8 }}>
-              <PlanActionBar />
-            </div>
+            <div style={{ marginTop: 8 }}>            </div>
           </div>
         </div>
       )}

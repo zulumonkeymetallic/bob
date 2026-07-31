@@ -24,7 +24,6 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useSprint } from '../contexts/SprintContext';
 import StatCard from './common/StatCard';
 import PageHeader from './common/PageHeader';
-import WorkSurfaceNav from './common/WorkSurfaceNav';
 import { SkeletonStatCard } from './common/SkeletonLoader';
 import EmptyState from './common/EmptyState';
 import { colors } from '../utils/colors';
@@ -460,10 +459,6 @@ const StoriesManagement: React.FC = () => {
           ]}
           actions={
             <>
-              {/* Lightweight WorkSurfaceNav moved onto this row, to the left of the
-                  Import/List/Cards/Add buttons — was its own row above, wasting vertical
-                  space. Per Jim, 2026-07-23. */}
-              {!deviceInfo.isMobile && <WorkSurfaceNav inline />}
               {/* Import + View Mode Toggle sit to the left of the primary Add Story button,
                   which stays rightmost as the primary CTA — consistent with Goals/Tasks.
                   Per Jim, 2026-07-23. Import is desktop-only: it opens a file picker and a

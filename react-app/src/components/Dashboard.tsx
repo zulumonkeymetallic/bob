@@ -22,7 +22,6 @@ import JournalInsightsCard from './JournalInsightsCard';
 import BirthdayMilestoneCard from './BirthdayMilestoneCard';
 import KpiDashboardWidget from './KpiDashboardWidget';
 import WeeklyPlannerSummaryCard from './planner/WeeklyPlannerSummaryCard';
-import PlanActionBar from './planner/PlanActionBar';
 import { GLOBAL_THEMES, LEGACY_THEME_MAP } from '../constants/globalThemes';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { useUnifiedPlannerData, type PlannerRange } from '../hooks/useUnifiedPlannerData';
@@ -4339,9 +4338,7 @@ const Dashboard: React.FC = () => {
                         </div>
                       )}
                     </div>
-                    <div className="d-flex align-items-center gap-2 flex-wrap">
-                      <PlanActionBar />
-                      <Button
+                    <div className="d-flex align-items-center gap-2 flex-wrap">                      <Button
                         variant="outline-primary"
                         size="sm"
                         disabled={replanLoading}

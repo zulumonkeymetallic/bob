@@ -26,7 +26,6 @@ import { applyGoalTimelineChanges } from '../utils/goalTimelineChanges';
 import { parseBooleanParam, parseIdListParam, parseNumberListParam } from '../utils/planningQuery';
 import { getActiveFocusLeafGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
 import { useFocusGoals } from '../hooks/useFocusGoals';
-import PlanActionBar from './planner/PlanActionBar';
 import '../styles/KanbanCards.css';
 
 interface GoalYearColumnProps {
@@ -1217,9 +1216,7 @@ const GoalsYearPlanner: React.FC = () => {
         <Row className="mb-3">
           <Col>
             <Card style={{ border: '1px solid var(--notion-border)', background: 'var(--notion-bg)' }}>
-              <Card.Body style={{ padding: '8px 12px' }}>
-                <PlanActionBar />
-              </Card.Body>
+              <Card.Body style={{ padding: '8px 12px' }}>              </Card.Body>
             </Card>
           </Col>
         </Row>

@@ -33,7 +33,6 @@ import {
     formatFullReplanSummary,
     normalizePlannerCallableError,
 } from '../utils/plannerOrchestration';
-import PlanActionBar from './planner/PlanActionBar';
 
 /** Board = flat three columns. Swimlanes = one band per goal (parity with the iOS
  *  board's groupByGoal). Table = the triage list. */
@@ -442,9 +441,7 @@ const SprintKanbanPageV2: React.FC = () => {
                             )}
                         </div>
 
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                            <PlanActionBar />
-                            <Button
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>                            <Button
                                 variant="outline-secondary"
                                 size="sm"
                                 onClick={handleDeltaReplan}

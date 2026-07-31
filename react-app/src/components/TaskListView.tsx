@@ -14,7 +14,6 @@ import EditTaskModal from './EditTaskModal';
 import { isStatus, isTheme } from '../utils/statusHelpers';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { useSprint } from '../contexts/SprintContext';
-import WorkSurfaceNav from './common/WorkSurfaceNav';
 import { getActiveFocusLeafGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
 import { getChoreKind as getChoreKindShared } from '../utils/choreKind';
 import { useDeviceInfo } from '../utils/deviceDetection';
@@ -411,13 +410,7 @@ const TaskListView: React.FC = () => {
               </p>
             )}
           </div>
-          {/* Lightweight WorkSurfaceNav moved onto this row, to the left of List/Cards/
-              Switch-to-Kanban/Add — was its own row above, wasting vertical space. List/Cards
-              toggle + Switch to Kanban sit to the left of the primary Add task button, which
-              stays rightmost as the primary CTA — consistent with Goals/Stories.
-              Per Jim, 2026-07-23. */}
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-            {!deviceInfo.isMobile && <WorkSurfaceNav inline />}
             {deviceInfo.isMobile && (
               <Button
                 size="sm"

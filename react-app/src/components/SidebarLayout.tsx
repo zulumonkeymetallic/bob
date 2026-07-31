@@ -23,6 +23,7 @@ import { useLayoutState } from '../utils/layoutTier';
 import { forceCacheReset } from '../utils/staleCacheGuard';
 import { Z, SIZE } from '../utils/layoutTokens';
 import TabletPanes from './layout/TabletPanes';
+import PlanActionBar from './planner/PlanActionBar';
 import { useTabletShell } from '../hooks/useTabletShell';
 import { useDetailPaneUrlSync } from '../hooks/useDetailPaneUrlSync';
 // Test mode UI removed per request
@@ -857,6 +858,28 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
             </div>
           </div>
         </div>
+        )}
+
+        {/* One navigation bar, one position, every surface.
+            It used to be mounted inside twelve different pages (and WorkSurfaceNav in fifteen
+            more), each choosing its own spot in its own header — so moving between screens
+            meant hunting for it. Rendered here it is always immediately under the toolbar.
+            Hidden on phone, which has the bottom tab bar instead. */}
+        {!deviceInfo.isMobile && (
+          <div
+            className="bob-global-action-bar px-3 py-1"
+            style={{
+              flexShrink: 0,
+              borderBottom: '1px solid var(--notion-border)',
+              // Opaque and above the page: an earlier version of this bar was transparent and
+              // embedded Gantt/Roadmap content scrolled over the top of it.
+              background: 'var(--panel)',
+              position: 'relative',
+              zIndex: Z.toolbar - 1,
+            }}
+          >
+            <PlanActionBar />
+          </div>
         )}
 
         <ProcessTextActivityHost />

@@ -32,7 +32,6 @@ import { GLOBAL_THEMES } from '../constants/globalThemes';
 import { themeVars } from '../utils/themeVars';
 import { colorWithAlpha, goalThemeColor as resolveGoalThemeColor } from '../utils/storyCardFormatting';
 import { getThemeName } from '../utils/statusHelpers';
-import PlanActionBar from './planner/PlanActionBar';
 import ThemeMultiSelect from './shared/ThemeMultiSelect';
 import SprintMultiSelect from './shared/SprintMultiSelect';
 import ShareGoalsPanel from './shared/ShareGoalsPanel';
@@ -671,9 +670,7 @@ const VisualCanvas: React.FC<VisualCanvasProps> = ({ forcedLayout, embedded = fa
     <div className="d-flex flex-column" style={{ height: embedded ? '100%' : '100vh', overflow: 'hidden' }}>
 
       {/* Action bar */}
-      <div className="border-bottom px-3 py-2 d-flex align-items-center gap-2 flex-wrap bg-white">
-        <PlanActionBar />
-      </div>
+      <div className="border-bottom px-3 py-2 d-flex align-items-center gap-2 flex-wrap bg-white">      </div>
 
       {/* Toolbar */}
       <div className="border-bottom px-3 py-2 d-flex align-items-center gap-2 flex-wrap bg-white" style={{ zIndex: 10 }}>
