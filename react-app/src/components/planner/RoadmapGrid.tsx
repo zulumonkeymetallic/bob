@@ -11,9 +11,9 @@
  * filter state, none of which a planner level has or wants.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Form } from 'react-bootstrap';
+import { Button, Form } from 'react-bootstrap';
 import { collection, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
-import { Filter } from 'lucide-react';
+import { Filter, Maximize2, Minimize2, Search } from 'lucide-react';
 import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import type { Goal } from '../../types';
@@ -25,6 +25,8 @@ import {
   UNSCHEDULED_COLUMN,
 } from '../../utils/roadmapSchedule';
 import EditGoalModal from '../EditGoalModal';
+import PlanActionBar from './PlanActionBar';
+import { Z } from '../../utils/layoutTokens';
 
 const GOAL_KIND_ICON: Record<string, string> = {
   focus: '◆', umbrella: '◈', phase: '◉', leaf: '○',
@@ -104,7 +106,12 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
   const { currentUser } = useAuth();
   const [ownGoals, setOwnGoals] = useState<Goal[]>([]);
   const [search, setSearch] = useState('');
-  const [activeOnly, setActiveOnly] = useState(false);
+  const [themeFilter, setThemeFilter] = useState<'all' | number>('all');
+  const [yearFilter, setYearFilter] = useState<number[]>([]);
+  // Goal status 1 is "Work in Progress" — the old "Active only" label said nothing about which
+  // of the five goal statuses it meant.
+  const [inProgressOnly, setInProgressOnly] = useState(false);
+  const [fullScreen, setFullScreen] = useState(false);
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragOverCell, setDragOverCell] = useState<string | null>(null);
@@ -126,11 +133,27 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
     if (!selfLoading) return sourceGoals;   // host has already filtered
     const s = search.trim().toLowerCase();
     return sourceGoals.filter((g) => {
-      if (activeOnly && Number(g.status) !== 1) return false;
+      if (inProgressOnly && Number(g.status) !== 1) return false;
+      if (themeFilter !== 'all' && Number((g as any).theme ?? 0) !== themeFilter) return false;
+      if (yearFilter.length > 0) {
+        const key = computeQuarterKey((g as any).endDate || (g as any).dueDate);
+        // Unscheduled goals have no year, so a year filter necessarily excludes them.
+        if (!key || !yearFilter.includes(Number(key.split('-')[0]))) return false;
+      }
       if (s && !g.title?.toLowerCase().includes(s)) return false;
       return true;
     });
-  }, [sourceGoals, selfLoading, search, activeOnly]);
+  }, [sourceGoals, selfLoading, search, inProgressOnly, themeFilter, yearFilter]);
+
+  /** Years present in the data, for the multi-select — mirrors the Gantt's Years filter. */
+  const availableYears = useMemo(() => {
+    const ys = new Set<number>();
+    for (const g of sourceGoals) {
+      const key = computeQuarterKey((g as any).endDate || (g as any).dueDate);
+      if (key) ys.add(Number(key.split('-')[0]));
+    }
+    return [...ys].sort();
+  }, [sourceGoals]);
 
   const currentQuarterKey = useMemo(() => computeQuarterKey(Date.now()), []);
 
@@ -187,18 +210,54 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
   }, [goals]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+    <div style={fullScreen
+      ? { position: 'fixed', inset: 0, zIndex: Z.panel, background: 'var(--bg, #f8f9fa)',
+          display: 'flex', flexDirection: 'column' }
+      : { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       {showFilters && (
-        <div className="d-flex align-items-center gap-2 flex-nowrap px-3 pt-2" style={{ overflowX: 'auto', flexShrink: 0 }}>
-          <Form.Control
-            size="sm" placeholder="Search goals…" value={search}
-            onChange={(e) => setSearch(e.target.value)} style={{ maxWidth: 220 }}
-          />
-          <Form.Check
-            type="switch" id="roadmap-active-only" label="Active only" checked={activeOnly}
-            onChange={(e) => setActiveOnly(e.target.checked)} className="text-nowrap small"
-          />
-          <span className="text-muted small text-nowrap ms-auto">{goals.length} goals</span>
+        <div className="d-flex flex-column gap-2 px-3 pt-2" style={{ flexShrink: 0 }}>
+          <PlanActionBar />
+          {/* Same filter set as the Gantt — search, theme, years — so switching between the two
+              views does not mean relearning the controls. */}
+          <div className="d-flex align-items-center gap-2 flex-nowrap" style={{ overflowX: 'auto' }}>
+            <div className="position-relative" style={{ flexShrink: 0 }}>
+              <Search size={13} style={{ position: 'absolute', left: 8, top: 8, opacity: 0.5 }} />
+              <Form.Control
+                size="sm" placeholder="Search goals…" value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                style={{ maxWidth: 200, paddingLeft: 26 }}
+              />
+            </div>
+            <Form.Select
+              size="sm" style={{ maxWidth: 170, flexShrink: 0 }} value={String(themeFilter)}
+              onChange={(e) => setThemeFilter(e.target.value === 'all' ? 'all' : Number(e.target.value))}
+            >
+              <option value="all">All Themes</option>
+              {GLOBAL_THEMES.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </Form.Select>
+            <Form.Select
+              size="sm" style={{ maxWidth: 150, flexShrink: 0 }}
+              value={yearFilter.length === 1 ? String(yearFilter[0]) : 'all'}
+              onChange={(e) => setYearFilter(e.target.value === 'all' ? [] : [Number(e.target.value)])}
+            >
+              <option value="all">All years</option>
+              {availableYears.map((y) => <option key={y} value={y}>{y}</option>)}
+            </Form.Select>
+            <Form.Check
+              type="switch" id="roadmap-in-progress" label="In progress only"
+              title="Goal status is Work in Progress"
+              checked={inProgressOnly} onChange={(e) => setInProgressOnly(e.target.checked)}
+              className="text-nowrap small" style={{ flexShrink: 0 }}
+            />
+            <span className="text-muted small text-nowrap ms-auto">{goals.length} goals</span>
+            <Button
+              size="sm" variant="outline-secondary" style={{ flexShrink: 0 }}
+              onClick={() => setFullScreen((v) => !v)}
+              title={fullScreen ? 'Exit full screen' : 'Full screen'}
+            >
+              {fullScreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            </Button>
+          </div>
         </div>
       )}
 

@@ -64,10 +64,28 @@ describe('goalDurationMs', () => {
 describe('rescheduleGoalToQuarter', () => {
   const day = 24 * 60 * 60 * 1000;
 
-  it('sets the start to the middle of the target quarter', () => {
-    const r = rescheduleGoalToQuarter('2026-Q3', null, null)!;
-    expect(new Date(r.startDate).getMonth()).toBe(7);
-    expect(new Date(r.startDate).getDate()).toBe(15);
+  it('lands the goal in the quarter it was dropped on', () => {
+    // The regression this replaces: the START was anchored to the target quarter, but the grid
+    // positions a goal by its END, so a goal dropped on Q1 2027 appeared in a later quarter.
+    const r = rescheduleGoalToQuarter('2027-Q1', null, null)!;
+    const end = new Date(r.endDate);
+    expect(end.getFullYear()).toBe(2027);
+    expect(Math.ceil((end.getMonth() + 1) / 3)).toBe(1);
+  });
+
+  it('keeps the end inside the target quarter for every quarter', () => {
+    (['2026-Q1', '2026-Q2', '2026-Q3', '2026-Q4'] as const).forEach((key, i) => {
+      const r = rescheduleGoalToQuarter(key, null, null)!;
+      expect(Math.ceil((new Date(r.endDate).getMonth() + 1) / 3)).toBe(i + 1);
+    });
+  });
+
+  it('derives the start backwards from the duration', () => {
+    const day = 24 * 60 * 60 * 1000;
+    const prevStart = new Date(2026, 0, 1).getTime();
+    const r = rescheduleGoalToQuarter('2026-Q4', prevStart, prevStart + 30 * day)!;
+    expect(r.endDate - r.startDate).toBe(30 * day);
+    expect(r.startDate).toBeLessThan(r.endDate);
   });
 
   it('keeps the duration the goal already had', () => {

@@ -56,9 +56,15 @@ export function rescheduleGoalToQuarter(
   prevStart: unknown,
   prevEnd: unknown,
 ): RescheduledDates | null {
-  const start = quarterMidTimestamp(quarterKey);
-  if (start == null) return null;
-  return { startDate: start, endDate: start + goalDurationMs(prevStart, prevEnd) };
+  // The END date is anchored to the dropped quarter, and the start is derived backwards from
+  // the duration. This is the opposite of what it first looks like it should be, and it
+  // matters: the roadmap places a goal in the column matching its endDate, so anchoring the
+  // START here made a goal dropped on Q1 2027 render in whatever later quarter its end landed
+  // in. Anchoring the end means a goal lands exactly where it was dropped, and existing goals
+  // — which are positioned by endDate already — do not shift.
+  const end = quarterMidTimestamp(quarterKey);
+  if (end == null) return null;
+  return { startDate: end - goalDurationMs(prevStart, prevEnd), endDate: end };
 }
 
 /** Sort key for a `YYYY-Qn` string. Lexical sort works, but only by luck of zero-padding. */
