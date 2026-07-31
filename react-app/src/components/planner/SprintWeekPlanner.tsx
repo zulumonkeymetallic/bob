@@ -50,6 +50,15 @@ type ItemTarget = {
   durationMinutes?: number | null;
 };
 
+/** Mirrors WeeklyPlannerSurface's local ThemeAllocation shape — the theme_allocations doc. */
+type ThemeAllocationRow = {
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+  theme: string;
+  subTheme?: string | null;
+};
+
 const resolveEventTarget = (event: PlannerCalendarEvent): ItemTarget | null => {
   const storyId = event.block?.storyId || event.instance?.storyId;
   const taskId = event.block?.taskId;
@@ -213,6 +222,79 @@ const SprintWeekPlanner: React.FC<SprintWeekPlannerProps> = ({ anchorDate }) => 
   }, [currentUser?.uid, currentPersona]);
 
   const activeFocusGoalIds = useMemo(() => getActiveFocusLeafGoalIds(activeFocusGoals), [activeFocusGoals]);
+
+  /**
+   * The theme_allocations plan document — same doc WeeklyThemePlanner edits and
+   * WeeklyPlannerSurface reads directly. "Show theme allocations" here used to mean
+   * something much narrower: it only showed/hid whichever calendar_blocks had already been
+   * MATERIALIZED with source:'theme_allocation', and only Fitness and Work (Main Gig)
+   * allocations are ever materialized that way (materializePlannerThemeBlocks in
+   * nightlyOrchestration.js deliberately treats every other theme — Chores, Rest & Recovery,
+   * Family & Relationships etc — as a soft template, never converted into a real calendar
+   * block). So toggling it on could show nothing even with a full plan in place. This reads
+   * the plan doc itself and renders it as a background layer, so the toggle now means what it
+   * says for every theme, not just the two that get hard-scheduled.
+   */
+  const [themeAllocationPlan, setThemeAllocationPlan] = useState<{
+    allocations: ThemeAllocationRow[];
+    weeklyOverrides: Record<string, ThemeAllocationRow[]>;
+  }>({ allocations: [], weeklyOverrides: {} });
+
+  useEffect(() => {
+    if (!currentUser?.uid) { setThemeAllocationPlan({ allocations: [], weeklyOverrides: {} }); return; }
+    const unsub = onSnapshot(
+      doc(db, 'theme_allocations', currentUser.uid),
+      (snap) => {
+        const data = snap.exists() ? (snap.data() as any) : null;
+        setThemeAllocationPlan({
+          allocations: Array.isArray(data?.allocations) ? data.allocations : [],
+          weeklyOverrides: (data?.weeklyOverrides && typeof data.weeklyOverrides === 'object') ? data.weeklyOverrides : {},
+        });
+      },
+      () => setThemeAllocationPlan({ allocations: [], weeklyOverrides: {} }),
+    );
+    return () => unsub();
+  }, [currentUser?.uid]);
+
+  /**
+   * The plan's per-day allocations, placed onto the actual visible dates and coloured by
+   * theme, as react-big-calendar `backgroundEvents` — a distinct RBC layer (full-width,
+   * non-interactive, rendered behind the real scheduled blocks/instances) rather than mixed
+   * into `events`, so a soft "this was meant to be Family time" band never competes with or
+   * gets drag-and-dropped like a real scheduled item.
+   */
+  const themeAllocationBackgroundEvents = useMemo(() => {
+    const weekKey = format(weekStart, 'yyyy-MM-dd');
+    const rows = Array.isArray(themeAllocationPlan.weeklyOverrides[weekKey])
+      ? themeAllocationPlan.weeklyOverrides[weekKey]
+      : themeAllocationPlan.allocations;
+    if (!rows.length) return [];
+
+    const events: Array<{ start: Date; end: Date; title: string; resource: { isThemeAllocation: true; color: string; textColor: string } }> = [];
+    for (let i = 0; i < VISIBLE_DAYS; i++) {
+      const day = addDays(weekStart, i);
+      const jsDay = getDay(day);
+      rows
+        .filter((alloc) => Number(alloc.dayOfWeek) === jsDay)
+        .forEach((alloc) => {
+          const start = parse(alloc.startTime, 'HH:mm', day);
+          const end = parse(alloc.endTime, 'HH:mm', day);
+          if (!(end > start)) return;
+          const appearance = resolveThemeAppearance(alloc.subTheme || alloc.theme);
+          events.push({
+            start,
+            end,
+            title: alloc.subTheme || alloc.theme,
+            resource: {
+              isThemeAllocation: true,
+              color: appearance?.color || '#94a3b8',
+              textColor: appearance?.textColor || '#ffffff',
+            },
+          });
+        });
+    }
+    return events;
+  }, [themeAllocationPlan, weekStart, resolveThemeAppearance]);
 
   const calendarBlockRows: PlannerCalendarBlockRow[] = useMemo(() => planner.blocks.map((b) => ({
     id: b.id,
@@ -426,10 +508,35 @@ const SprintWeekPlanner: React.FC<SprintWeekPlannerProps> = ({ anchorDate }) => 
   }, []);
 
   const eventComponents = useMemo(() => ({
-    event: (props: { event: PlannerCalendarEvent }) => (
-      <PlannerEventContent event={props.event} onOpenActions={setSelectedEvent} />
-    ),
+    // react-big-calendar renders backgroundEvents through this same slot — they carry a plain
+    // { title, resource } shape, not the block/instance PlannerCalendarEvent this app's normal
+    // event card expects, so branch before PlannerEventContent ever sees one.
+    event: (props: { event: any }) =>
+      props.event?.resource?.isThemeAllocation ? (
+        <div style={{ fontSize: 10, fontWeight: 600, padding: '2px 4px', color: props.event.resource.textColor }}>
+          {props.event.title}
+        </div>
+      ) : (
+        <PlannerEventContent event={props.event} onOpenActions={setSelectedEvent} />
+      ),
   }), []);
+
+  /** Real events keep usePlannerCalendarEvents' own styling; the theme-allocation underlay
+   * gets a flat, low-opacity fill in its theme colour and no border, so it reads as a soft
+   * "this was the plan" band rather than competing visually with what's actually scheduled. */
+  const eventPropGetterWithBackground = useCallback((event: any) => {
+    if (event?.resource?.isThemeAllocation) {
+      return {
+        style: {
+          backgroundColor: event.resource.color,
+          opacity: 0.35,
+          border: 'none',
+          pointerEvents: 'none' as const,
+        },
+      };
+    }
+    return eventStyleGetter(event);
+  }, [eventStyleGetter]);
 
   const sprintName = selectedSprintId ? sprintsById?.[selectedSprintId]?.name : null;
 
@@ -591,6 +698,7 @@ const SprintWeekPlanner: React.FC<SprintWeekPlannerProps> = ({ anchorDate }) => 
               <DragAndDropCalendar
                 localizer={localizer}
                 events={events}
+                backgroundEvents={showThemeAllocations ? themeAllocationBackgroundEvents : []}
                 view="fiveDay"
                 views={{ fiveDay: FiveDayView }}
                 toolbar={false}
@@ -606,7 +714,7 @@ const SprintWeekPlanner: React.FC<SprintWeekPlannerProps> = ({ anchorDate }) => 
                 onSelectEvent={handleSelectEvent}
                 onDropFromOutside={handleDropFromOutside}
                 dragFromOutsideItem={dragFromOutsideItem}
-                eventPropGetter={eventStyleGetter}
+                eventPropGetter={eventPropGetterWithBackground}
                 components={eventComponents}
                 tooltipAccessor={(event: any) => `${event.title} — Planned Date: ${format(event.start, 'd MMM, HH:mm')}`}
                 getNow={() => new Date()}
