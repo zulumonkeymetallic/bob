@@ -140,7 +140,7 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
   const [granularity, setGranularity] = useState<RoadmapGranularity>('quarter');
   const rowAxis = ROADMAP_ROW_AXIS[granularity];
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
-  const [dragId, setDragId] = useState<string | null>(null);
+  const [drag, setDrag] = useState<{ kind: 'goal' | 'story'; id: string } | null>(null);
   const [dragOverCell, setDragOverCell] = useState<string | null>(null);
 
   const { sprints, selectedSprintId } = useSprint();
@@ -309,6 +309,22 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
     // columns and dragging wrote quarter dates.
   }, [goals, granularity, sprints]);
 
+  /**
+   * A story's sprint is the same explicit `sprintId` field the Kanban and sprint planner read
+   * (see storiesByGoalSprint above) — dragging a story card here writes that field directly
+   * rather than touching dates, so all three surfaces keep agreeing on which sprint it's in.
+   */
+  const rescheduleStory = useCallback(async (storyId: string, qKey: string) => {
+    try {
+      await updateDoc(doc(db, 'stories', storyId), {
+        sprintId: qKey === UNSCHEDULED_COLUMN ? null : qKey,
+        updatedAt: serverTimestamp(),
+      } as any);
+    } catch (err) {
+      console.error('Failed to reschedule story', storyId, err);
+    }
+  }, []);
+
   return (
     <div ref={shellRef} style={fullScreen
       ? { position: 'fixed', inset: 0, zIndex: Z.panel, background: 'var(--bg, #f8f9fa)',
@@ -453,17 +469,20 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
                   {columns.map((qKey) => {
                     const cellGoals = themeGoals?.get(qKey) || [];
                     const cellId = `${theme.key}:${qKey}`;
-                    const isDropTarget = dragId != null && dragOverCell === cellId;
+                    const isDropTarget = drag != null && dragOverCell === cellId;
                     return (
                       <div
                         key={qKey}
-                        onDragOver={(e) => { if (dragId) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOverCell(cellId); } }}
+                        onDragOver={(e) => { if (drag) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOverCell(cellId); } }}
                         onDragLeave={() => setDragOverCell((p) => (p === cellId ? null : p))}
                         onDrop={(e) => {
                           e.preventDefault();
-                          const id = e.dataTransfer.getData('text/plain') || dragId;
+                          const id = e.dataTransfer.getData('text/plain') || drag?.id;
+                          const kind = drag?.kind ?? 'goal';
                           setDragOverCell(null);
-                          if (id) reschedule(id, qKey);
+                          if (!id) return;
+                          if (kind === 'story') rescheduleStory(id, qKey);
+                          else reschedule(id, qKey);
                         }}
                         style={{
                           width: COL_W, flexShrink: 0, padding: '6px 8px', minHeight: 72,
@@ -477,12 +496,19 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
                           && (storiesByGoalSprint.get(`${theme.key}:${qKey}`) || []).map((st: any) => (
                           <div
                             key={st.id}
+                            draggable
+                            onDragStart={(e) => {
+                              e.dataTransfer.setData('text/plain', st.id);
+                              e.dataTransfer.effectAllowed = 'move';
+                              setDrag({ kind: 'story', id: st.id });
+                            }}
+                            onDragEnd={() => { setDrag(null); setDragOverCell(null); }}
                             onClick={() => showSidebar(st, 'story')}
-                            title={`${st.title} — click for detail`}
+                            title={`${st.title} — click for detail, drag to move sprint`}
                             style={{
                               borderLeft: `2px solid ${theme.color}`, background: 'var(--panel, #fafafa)',
                               color: 'var(--text, #1a1a1a)', borderRadius: '0 4px 4px 0',
-                              padding: '2px 6px', fontSize: 10, cursor: 'pointer',
+                              padding: '2px 6px', fontSize: 10, cursor: 'grab',
                               opacity: Number(st.status) >= 4 ? 0.5 : 1,
                             }}
                           >
@@ -490,13 +516,16 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
                             {st.title}
                           </div>
                         ))}
-                        {cellGoals.map((g) => (
+                        {/* Goal-level view only. At sprint granularity the row IS this goal
+                            already (see ROADMAP_ROW_AXIS), so re-showing it as a chip inside
+                            its own row is pure clutter — the cell's job there is story cards. */}
+                        {granularity !== 'sprint' && cellGoals.map((g) => (
                           <RoadmapChip
                             key={g.id} goal={g}
                             themeColor={resolveGoalThemeColor(g, GLOBAL_THEMES) || theme.color}
                             onEdit={(g) => showSidebar(g, 'goal')}
-                            onDragStartGoal={setDragId}
-                            onDragEndGoal={() => { setDragId(null); setDragOverCell(null); }}
+                            onDragStartGoal={(id) => setDrag({ kind: 'goal', id })}
+                            onDragEndGoal={() => { setDrag(null); setDragOverCell(null); }}
                           />
                         ))}
                       </div>
