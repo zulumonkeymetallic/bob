@@ -121,7 +121,11 @@ const PlanActionBar: React.FC<PlanActionBarProps> = ({ className }) => {
         <Dropdown.Toggle size="sm" variant={activePlanLevel || isRoadmapActive ? 'primary' : 'outline-secondary'} title="Switch planning level">
           <Milestone size={14} /><span className="d-none d-xl-inline ms-1">Plan{isRoadmapActive ? ': Roadmap' : activePlanLevel ? `: ${plannerLevelLabel(activePlanLevel.level)}` : ''}</span>
         </Dropdown.Toggle>
-        <Dropdown.Menu>
+        {/* strategy: 'fixed' so the menu escapes this bar's overflow-x. The bar scrolls
+            horizontally when the icons do not fit, and an absolutely-positioned menu inside an
+            overflow container gets clipped — the same defect that hid the notification panel
+            and Sprint selector in the top toolbar. */}
+        <Dropdown.Menu renderOnMount popperConfig={{ strategy: 'fixed' }}>
           {PLAN_LEVELS.map((entry) => (
             <Dropdown.Item
               key={entry.level}
