@@ -464,15 +464,20 @@ const SprintWeekPlanner: React.FC<SprintWeekPlannerProps> = ({ anchorDate }) => 
     setFullReplanLoading(true);
     setFeedback(null);
     try {
-      const runNightlyChainFn = httpsCallable(functions, 'runNightlyChainNow', { timeout: 540000 });
-      await runNightlyChainFn({ startDate: format(weekStart, 'yyyy-MM-dd'), days: VISIBLE_DAYS, planningMode });
+      // runNightlyChainNow reprocesses every account in Firestore — the same function the
+      // 04:00 scheduled job runs — with no way to scope it to just this user, and it silently
+      // ignored startDate/days/planningMode regardless. runFullReplanForCallingUser runs the
+      // same pointing/conversions/priority-scoring/calendar-planning steps scoped to
+      // req.auth.uid, so this actually replans just this account.
+      const runFullReplanFn = httpsCallable(functions, 'runFullReplanForCallingUser', { timeout: 300000 });
+      await runFullReplanFn({});
       setFeedback({ variant: 'success', message: 'Full replan complete.' });
     } catch (err: any) {
       setFeedback({ variant: 'danger', message: err?.message || 'Full replan failed. Please retry in a moment.' });
     } finally {
       setFullReplanLoading(false);
     }
-  }, [currentUser, weekStart, planningMode]);
+  }, [currentUser]);
 
   const handleDropFromOutside = useCallback(async ({ start, end }: { start: Date; end: Date }) => {
     const item = dragItemRef.current;

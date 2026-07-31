@@ -54,6 +54,24 @@ const GOOGLE_AI_STUDIO_API_KEY = defineSecret('GOOGLEAISTUDIOAPIKEY');
 const GOOGLE_OAUTH_CLIENT_ID = defineSecret('GOOGLE_OAUTH_CLIENT_ID');
 const GOOGLE_OAUTH_CLIENT_SECRET = defineSecret('GOOGLE_OAUTH_CLIENT_SECRET');
 
+/**
+ * Every nightly step below is written as "loop every profile doc, then run ownerUid-scoped
+ * sub-queries per user" — this is the one seam that lets a step run for a single caller
+ * instead of the whole app. Passing no onlyUserId reproduces the original all-profiles query
+ * exactly, so the scheduled nightly job (unifiedNightlyOrchestrator -> runNightlyChainCore,
+ * untouched by this helper) behaves identically to before. See runFullReplanForCallingUser
+ * for the per-user caller that uses this — it exists because "Full replan" on the Weekly Plan
+ * page used to invoke runNightlyChainNow, which reprocesses every account in Firestore on a
+ * single click from one user's personal planner.
+ */
+async function resolveProfilesToProcess(db, onlyUserId) {
+  if (onlyUserId) {
+    const snap = await db.collection('profiles').doc(onlyUserId).get().catch(() => null);
+    return { docs: snap && snap.exists ? [snap] : [] };
+  }
+  return db.collection('profiles').get().catch(() => ({ docs: [] }));
+}
+
 const THEME_RULES = [
   { match: ['growth'], slots: [{ days: [1, 2, 3, 4, 5], start: 7, end: 9, label: 'Growth AM' }, { days: [1, 2, 3, 4, 5], start: 17, end: 19, label: 'Growth PM' }] },
   { match: ['finance', 'wealth'], slots: [{ days: [1, 2, 3, 4, 5], start: 18, end: 21, label: 'Wealth weekday evening' }, { days: [6, 7], start: 9, end: 12, label: 'Wealth weekend AM' }, { days: [6, 7], start: 13, end: 17, label: 'Wealth weekend PM' }] },
@@ -2495,9 +2513,9 @@ async function replanExistingBlocksForUser({
 const AUTO_POINTING_MAX_CANDIDATES_PER_USER = 40;
 const AUTO_POINTING_TIME_BUDGET_MS = 90_000;
 
-async function runAutoPointingJob() {
+async function runAutoPointingJob({ onlyUserId } = {}) {
   const db = ensureFirestore();
-  const profiles = await db.collection('profiles').get().catch(() => ({ docs: [] }));
+  const profiles = await resolveProfilesToProcess(db, onlyUserId);
   const stepStartMs = Date.now();
 
   for (const prof of profiles.docs) {
@@ -2690,9 +2708,9 @@ async function runAutoPointingJob() {
 // }, runAutoPointingJob);
 
 // ===== 02:00 Conversion (task -> story only)
-async function runAutoConversionsJob() {
+async function runAutoConversionsJob({ onlyUserId } = {}) {
   const db = ensureFirestore();
-  const profiles = await db.collection('profiles').get().catch(() => ({ docs: [] }));
+  const profiles = await resolveProfilesToProcess(db, onlyUserId);
 
   for (const prof of profiles.docs) {
     const userId = prof.id;
@@ -2866,9 +2884,9 @@ async function clearStaleMacSyncDueDateLocks(db, userId) {
   return cleared;
 }
 
-async function runPriorityScoringJob() {
+async function runPriorityScoringJob({ onlyUserId } = {}) {
   const db = ensureFirestore();
-  const profiles = await db.collection('profiles').get().catch(() => ({ docs: [] }));
+  const profiles = await resolveProfilesToProcess(db, onlyUserId);
 
   for (const prof of profiles.docs) {
     const userId = prof.id;
@@ -3585,9 +3603,9 @@ async function runPriorityScoringJob() {
 // }, runPriorityScoringJob);
 
 // ===== 05:30 Calendar insertion respecting theme windows and busy time
-async function runCalendarPlannerJob() {
+async function runCalendarPlannerJob({ onlyUserId } = {}) {
   const db = ensureFirestore();
-  const profiles = await db.collection('profiles').get().catch(() => ({ docs: [] }));
+  const profiles = await resolveProfilesToProcess(db, onlyUserId);
   const now = DateTime.now();
   // Must match sprintForwardPlanner.js's CALENDAR_VISIBILITY_HORIZON_DAYS and
   // calendarSync.js's GCAL_FUTURE_DAYS (both 90). This window governs how far ahead
@@ -4832,6 +4850,45 @@ exports.replanCalendarNow = onCall({
   };
 });
 
+/**
+ * "Full replan" on the Weekly Plan / Weekly Capacity pages used to call runNightlyChainNow —
+ * the exact function the 04:00 scheduled job runs, with zero arguments, reprocessing every
+ * account in Firestore. A click on one user's own planner triggered AI pointing, conversions
+ * and priority scoring for the whole app. The tooltip only ever promised "pointing,
+ * conversions, priority scoring, and calendar planning" for the current user — this delivers
+ * exactly that, scoped to req.auth.uid via the onlyUserId param each step now accepts (see
+ * resolveProfilesToProcess above), and leaves runNightlyChainCore/unifiedNightlyOrchestrator
+ * completely untouched so the real nightly job for every other account is unaffected.
+ */
+exports.runFullReplanForCallingUser = onCall({
+  timeZone: 'Europe/London',
+  memory: '512MiB',
+  timeoutSeconds: 300,
+  secrets: [OPENROUTER_API_KEY_SECRET],
+  region: 'europe-west2',
+}, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new https.HttpsError('unauthenticated', 'Sign in required');
+
+  const steps = [
+    { name: 'runAutoPointing', fn: () => runAutoPointingJob({ onlyUserId: uid }) },
+    { name: 'runAutoConversions', fn: () => runAutoConversionsJob({ onlyUserId: uid }) },
+    { name: 'runPriorityScoring', fn: () => runPriorityScoringJob({ onlyUserId: uid }) },
+    { name: 'applyProjectedDueDates', fn: () => applyProjectedDueDatesForUnscheduledSprintItems({ onlyUserId: uid }) },
+    { name: 'runCalendarPlanner', fn: () => runCalendarPlannerJob({ onlyUserId: uid }) },
+  ];
+  const results = [];
+  for (const step of steps) {
+    try {
+      const out = await step.fn();
+      results.push({ step: step.name, status: 'ok', result: out ?? null });
+    } catch (err) {
+      results.push({ step: step.name, status: 'error', error: err?.message || String(err) });
+    }
+  }
+  return { ok: true, results };
+});
+
 exports.schedulePlannerItem = onCall({
   region: 'europe-west2',
   memory: '512MiB',
@@ -5021,9 +5078,9 @@ async function nightlySprintCapacityUpdate() {
  * are in the active sprint but have no dueDate or were previously projected.
  * Rate: 5 items per day, starting tomorrow, sorted by aiCriticalityScore DESC.
  */
-async function applyProjectedDueDatesForUnscheduledSprintItems() {
+async function applyProjectedDueDatesForUnscheduledSprintItems({ onlyUserId } = {}) {
   const db = ensureFirestore();
-  const profiles = await db.collection('profiles').get().catch(() => ({ docs: [] }));
+  const profiles = await resolveProfilesToProcess(db, onlyUserId);
   let totalProjected = 0;
 
   for (const prof of profiles.docs) {
@@ -5995,6 +6052,7 @@ exports._runAutoPointingJob = runAutoPointingJob;
 exports._runAutoConversionsJob = runAutoConversionsJob;
 exports._runPriorityScoringJob = runPriorityScoringJob;
 exports._runCalendarPlannerJob = runCalendarPlannerJob;
+exports._applyProjectedDueDatesForUnscheduledSprintItems = applyProjectedDueDatesForUnscheduledSprintItems;
 exports._replanExistingBlocksForUser = replanExistingBlocksForUser;
 exports._deltaTop3ForPersona = _deltaTop3ForPersona;
 

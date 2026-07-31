@@ -149,7 +149,10 @@ const WeeklyThemePlanner: React.FC = () => {
 
     const materializePlannerBlocks = httpsCallable(functions, 'materializeFitnessBlocksNow');
     const replanCalendarNowFn = httpsCallable(functions, 'replanCalendarNow', { timeout: 180000 });
-    const runNightlyChainFn = httpsCallable(functions, 'runNightlyChainNow', { timeout: 540000 });
+    // runNightlyChainNow reprocesses every account in Firestore (it's the same function the
+    // 04:00 scheduled job runs) — runFullReplanForCallingUser runs the same pointing/
+    // conversions/priority-scoring/calendar-planning steps scoped to just the calling user.
+    const runNightlyChainFn = httpsCallable(functions, 'runFullReplanForCallingUser', { timeout: 300000 });
     const seedNextWeekPlannerOverridesFn = httpsCallable(functions, 'seedNextWeekPlannerOverridesNow');
     const selectedWeekDate = useMemo(() => parseISO(selectedWeekKey), [selectedWeekKey]);
     const selectedWeekLabel = useMemo(() => format(selectedWeekDate, 'd MMM yyyy'), [selectedWeekDate]);
@@ -353,12 +356,11 @@ const WeeklyThemePlanner: React.FC = () => {
         setNightlyRunning(true);
         setApplyFeedback(null);
         try {
-            const res = await runNightlyChainFn({
-                planningMode,
-                fitnessBlocksAutoCreate,
-                startDate: selectedWeekKey,
-                days: 7,
-            });
+            // planningMode/fitnessBlocksAutoCreate/startDate/days were sent here before but
+            // ignored by the backend regardless of which callable this hit — the scoped
+            // function only runs pointing/conversions/priority-scoring/calendar-planning for
+            // req.auth.uid, with no per-call options yet.
+            const res = await runNightlyChainFn({});
             const data = res?.data as { results?: Array<{ step?: string; status?: string }> };
             const summary = Array.isArray(data?.results) && data.results.length
                 ? data.results.map((item) => `${item.step || 'step'}:${item.status || 'ok'}`).join(', ')

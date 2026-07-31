@@ -310,6 +310,9 @@ try {
     exports.replanCalendarNow = nightlyOrchestration.replanCalendarNow;
     exports.unifiedNightlyOrchestrator = nightlyOrchestration.unifiedNightlyOrchestrator;
     exports.runNightlyChainNow = nightlyOrchestration.runNightlyChainNow;
+    if (nightlyOrchestration.runFullReplanForCallingUser) {
+      exports.runFullReplanForCallingUser = nightlyOrchestration.runFullReplanForCallingUser;
+    }
     if (nightlyOrchestration.runSprintForwardPlannerNow) {
       exports.runSprintForwardPlannerNow = nightlyOrchestration.runSprintForwardPlannerNow;
     }
