@@ -23,12 +23,12 @@ const at = (width: number, height: number, ua: string, maxTouchPoints = 0) =>
 
 describe('detectIPadOS', () => {
   it('accepts the classic iPad user-agent', () => {
-    expect(detectIPadOS(UA.iPadClassic, 5)).toBe(true);
+    expect(detectIPadOS(UA.iPadClassic, 5, true)).toBe(true);
   });
 
   it('accepts an iPad reporting a Macintosh UA, which is the iPadOS 13+ default', () => {
     // This is the case the previous /ipad/i test missed entirely.
-    expect(detectIPadOS(UA.iPadDesktopMode, 5)).toBe(true);
+    expect(detectIPadOS(UA.iPadDesktopMode, 5, true)).toBe(true);
   });
 
   it('does not mistake a real Mac for an iPad', () => {
@@ -273,6 +273,32 @@ describe('parity with the behaviour this replaces', () => {
     const state = at(w, 820, UA.iPadClassic, 5);
     expect(state.isIPadOS).toBe(true);
     expect(state.tier).toBe('tablet');
+  });
+});
+
+describe('a Mac is not an iPad just because it reports touch points', () => {
+  it('requires a coarse primary pointer before trusting a Macintosh UA', () => {
+    // A Mac with a touch display or tablet peripheral reports maxTouchPoints > 1. Treating it
+    // as an iPad hid the Kanban's Done column on desktop, because that column is gated on
+    // `isIPad && isTablet`. macOS reports pointer: fine; iPadOS reports coarse even with a
+    // Magic Keyboard attached.
+    expect(detectIPadOS(UA.mac, 5, false)).toBe(false);   // Mac with touch peripheral
+    expect(detectIPadOS(UA.mac, 5, true)).toBe(true);     // genuine iPad on iPadOS 13+
+    expect(detectIPadOS(UA.mac, 0, false)).toBe(false);   // ordinary Mac
+  });
+
+  it('keeps the desktop tier for a touch-reporting Mac at desktop width', () => {
+    const state = computeTier({
+      width: 1800, height: 1000, ua: UA.mac, maxTouchPoints: 5, coarsePointer: false,
+    });
+    expect(state.tier).toBe('desktop');
+    expect(state.isIPadOS).toBe(false);
+    // legacyIsTablet is what the Kanban's Done-column gate reads.
+    expect(state.legacyIsTablet).toBe(false);
+  });
+
+  it('still trusts an explicit iPad UA regardless of pointer', () => {
+    expect(detectIPadOS('Mozilla/5.0 (iPad; CPU OS 17_0)', 5, false)).toBe(true);
   });
 });
 

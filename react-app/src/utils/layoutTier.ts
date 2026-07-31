@@ -80,10 +80,24 @@ const readOverride = (): LayoutTier | null => {
 };
 
 /** True for iPad on any modern iPadOS, whether or not it admits to being one. */
+/**
+ * iPadOS 13+ reports a Macintosh user agent, so touch points are needed to recognise an iPad
+ * at all. But touch points ALONE are not enough: a Mac with a touch-capable display or tablet
+ * peripheral also reports them, and classifying that Mac as an iPad has real consequences —
+ * it hid the Kanban's Done column on desktop, because that column is gated on
+ * `isIPad && isTablet`.
+ *
+ * The primary pointer is the discriminator. iPadOS reports `pointer: coarse` even with a
+ * Magic Keyboard trackpad attached; macOS reports `pointer: fine`. Both signals are required
+ * before a Macintosh UA is treated as an iPad.
+ */
 export const detectIPadOS = (
   ua: string = typeof navigator !== 'undefined' ? navigator.userAgent : '',
   maxTouchPoints: number = typeof navigator !== 'undefined' ? navigator.maxTouchPoints || 0 : 0,
-): boolean => /ipad/i.test(ua) || (/macintosh/i.test(ua) && maxTouchPoints > 1);
+  coarsePointer: boolean = typeof window !== 'undefined'
+    ? Boolean(window.matchMedia?.('(pointer: coarse)')?.matches)
+    : false,
+): boolean => /ipad/i.test(ua) || (/macintosh/i.test(ua) && maxTouchPoints > 1 && coarsePointer);
 
 /** Phones only — iPad is excluded because iPadOS UA strings can contain "Mobile". */
 const isPhoneUA = (ua: string): boolean =>
@@ -105,7 +119,7 @@ export const computeTier = (input: {
   override?: LayoutTier | null;
 }): LayoutState => {
   const { width, height, ua, maxTouchPoints, coarsePointer, override } = input;
-  const isIPadOS = detectIPadOS(ua, maxTouchPoints);
+  const isIPadOS = detectIPadOS(ua, maxTouchPoints, coarsePointer);
 
   let tier: LayoutTier;
   if (override) {
