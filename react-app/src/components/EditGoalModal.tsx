@@ -26,6 +26,10 @@ import { buildGoalTimelineImpactPlan, GoalTimelineAffectedStory } from './visual
 import GoalKpiLivePanel from './goals/GoalKpiLivePanel';
 import { applyGoalTimelineChanges } from '../utils/goalTimelineChanges';
 import { dateInputToQuarterKey, quarterKeyLabel, quarterKeyToDateInputs, quarterOptionsIncluding } from '../utils/quarters';
+import { withTimeout } from '../utils/withTimeout';
+
+/** Matches the create path's timeout so both goal writes fail the same way. */
+const SAVE_TIMEOUT_MS = 15000;
 import { KPIDesignerForm } from './KPIDesigner';
 
 interface EditGoalModalProps {
@@ -757,7 +761,13 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         console.log('🚀 EditGoalModal: Starting GOAL update', { goalId: goal.id });
         const prevStartDateMs = typeof (goal as any).startDate === 'number' ? (goal as any).startDate : null;
         const prevEndDateMs = typeof (goal as any).endDate === 'number' ? (goal as any).endDate : null;
-        await updateDoc(doc(db, 'goals', goal.id), goalData);
+        // Bounded like the create path: a stuck Firestore write otherwise leaves the
+        // button on "Saving..." forever with nothing thrown to catch.
+        await withTimeout(
+          updateDoc(doc(db, 'goals', goal.id), goalData),
+          SAVE_TIMEOUT_MS,
+          'goals updateDoc',
+        );
         // Auto-move stories when goal start/end date changes (same logic as roadmap drag).
         // Drift caused by other paths is handled by the nightly alignStoriesToGoalSprints
         // step inside the unified nightly orchestrator (04:00 Europe/London).

@@ -9,6 +9,12 @@ import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { normalizeGoalCostType } from '../utils/goalCost';
 import { errorMessage } from '../utils/errorMessage';
 import { dateInputToQuarterKey, quarterKeyLabel, quarterKeyToDateInputs, quarterOptionsIncluding } from '../utils/quarters';
+import { withTimeout } from '../utils/withTimeout';
+
+/** Matches FloatingActionButton's create timeout, so both create paths fail the same way. */
+const CREATE_TIMEOUT_MS = 15000;
+/** Shorter: this lookup is a nice-to-have, so it should give up fast and let the save run. */
+const REF_LOOKUP_TIMEOUT_MS = 4000;
 
 // Goal type options — maps to goalKind in Firestore
 const GOAL_TYPES = [
@@ -149,16 +155,26 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
         timestamp: new Date().toISOString()
       });
 
-      // Get existing goal references for unique ref generation
-      const existingGoalsQuery = query(
-        collection(db, 'goals'),
-        where('ownerUid', '==', currentUser.uid)
-      );
-      const existingSnapshot = await getDocs(existingGoalsQuery);
-      const existingRefs = existingSnapshot.docs
-        .map(doc => doc.data().ref)
-        .filter(ref => ref);
-      
+      // Best-effort collision guard, not a prerequisite. This used to be an unbounded
+      // getDocs() over EVERY goal the user owns, awaited before the write — so with a large
+      // goal list, or Firestore simply being slow, "Creating..." sat there forever with no
+      // error and no way out (the same full-collection-scan hang the story modal had).
+      //
+      // generateRef's existingRefs argument is optional and only powers a retry loop against
+      // a 1-in-100,000 collision — the FAB's goal create doesn't pass it at all. So this is
+      // now time-boxed and falls back to an unchecked ref rather than blocking the save.
+      let existingRefs: string[] = [];
+      try {
+        const existingSnapshot = await withTimeout(
+          getDocs(query(collection(db, 'goals'), where('ownerUid', '==', currentUser.uid))),
+          REF_LOOKUP_TIMEOUT_MS,
+          'goals ref lookup',
+        );
+        existingRefs = existingSnapshot.docs.map(d => d.data().ref).filter(Boolean);
+      } catch (refErr) {
+        console.warn('AddGoalModal: ref uniqueness lookup skipped —', errorMessage(refErr));
+      }
+
       // Generate unique reference number
       const ref = generateRef('goal', existingRefs);
       console.log('🏷️ AddGoalModal: Generated reference', {
@@ -216,7 +232,14 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
         timestamp: new Date().toISOString()
       });
 
-      await addDoc(collection(db, 'goals'), goalData);
+      // Bounded so a stuck write surfaces an error instead of leaving the button on
+      // "Creating..." indefinitely — see withTimeout for why a Firestore write can hang
+      // with nothing thrown to catch.
+      await withTimeout(
+        addDoc(collection(db, 'goals'), goalData),
+        CREATE_TIMEOUT_MS,
+        'goals addDoc',
+      );
       
       console.log('✅ AddGoalModal: GOAL created successfully', {
         action: 'goal_creation_success',
