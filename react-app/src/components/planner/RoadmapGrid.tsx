@@ -495,11 +495,11 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
             ))}
           </div>
           {view === 'gantt' && (
-            <span className="text-muted small">Search, zoom and the time axis are in the Gantt&apos;s own toolbar.</span>
+            <span className="text-muted small">Zoom, Arrange and the time axis are in the Gantt&apos;s own toolbar.</span>
           )}
         </div>
       )}
-      {showFilters && view === 'grid' && (
+      {showFilters && (
         <div className="d-flex flex-column gap-2 px-3 pt-2" style={{ flexShrink: 0 }}>          {/* Same filter set as the Gantt — search, theme, years — so switching between the two
               views does not mean relearning the controls. */}
           {/* Deliberately the Gantt's own markup and classes (grv5-filters / grv5-search /
@@ -555,7 +555,9 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
             {/* Granularity also flips the row axis — themes across a quarter (the balance
                 question), goals across a sprint (the what-is-in-flight question). Two levels
                 only: days belong to the Calendar, and story-level sprint capacity belongs to
-                /planner?level=sprint. */}
+                /planner?level=sprint. Grid-only: the Gantt has a continuous time axis with its
+                own Quarter/Month/Week/Fit-all controls. */}
+            {view === 'grid' && (
             <div className="btn-group btn-group-sm" role="group" aria-label="Granularity" style={{ flexShrink: 0 }}>
               {(['quarter', 'sprint'] as const).map((g) => (
                 <button
@@ -576,13 +578,14 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
                 </button>
               ))}
             </div>
+            )}
             {hasActiveRoadmapFilters(filters) && (
               <button type="button" className="grv5-select" style={{ cursor: 'pointer', padding: '0 10px' }}
                 onClick={() => setFilters(EMPTY_ROADMAP_FILTERS)}>
                 Clear filters
               </button>
             )}
-            <span className="text-muted small text-nowrap">{goals.length} goals</span>
+            {view === 'grid' && <span className="text-muted small text-nowrap">{goals.length} goals</span>}
             <button
               type="button" className="grv5-select" style={{ cursor: 'pointer', padding: '0 10px' }}
               onClick={toggleFullScreen}
@@ -596,7 +599,7 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
 
       {view === 'gantt' ? (
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          <GoalRoadmapV6 />
+          <GoalRoadmapV6 externalFilters={filters} />
         </div>
       ) : (
       <>

@@ -18,6 +18,7 @@ import ConfirmSprintChangesModal from './ConfirmSprintChangesModal';
 import type { GoalTimelineAffectedStory } from './goalTimelineImpact';
 import ThemeMultiSelect from '../shared/ThemeMultiSelect';
 import YearMultiSelect from '../shared/YearMultiSelect';
+import type { RoadmapFilterState } from '../../utils/roadmapFilters';
 import ShareGoalsPanel from '../shared/ShareGoalsPanel';
 import './GoalRoadmapV6.css';
 import { buildGoalTimelineImpactPlan } from './goalTimelineImpact';
@@ -433,7 +434,21 @@ const TaskTemplate: React.FC<{ data: GanttTask }> = ({ data }) => {
   );
 };
 
-const GoalRoadmapV6: React.FC = () => {
+interface GoalRoadmapV6Props {
+  /**
+   * When the host owns the filter row (RoadmapGrid, which shows Grid and Gantt as two views of
+   * one surface), it passes its filter state down and this component stops rendering its own
+   * duplicates of those controls. Omitted entirely — the standalone/embedded uses — nothing
+   * changes and the internal filter state drives itself exactly as before.
+   *
+   * Deliberately synced INTO the existing useState hooks rather than replacing every read site:
+   * `search`, `themeFilterIds` and friends are read in dozens of places across this file, and
+   * a one-way sync gets the shared-filter behaviour without touching any of that logic.
+   */
+  externalFilters?: RoadmapFilterState;
+}
+
+const GoalRoadmapV6: React.FC<GoalRoadmapV6Props> = ({ externalFilters }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { theme } = useTheme();
@@ -489,6 +504,22 @@ const GoalRoadmapV6: React.FC = () => {
   });
   const [activeFocusGoalIds, setActiveFocusGoalIds] = useState<Set<string>>(new Set());
   const [respectSprintScope, setRespectSprintScope] = useState(true);
+
+  /** One-way sync from the host's filter row. See GoalRoadmapV6Props.externalFilters. */
+  useEffect(() => {
+    if (!externalFilters) return;
+    setSearch(externalFilters.search);
+    setThemeFilterIds(externalFilters.themeIds);
+    // Empty years means "all" in RoadmapFilterState; here that is a separate boolean.
+    setAllYears(externalFilters.years.length === 0);
+    setSelectedYears(externalFilters.years);
+    setShowStoryGoalsOnly(externalFilters.withStoriesOnly);
+    setShowFocusGoalsOnly(externalFilters.focusOnly);
+    // Suppresses the auto-enable effect that would otherwise flip this back on once focus
+    // goals load, overriding what the host's checkbox actually says.
+    setFocusToggleTouched(true);
+    setRespectSprintScope(externalFilters.limitToSprint);
+  }, [externalFilters]);
   const [editGoal, setEditGoal] = useState<Goal | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [timelineNotice, setTimelineNotice] = useState<string | null>(null);
@@ -1566,33 +1597,43 @@ const GoalRoadmapV6: React.FC = () => {
 
   const renderTopbar = () => (
     <div className={`grv6-topbar ${isFullscreen ? 'grv6-topbar-fullscreen' : ''}`}>
-      <div className="grv6-search">
-        <Search size={16} />
-        <input
-          placeholder="Search goals"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-        />
-      </div>
-      <div className="grv6-control-group">
-        <label className="grv6-label">Year</label>
-        <YearMultiSelect
-          availableYears={availableYears}
-          selectedYears={selectedYears}
-          onChange={setSelectedYears}
-          allYears={allYears}
-          onAllYearsChange={setAllYears}
-          style={{ minWidth: 120 }}
-        />
-      </div>
-      <div className="grv6-control-group">
-        <label className="grv6-label">Theme</label>
-        <ThemeMultiSelect
-          selectedIds={themeFilterIds}
-          onChange={setThemeFilterIds}
-          style={{ minWidth: 140 }}
-        />
-      </div>
+      {/* Search / Year / Theme and the three checkboxes below are hidden when the host owns
+          them (externalFilters) — otherwise the merged roadmap stacks two filter rows that set
+          the same things. Arrange, Layout, Zoom and the time axis stay: they are Gantt-specific
+          and have no equivalent on the grid. */}
+      {!externalFilters && (
+        <div className="grv6-search">
+          <Search size={16} />
+          <input
+            placeholder="Search goals"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+        </div>
+      )}
+      {!externalFilters && (
+        <div className="grv6-control-group">
+          <label className="grv6-label">Year</label>
+          <YearMultiSelect
+            availableYears={availableYears}
+            selectedYears={selectedYears}
+            onChange={setSelectedYears}
+            allYears={allYears}
+            onAllYearsChange={setAllYears}
+            style={{ minWidth: 120 }}
+          />
+        </div>
+      )}
+      {!externalFilters && (
+        <div className="grv6-control-group">
+          <label className="grv6-label">Theme</label>
+          <ThemeMultiSelect
+            selectedIds={themeFilterIds}
+            onChange={setThemeFilterIds}
+            style={{ minWidth: 140 }}
+          />
+        </div>
+      )}
       <div className="grv6-control-group">
         <label className="grv6-label">Arrange</label>
         <div className="grv6-segment">
@@ -1611,34 +1652,38 @@ const GoalRoadmapV6: React.FC = () => {
         </div>
       </div>
       <div className="grv6-control-group grv6-filters-inline">
-        <label className="grv6-filter-row">
-          <input
-            type="checkbox"
-            checked={showStoryGoalsOnly}
-            onChange={(e) => setShowStoryGoalsOnly(e.target.checked)}
-          />{' '}
-          Goals with stories
-        </label>
-        <label className="grv6-filter-row">
-          <input
-            type="checkbox"
-            checked={respectSprintScope}
-            onChange={(e) => setRespectSprintScope(e.target.checked)}
-          />{' '}
-          Limit to selected sprint
-        </label>
-        <label className="grv6-filter-row">
-          <input
-            type="checkbox"
-            checked={showFocusGoalsOnly}
-            onChange={(e) => {
-              setShowFocusGoalsOnly(e.target.checked);
-              setFocusToggleTouched(true);
-            }}
-            disabled={activeFocusGoalIds.size === 0}
-          />{' '}
-          Focus goals only{activeFocusGoalIds.size ? ` (${activeFocusGoalIds.size})` : ''}
-        </label>
+        {!externalFilters && (
+          <>
+            <label className="grv6-filter-row">
+              <input
+                type="checkbox"
+                checked={showStoryGoalsOnly}
+                onChange={(e) => setShowStoryGoalsOnly(e.target.checked)}
+              />{' '}
+              Goals with stories
+            </label>
+            <label className="grv6-filter-row">
+              <input
+                type="checkbox"
+                checked={respectSprintScope}
+                onChange={(e) => setRespectSprintScope(e.target.checked)}
+              />{' '}
+              Limit to selected sprint
+            </label>
+            <label className="grv6-filter-row">
+              <input
+                type="checkbox"
+                checked={showFocusGoalsOnly}
+                onChange={(e) => {
+                  setShowFocusGoalsOnly(e.target.checked);
+                  setFocusToggleTouched(true);
+                }}
+                disabled={activeFocusGoalIds.size === 0}
+              />{' '}
+              Focus goals only{activeFocusGoalIds.size ? ` (${activeFocusGoalIds.size})` : ''}
+            </label>
+          </>
+        )}
         <div className="grv6-filter-row" style={{ marginTop: 4 }}>
           <span style={{ fontSize: 11, opacity: 0.75, marginRight: 6 }}>Layout:</span>
           {(['flat', 'grouped'] as const).map(mode => (
