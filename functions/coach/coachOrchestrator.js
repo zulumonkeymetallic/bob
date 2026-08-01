@@ -358,7 +358,17 @@ async function _runOrchestratorForUser(uid) {
 
   const fitnessBlock = blockSnap.docs.find(d => {
     const data = d.data();
-    const cat = (data.category || data.theme || '').toLowerCase();
+    // String(...) before lowercasing.
+    //
+    // `theme` is a NUMBER in BOB — 0-14, the global theme id — so `.toLowerCase()` threw
+    // `TypeError: ... is not a function` and killed the whole run for this user. That is why
+    // coach_daily stopped writing on 2026-07-25: one calendar block with a numeric theme and
+    // nobody got a briefing again. The per-user catch logged it and moved on, so it failed
+    // silently every night for a week.
+    //
+    // A numeric theme cannot match any of the words below, which is correct — this check is
+    // looking for a category string like "fitness". The point is that it must not throw.
+    const cat = String(data.category || data.theme || '').toLowerCase();
     return cat.includes('fitness') || cat.includes('sport') || cat.includes('training') || cat.includes('health');
   });
 
@@ -403,7 +413,17 @@ async function _runOrchestratorForUser(uid) {
 
   const tomorrowFitnessBlock = tomorrowSnap.docs.find(d => {
     const data = d.data();
-    const cat = (data.category || data.theme || '').toLowerCase();
+    // String(...) before lowercasing.
+    //
+    // `theme` is a NUMBER in BOB — 0-14, the global theme id — so `.toLowerCase()` threw
+    // `TypeError: ... is not a function` and killed the whole run for this user. That is why
+    // coach_daily stopped writing on 2026-07-25: one calendar block with a numeric theme and
+    // nobody got a briefing again. The per-user catch logged it and moved on, so it failed
+    // silently every night for a week.
+    //
+    // A numeric theme cannot match any of the words below, which is correct — this check is
+    // looking for a category string like "fitness". The point is that it must not throw.
+    const cat = String(data.category || data.theme || '').toLowerCase();
     return cat.includes('fitness') || cat.includes('sport') || cat.includes('training') || cat.includes('health');
   });
   const tomorrowTrainingType = tomorrowFitnessBlock
