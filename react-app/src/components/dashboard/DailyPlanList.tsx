@@ -13,9 +13,10 @@
  */
 import React, { useEffect, useState } from 'react';
 import { Badge, Form, ListGroup } from 'react-bootstrap';
-import { CalendarDays, Clock3, Star, Trash2 } from 'lucide-react';
+import { Activity, CalendarDays, Clock3, Star, Trash2 } from 'lucide-react';
 import { doc, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { db } from '../../firebase';
+import { useSidebar } from '../../contexts/SidebarContext';
 import { getPriorityBadge } from '../../utils/statusHelpers';
 import type { Story, Task } from '../../types';
 import type { DailyPlanTimelineItem } from '../../hooks/useDailyPlanTimeline';
@@ -186,6 +187,7 @@ const DailyPlanList: React.FC<DailyPlanListProps> = ({
   onDefer,
   onEdit,
 }) => {
+  const { showSidebar } = useSidebar();
   return (
     <ListGroup variant="flush">
       {items.map((item) => {
@@ -255,6 +257,21 @@ const DailyPlanList: React.FC<DailyPlanListProps> = ({
             </div>
             {isEntity && entity && (
               <DailyPlanEntityControls entity={entity} entityType={item.story ? 'story' : 'task'} isTop3={item.isTop3} />
+            )}
+            {/* Same Activity-stream affordance the Kanban cards carry (KanbanCardV2), via the
+                same showSidebar protocol — so notes/history on a Top 3 item are one click from
+                the daily plan rather than a trip to the board. Leads the action cluster because
+                it is the non-destructive one. */}
+            {isEntity && entity && (
+              <button
+                type="button"
+                style={iconBtnStyle}
+                title="Activity stream"
+                aria-label={`Activity stream for ${item.title}`}
+                onClick={() => showSidebar(entity as any, item.story ? 'story' : 'task')}
+              >
+                <Activity size={14} />
+              </button>
             )}
             {onDefer && (item.task || item.story) && (
               <button
