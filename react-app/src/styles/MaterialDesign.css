@@ -147,8 +147,23 @@
   color: #ffffff !important;
 }
 
+/* No `!important` here, deliberately.
+ *
+ * This was a shotgun fix from before the app had theme tokens: forcing EVERY p/span/div to
+ * pure white. Because `!important` on a stylesheet rule beats even inline styles, it also
+ * overrode every deliberate colour a component set — so `color: var(--muted)` resolved
+ * correctly to #a0a5b1 and was then repainted #ffffff. Dark mode had no secondary-text
+ * hierarchy at all: labels, captions, refs and body copy all rendered identically white. It
+ * is also why switching theme flashed the whole UI white for a repaint.
+ *
+ * Without `!important` the rule still does its actual job — a white default for bare elements
+ * that specify no colour of their own — while anything with an explicit colour (inline token
+ * styles, .text-muted, component CSS) now wins, which is the correct precedence. Muted text
+ * is unaffected: `.text-muted` is separately themed for dark in three places (here at :46 and
+ * :264, and theme-aware.css:406), all still !important.
+ */
 [data-theme="dark"] p, [data-theme="dark"] span, [data-theme="dark"] div {
-  color: #ffffff !important;
+  color: #ffffff;
 }
 
 [data-theme="dark"] .md-headline-4,

@@ -27,10 +27,10 @@ import GoalKpiLivePanel from './goals/GoalKpiLivePanel';
 import { applyGoalTimelineChanges } from '../utils/goalTimelineChanges';
 import { dateInputToQuarterKey, quarterKeyLabel, quarterKeyToDateInputs, quarterOptionsIncluding } from '../utils/quarters';
 import { withTimeout } from '../utils/withTimeout';
+import { KPIDesignerForm } from './KPIDesigner';
 
 /** Matches the create path's timeout so both goal writes fail the same way. */
 const SAVE_TIMEOUT_MS = 15000;
-import { KPIDesignerForm } from './KPIDesigner';
 
 interface EditGoalModalProps {
   goal: Goal | null;
