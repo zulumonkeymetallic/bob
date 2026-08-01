@@ -41,8 +41,13 @@ const UnifiedPlannerLevels: React.FC = () => {
     return <RoadmapGrid />;
   }
 
+  // Gantt is now a view of the roadmap rather than its own level — same surface, same view
+  // switcher, one entry point. This also drops the third duplicate: UnifiedRoadmapGanttView's
+  // own "Roadmap" tab rendered VisualCanvas, which is a different roadmap again from
+  // RoadmapGrid. Behind the same flag as year/quarter, so `roadmap_replaces_planner_levels`
+  // false restores the old tabbed page untouched.
   if (level === 'gantt') {
-    return <UnifiedRoadmapGanttView initialSubView="gantt" />;
+    return consolidated ? <RoadmapGrid initialView="gantt" /> : <UnifiedRoadmapGanttView initialSubView="gantt" />;
   }
 
   // `year` rendered the same component as `gantt` — a straight duplicate. `quarter` overlapped

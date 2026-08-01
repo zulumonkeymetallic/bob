@@ -30,6 +30,7 @@ import {
   type RoadmapGranularity,
 } from '../../utils/roadmapSchedule';
 import EditGoalModal from '../EditGoalModal';
+import GoalRoadmapV6 from '../visualization/GoalRoadmapV6';
 import ThemeMultiSelect from '../shared/ThemeMultiSelect';
 import YearMultiSelect from '../shared/YearMultiSelect';
 import { useSprint } from '../../contexts/SprintContext';
@@ -180,9 +181,11 @@ interface RoadmapGridProps {
   showFilters?: boolean;
   /** Goals to render. Omit to let this component load and filter them itself. */
   goals?: Goal[];
+  /** Which rendering to open on. `?level=gantt` routes here with 'gantt'. */
+  initialView?: 'grid' | 'gantt';
 }
 
-const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: providedGoals }) => {
+const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: providedGoals, initialView = 'grid' }) => {
   const { currentUser } = useAuth();
   const [ownGoals, setOwnGoals] = useState<Goal[]>([]);
   const [filters, setFilters] = useState<RoadmapFilterState>(EMPTY_ROADMAP_FILTERS);
@@ -215,6 +218,19 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
     document.addEventListener('fullscreenchange', onChange);
     return () => document.removeEventListener('fullscreenchange', onChange);
   }, []);
+  /**
+   * Grid and Gantt are two renderings of the same question — when is each goal happening —
+   * so they are one surface with a view switch rather than two planner levels. `?level=gantt`
+   * now lands here with this preset (see UnifiedPlannerLevels), which also retires the third
+   * duplicate: the old Gantt page's own "Roadmap" tab rendered VisualCanvas, a different
+   * roadmap again from this one.
+   *
+   * GoalRoadmapV6 is self-contained — it owns its data, filters, zoom and time-axis controls.
+   * So in Gantt mode this component's own filter row steps aside rather than stacking a second
+   * toolbar on top of the Gantt's. Folding the two filter sets into one means giving V6 props
+   * it does not currently take; that is the next step, not this one.
+   */
+  const [view, setView] = useState<'grid' | 'gantt'>(initialView);
   const [granularity, setGranularity] = useState<RoadmapGranularity>('quarter');
   const rowAxis = ROADMAP_ROW_AXIS[granularity];
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
@@ -457,6 +473,33 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
           display: 'flex', flexDirection: 'column' }
       : { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       {showFilters && (
+        <div className="d-flex align-items-center gap-2 px-3 pt-2" style={{ flexShrink: 0 }}>
+          <div className="btn-group btn-group-sm" role="group" aria-label="Roadmap view">
+            {([['grid', 'Grid'], ['gantt', 'Gantt']] as const).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                className="grv5-select"
+                style={{
+                  cursor: 'pointer', padding: '0 12px',
+                  background: view === key ? 'var(--brand, #5f77dc)' : undefined,
+                  color: view === key ? '#fff' : undefined,
+                }}
+                onClick={() => setView(key)}
+                title={key === 'grid'
+                  ? 'Grid — themes or goals against periods, drag to reschedule'
+                  : 'Gantt — continuous timeline with bars and dependencies'}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {view === 'gantt' && (
+            <span className="text-muted small">Search, zoom and the time axis are in the Gantt&apos;s own toolbar.</span>
+          )}
+        </div>
+      )}
+      {showFilters && view === 'grid' && (
         <div className="d-flex flex-column gap-2 px-3 pt-2" style={{ flexShrink: 0 }}>          {/* Same filter set as the Gantt — search, theme, years — so switching between the two
               views does not mean relearning the controls. */}
           {/* Deliberately the Gantt's own markup and classes (grv5-filters / grv5-search /
@@ -551,6 +594,12 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
         </div>
       )}
 
+      {view === 'gantt' ? (
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <GoalRoadmapV6 />
+        </div>
+      ) : (
+      <>
       {/* No top padding here — it moves onto the header cells below. Padding on the SCROLL
           CONTAINER, not the sticky header, leaves a strip at the container's inner top edge
           that a sticky child can never cover (sticky only sticks as far as the padding edge),
@@ -688,6 +737,8 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
           </div>
         )}
       </div>
+      </>
+      )}
 
       {editingGoal && (
         <EditGoalModal
