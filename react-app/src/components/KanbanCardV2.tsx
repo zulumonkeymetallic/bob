@@ -11,6 +11,7 @@ import { colorWithAlpha, goalThemeColor } from '../utils/storyCardFormatting';
 import { getPriorityBadge } from '../utils/statusHelpers';
 import { LANE_VARIANTS, canonicalStatusValue, laneFor, statusLabel, statusOptions } from '../utils/workStatus';
 import { themeVars } from '../utils/themeVars';
+import IconActionButton from './shared/IconActionButton';
 import type { GlobalTheme } from '../constants/globalThemes';
 import { resolveThemeFromValue } from '../utils/themeResolver';
 import { useAuth } from '../contexts/AuthContext';
@@ -845,113 +846,77 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                         {refLabel}
                     </span>
                     <div className="kanban-card__actions">
-                        <Button
-                            variant="link"
-                            size="sm"
-                            className="p-0"
-                            style={{ width: 24, height: 24, color: themeVars.muted }}
-                            title={scheduledBlock?.id ? 'Already has calendar event' : 'Open calendar event composer'}
+                        <IconActionButton
+                            label={scheduledBlock?.id ? 'Already has calendar event' : 'Open calendar event composer'}
+                            color={themeVars.muted as string}
                             onClick={createManualCalendarEvent}
-                            onPointerDown={(e) => e.stopPropagation()}
                             disabled={!!scheduledBlock?.id}
                         >
                             <CalendarPlus size={12} />
-                        </Button>
-                        <Button
-                            variant="link"
-                            size="sm"
-                            className="p-0"
-                            style={{ width: 24, height: 24, color: themeVars.muted }}
-                            title="Activity stream"
+                        </IconActionButton>
+                        <IconActionButton
+                            label="Activity stream"
+                            color={themeVars.muted as string}
                             onClick={(event) => {
                                 event.stopPropagation();
                                 showSidebar(item, type);
                             }}
-                            onPointerDown={(e) => e.stopPropagation()}
                         >
                             <Activity size={12} />
-                        </Button>
+                        </IconActionButton>
 
                         {type === 'story' && (
-                            <Button
-                                variant="link"
-                                size="sm"
-                                className="p-0"
-                                style={{ width: 24, height: 24, color: themeVars.muted }}
-                                title="AI: Generate tasks for this story"
+                            <IconActionButton
+                                label="AI: Generate tasks for this story"
+                                color={themeVars.muted as string}
                                 onClick={handleGenerateTasks}
-                                onPointerDown={(e) => e.stopPropagation()}
                             >
                                 <Wand2 size={12} />
-                            </Button>
+                            </IconActionButton>
                         )}
                         {type === 'task' && (
-                            <Button
-                                variant="link"
-                                size="sm"
-                                className="p-0"
-                                style={{ width: 24, height: 24, color: themeVars.muted }}
-                                title="Convert to story"
+                            <IconActionButton
+                                label="Convert to story"
+                                color={themeVars.muted as string}
                                 onClick={openConvertModal}
-                                onPointerDown={(e) => e.stopPropagation()}
                             >
                                 <Wand2 size={12} />
-                            </Button>
+                            </IconActionButton>
                         )}
                         {type === 'story' && (
-                            <Button
-                                variant="link"
-                                size="sm"
-                                className="p-0"
-                                style={{ width: 24, height: 24, color: themeVars.muted }}
-                                title="Convert to task"
+                            <IconActionButton
+                                label="Convert to task"
+                                color={themeVars.muted as string}
                                 onClick={handleConvertStoryToTask}
-                                onPointerDown={(e) => e.stopPropagation()}
                             >
                                 <Shuffle size={12} />
-                            </Button>
+                            </IconActionButton>
                         )}
-                        <Button
-                            variant="link"
-                            size="sm"
-                            className="p-0"
-                            style={{
-                                width: 24,
-                                height: 24,
-                                color: delegationColor,
-                                opacity: aiDelegationStatus === 'in_progress' ? 0.5 : 1,
-                            }}
-                            title={
+                        <IconActionButton
+                            label={
                                 aiDelegationStatus === 'in_progress' ? 'Hermes is executing this'
                                 : aiDelegationStatus === 'review' ? `Hermes complete — awaiting review (use review chip to reject/requeue)${aiDelegationNote ? ': ' + aiDelegationNote : ''}`
                                 : aiDelegationStatus === 'failed' ? 'Hermes failed — click to re-queue'
                                 : flaggedToAi ? 'Queued for Hermes — click to cancel'
                                 : 'Delegate to Hermes AI'
                             }
+                            color={delegationColor}
+                            opacity={aiDelegationStatus === 'in_progress' ? 0.5 : 1}
                             onClick={handleDelegateToAi}
-                            onPointerDown={(e) => e.stopPropagation()}
                             disabled={aiDelegationStatus === 'in_progress'}
                         >
                             <Bot size={12} />
-                        </Button>
+                        </IconActionButton>
                         {type === 'story' && (
-                            <Button
-                                variant="link"
-                                size="sm"
-                                className="p-0"
-                                style={{
-                                    width: 24,
-                                    height: 24,
-                                    color: manualPriorityRank ? 'var(--bs-danger)' : themeVars.muted,
-                                    opacity: flaggingPriority ? 0.6 : 1,
-                                }}
-                                title={manualPriorityRank ? `Remove ${manualPriorityLabel || 'manual priority'}` : 'Set manual priority'}
+                            <IconActionButton
+                                label={manualPriorityRank ? `Remove ${manualPriorityLabel || 'manual priority'}` : 'Set manual priority'}
+                                color={manualPriorityRank ? 'var(--bs-danger)' : (themeVars.muted as string)}
+                                opacity={flaggingPriority ? 0.6 : 1}
                                 onClick={handleFlagPriorityStory}
-                                onPointerDown={(e) => e.stopPropagation()}
                                 disabled={flaggingPriority}
                             >
                                 <span style={{ fontSize: 11, fontWeight: 800, lineHeight: 1 }}>{manualPriorityRank || 1}</span>
-                            </Button>
+                            </IconActionButton>
                         )}
                         <Button
                             variant="link"
