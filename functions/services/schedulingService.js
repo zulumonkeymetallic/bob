@@ -2,6 +2,7 @@ const admin = require('firebase-admin');
 const { DateTime } = require('luxon');
 const { normalizeThemeAllocationPlan, resolveThemeAllocationsForDate } = require('../lib/themeAllocations');
 const { inferItemPoints, startOfDayMs, toMillis } = require('./capacityService');
+const { isUserPlacementSource, isManuallyPlacedBlock } = require('../utils/manualPlacement');
 
 const DEFAULT_ZONE = 'Europe/London';
 const MIN_BLOCK_MS = 15 * 60 * 1000;
@@ -464,10 +465,14 @@ function resolveManualScheduleOverride(itemType, entity, zone, durationMinutes) 
   };
 }
 
-function shouldPersistWeeklyPlannerManualLock({ source, exactTargetStartMs }) {
-  const normalizedSource = String(source || '').trim().toLowerCase();
-  const exactStart = Number(exactTargetStartMs);
-  return normalizedSource === 'weekly_planner' && Number.isFinite(exactStart) && exactStart > 0;
+// Any hand-made placement earns the lock, not just a weekly-planner drop carrying an exact
+// start time. The old rule missed every day-granularity move — dragging a card onto a day
+// column in the roadmap week grid, or picking a date in the defer dialog on mobile/daily
+// plan — so those placements were left completely unprotected and the nightly chain moved
+// them straight back. Granularity is a statement about WHERE the user aimed, not about
+// whether they meant it. See functions/utils/manualPlacement.js for the source allowlist.
+function shouldPersistManualPlacementLock({ source }) {
+  return isUserPlacementSource(source);
 }
 
 function choosePlacement({
@@ -727,7 +732,7 @@ async function schedulePlannerItemMutation({
   const forcedStartMs = Number(exactTargetStartMs);
   const forcedEndMs = Number(exactTargetEndMs);
   const forcedDurationMs = Math.max(MIN_BLOCK_MS, Math.round(effectiveDurationMinutes) * 60 * 1000);
-  const persistWeeklyPlannerManualLock = shouldPersistWeeklyPlannerManualLock({ source, exactTargetStartMs });
+  const persistManualPlacementLock = shouldPersistManualPlacementLock({ source });
   const oldSprintId = String(entity.sprintId || '');
   // Top-priority items (manual rank or AI Top 3) should be split into ≥30-min
   // chunks rather than 15-min slivers. Smart mode also gets a free-slot fallback
@@ -1013,11 +1018,15 @@ async function schedulePlannerItemMutation({
     entityPatch.deferredBy = null;
   }
 
-  if (persistWeeklyPlannerManualLock) {
+  if (persistManualPlacementLock) {
     entityPatch.orchestrationLocked = true;
-    entityPatch.orchestrationLockedReason = 'manual_weekly_planner_placement';
+    entityPatch.orchestrationLockedReason = 'manual_placement';
     entityPatch.orchestrationLockedSource = source || 'weekly_planner';
     entityPatch.orchestrationLockedAt = admin.firestore.FieldValue.serverTimestamp();
+    // The lock protects THIS placement and expires with it, so an item deferred once in
+    // April doesn't sit out every nightly run thereafter. Placements are chronological,
+    // so the last one's end is the whole booking's end.
+    entityPatch.orchestrationLockedUntil = lastPlacement.appliedEndMs;
   }
 
   // Sources where the user explicitly moved the task — these override the
@@ -1079,6 +1088,17 @@ async function schedulePlannerItemMutation({
       manualPriorityRank: manualPriorityRank || null,
       userPriorityPinned: manualPriorityRank === 1,
       plannerConstraintMode: resolvedConstraintMode,
+      // Survives being reused by a later automated run: once a human placed this block,
+      // the nightly sweeps must keep treating it as theirs. Sticky by design — `reusable`
+      // is only ever a block for this same entity, so inheriting the flag can't leak the
+      // protection onto an unrelated item.
+      manuallyScheduled: persistManualPlacementLock || reusable?.manuallyScheduled === true,
+      ...(persistManualPlacementLock
+        ? {
+          manuallyScheduledSource: source || 'weekly_planner',
+          manuallyScheduledAt: admin.firestore.FieldValue.serverTimestamp(),
+        }
+        : {}),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       createdAt: reusable?.createdAt || admin.firestore.FieldValue.serverTimestamp(),
     };
@@ -1089,6 +1109,12 @@ async function schedulePlannerItemMutation({
 
   relatedBlocks
     .filter((block) => !usedBlockIds.has(block.id))
+    // A block the user placed by hand is a separate deliberate booking, not stale output
+    // of an earlier automated run. The block actually being moved is always in
+    // usedBlockIds (it arrives as linkedBlockId and gets reused in place), so it is never
+    // what this filter is protecting — what it protects is the OTHER hand-placed sessions
+    // of the same story, which nudging one of them used to silently delete.
+    .filter((block) => !isManuallyPlacedBlock(block))
     .filter((block) => block.aiGenerated === true || String(block.source || '').includes('planner') || String(block.source || '').includes('scheduler'))
     .forEach((block) => {
       batch.delete(db.collection('calendar_blocks').doc(block.id));

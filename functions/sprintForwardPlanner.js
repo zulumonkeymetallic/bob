@@ -26,6 +26,7 @@
 
 const admin = require('firebase-admin');
 const { DateTime } = require('luxon');
+const { isOrchestrationLocked, isManuallyPlacedBlock } = require('./utils/manualPlacement');
 
 if (!admin.apps.length) admin.initializeApp();
 
@@ -241,7 +242,13 @@ async function runForUser(db, uid, options = {}) {
     const delBatch = db.batch();
     let delCount = 0;
     for (const d of oldSnap.docs) {
-      const sm = toMs(d.data().start ?? d.data().startTime ?? d.data().startMs);
+      const data = d.data();
+      // Dragging a block on the calendar edits that block's start/end in place and leaves
+      // source='sprint_forward_plan' on it, so this wholesale delete-and-recreate used to
+      // wipe the user's move every night and re-place the task wherever the algorithm
+      // preferred. A hand-moved block is no longer this job's to reclaim.
+      if (isManuallyPlacedBlock(data)) continue;
+      const sm = toMs(data.start ?? data.startTime ?? data.startMs);
       if (sm == null || sm >= tomorrowMs) {
         delBatch.delete(d.ref);
         delCount++;
@@ -308,6 +315,9 @@ async function runForUser(db, uid, options = {}) {
 
   const tierBTaskPool = tasks
     .filter(t => !isPinnedItem(t))
+    // Already placed by hand and still inside the window that placement covers — giving it
+    // a second block here is what leaves the user's move sitting next to a duplicate.
+    .filter(t => !isOrchestrationLocked(t))
     .filter(t => pointsRemaining(t) >= MIN_POINTS_TO_SCHEDULE)
     .filter(t => Number(t.aiCriticalityScore || 0) >= MIN_SCORE_TO_SCHEDULE)
     .map(t => ({ ...t, _type: 'task', _score: effectiveScore(t), _dueMs: getDueMs(t), _mins: Math.round(pointsRemaining(t) * MINS_PER_POINT) }))

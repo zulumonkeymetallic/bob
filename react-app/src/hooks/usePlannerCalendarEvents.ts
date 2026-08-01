@@ -306,7 +306,20 @@ export const usePlannerCalendarEvents = ({
     if (!event.block) return;
     try {
       const blockRef = doc(db, 'calendar_blocks', event.block.id);
-      await updateDoc(blockRef, { start: start.getTime(), end: end.getTime(), updatedAt: Date.now() });
+      // manuallyScheduled marks this block as the user's, so the nightly planners stop
+      // treating it as their own reclaimable output. Written here as well as by
+      // schedulePlannerItem because a drag edits the block document directly — a block
+      // with no linked story/task never reaches the callable at all, and even one that
+      // does would be left unprotected for the window between the two writes.
+      // See functions/utils/manualPlacement.js.
+      await updateDoc(blockRef, {
+        start: start.getTime(),
+        end: end.getTime(),
+        manuallyScheduled: true,
+        manuallyScheduledSource: 'planner_calendar_drag',
+        manuallyScheduledAt: Date.now(),
+        updatedAt: Date.now(),
+      });
       await syncLinkedEntityDate(event.block, start, end);
       emitFeedback({ variant: 'success', message: 'Calendar entry updated successfully.' });
     } catch (err) {

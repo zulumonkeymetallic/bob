@@ -37,6 +37,7 @@ const {
   resolveManualScheduleOverride,
   schedulePlannerItemMutation,
 } = require('./services/schedulingService');
+const { isOrchestrationLocked, isManuallyPlacedBlock } = require('./utils/manualPlacement');
 const fuzzyTaskLinking = require('./fuzzyTaskLinking');
 const semanticClustering = require('./semanticClustering');
 
@@ -2259,6 +2260,10 @@ async function replanExistingBlocksForUser({
     const entityType = String(block.entityType || '').toLowerCase();
     const isStoryTask = ['story', 'task'].includes(entityType) || block.storyId || block.taskId;
     if (!isStoryTask) return false;
+    // Checked before the aiGenerated test, which a hand-moved block still passes: the
+    // planner originally created it and dragging it only rewrites start/end. Without this
+    // the nightly replan quietly slid every manual placement back into its theme slot.
+    if (isManuallyPlacedBlock(block)) return false;
     const ai = block.aiGenerated === true || block.isAiGenerated === true || block.createdBy === 'ai';
     if (!ai) return false;
     const flex = String(block.flexibility || '').toLowerCase();
@@ -3850,9 +3855,22 @@ async function runCalendarPlannerJob({ onlyUserId } = {}) {
     const isPinnedForFloor = (item) => item.userPriorityFlag === true
       || (Number.isFinite(Number(item.userPriorityRank)) && Number(item.userPriorityRank) >= 1 && Number(item.userPriorityRank) <= 5);
     const MIN_SCORE_TO_QUEUE = 75;
-    const queueEligibleStories = openStories.filter((story) =>
+    // Items the user placed by hand, still inside the window that placement covers. They
+    // leave the placement queue (scheduling them again just parks a duplicate beside the
+    // block the user moved) but their keys are kept in lockedEntityKeys below, because
+    // dropping out of the queue is exactly what makes the sweep further down delete their
+    // blocks — protecting the entity and deleting its block is worse than doing neither.
+    const nowMs = Date.now();
+    const lockedEntityKeys = new Set([
+      ...openStories.filter((s) => isOrchestrationLocked(s, nowMs)).map((s) => getEntityKey('story', s.id)),
+      ...openTasks.filter((t) => isOrchestrationLocked(t, nowMs)).map((t) => getEntityKey('task', t.id)),
+    ]);
+    if (lockedEntityKeys.size > 0) {
+      console.log(`[calendar-planner] ${lockedEntityKeys.size} manually-placed item(s) held for ${userId}`);
+    }
+    const queueEligibleStories = openStories.filter((story) => !isOrchestrationLocked(story, nowMs)).filter((story) =>
       isPinnedForFloor(story) || isTopStory(story) || Number(story.aiCriticalityScore || 0) >= MIN_SCORE_TO_QUEUE);
-    const queueEligibleTasks = openTasks.filter((task) =>
+    const queueEligibleTasks = openTasks.filter((task) => !isOrchestrationLocked(task, nowMs)).filter((task) =>
       isPinnedForFloor(task) || isTopTask(task) || Number(task.aiCriticalityScore || 0) >= MIN_SCORE_TO_QUEUE);
 
     const scoredStories = queueEligibleStories.map((story) => ({
@@ -3903,8 +3921,12 @@ async function runCalendarPlannerJob({ onlyUserId } = {}) {
       const key = block.storyId ? `story:${block.storyId}` : block.taskId ? `task:${block.taskId}` : null;
       
       // Only delete AI-generated task/story blocks that are no longer in top set.
-      // Always preserve user-defined planner blocks and P1-pinned blocks.
-      if (isAi && !isPlannerBlock && key && !candidateIds.has(key) && !block.userPriorityPinned) {
+      // Always preserve user-defined planner blocks and P1-pinned blocks — and anything
+      // the user placed by hand, whether that shows on the block (a drag, which rewrites
+      // start/end but leaves aiGenerated true) or on its entity (an active manual lock,
+      // which deliberately keeps the item out of candidateIds).
+      const isManualPlacement = isManuallyPlacedBlock(block) || (key && lockedEntityKeys.has(key));
+      if (isAi && !isPlannerBlock && key && !candidateIds.has(key) && !block.userPriorityPinned && !isManualPlacement) {
         await db.collection('calendar_blocks').doc(block.id).delete().catch(() => { });
       } else {
         remainingBlocks.push(block);
@@ -4529,9 +4551,11 @@ exports.replanCalendarNow = onCall({
     .map((d) => ({ id: d.id, ...(d.data() || {}) }))
     .filter((s) => !isStoryDoneStatus(s.status))
     .filter((s) => activeSprintIds.length === 0 || (s.sprintId && activeSprintIds.includes(s.sprintId)))
-    // NEW: Skip locked stories (prevent rescheduling manual placements)
+    // Skip locked stories (prevent rescheduling manual placements). The lock is scoped to
+    // the placement it protects and lapses with it — a raw `=== true` test froze three of
+    // this account's four locked stories out of every replan since April/May/June.
     .filter((s) => {
-      if (s.orchestrationLocked === true) {
+      if (isOrchestrationLocked(s)) {
         console.log(`[Replan] Skipping locked story: ${s.id} (reason: ${s.orchestrationLockedReason})`);
         return false;
       }
@@ -4549,9 +4573,10 @@ exports.replanCalendarNow = onCall({
       if (t.storyId && openStoryIds.has(t.storyId)) return true;
       return false;
     })
-    // NEW: Skip locked tasks (prevent rescheduling manual placements)
+    // Skip locked tasks (prevent rescheduling manual placements) — see the story filter
+    // above for why this is an expiry check rather than a raw boolean test.
     .filter((t) => {
-      if (t.orchestrationLocked === true) {
+      if (isOrchestrationLocked(t)) {
         console.log(`[Replan] Skipping locked task: ${t.id} (reason: ${t.orchestrationLockedReason})`);
         return false;
       }
@@ -4614,7 +4639,7 @@ exports.replanCalendarNow = onCall({
         return false;
       }
       // Also respect orchestration lock for chores
-      if (t.orchestrationLocked === true) {
+      if (isOrchestrationLocked(t)) {
         console.log(`[Replan] Skipping locked chore: ${t.id}`);
         return false;
       }

@@ -493,6 +493,14 @@ export interface CalendarBlock {
   activityType?: 'run' | 'swim' | 'cycle' | 'gym' | 'fitness' | string | null;
   /** Identifies the subsystem that created this block (e.g. 'gcal', 'theme_allocation', 'sprint_forward_plan') */
   source?: string;
+  /**
+   * The user dragged this block to where it now sits, so the nightly planners must not
+   * delete or relocate it. Independent of `source`, which still names whichever subsystem
+   * originally created the block. See functions/utils/manualPlacement.js.
+   */
+  manuallyScheduled?: boolean;
+  manuallyScheduledSource?: string;
+  manuallyScheduledAt?: number;
 }
 
 export interface PlanningPrefs {
