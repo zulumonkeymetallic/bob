@@ -7,7 +7,7 @@ import { usePersona } from '../contexts/PersonaContext';
 import { Story, Task, Goal } from '../types';
 import KanbanBoardV2 from './KanbanBoardV2';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Maximize2, Minimize2, RefreshCw, Sparkles, LayoutList, Columns2, Rows3, Plus, SlidersHorizontal } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Maximize2, Minimize2, RefreshCw, Sparkles, LayoutList, Columns2, Rows3, Plus, SlidersHorizontal, Search, X } from 'lucide-react';
 import SprintTriageTable from './SprintTriageTable';
 import { displayRefForEntity } from '../utils/referenceGenerator';
 import { useSprint } from '../contexts/SprintContext';
@@ -54,6 +54,7 @@ const SprintKanbanPageV2: React.FC = () => {
 
     const [themeFilterIds, setThemeFilterIds] = useState<number[]>([]);
     const [goalFilterIds, setGoalFilterIds] = useState<string[]>([]);
+    const [searchTerm, setSearchTerm] = useState('');
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [showDescriptions, setShowDescriptions] = useState(() => {
         try {
@@ -462,6 +463,31 @@ const SprintKanbanPageV2: React.FC = () => {
                                 <span className="d-none d-xl-inline ms-1">Full replan</span>
                             </Button>
                             <span style={{ width: 1, height: 20, background: 'var(--bs-border-color)' }} />
+                            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                                <Search size={13} style={{ position: 'absolute', left: 8, color: 'var(--muted, #9ca3af)', pointerEvents: 'none' }} />
+                                <Form.Control
+                                    type="text"
+                                    size="sm"
+                                    placeholder="Search title..."
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                    style={{ paddingLeft: 26, paddingRight: searchTerm ? 26 : 8, width: 160 }}
+                                />
+                                {searchTerm && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setSearchTerm('')}
+                                        title="Clear search"
+                                        style={{
+                                            position: 'absolute', right: 6, background: 'none', border: 'none',
+                                            padding: 2, display: 'flex', color: 'var(--muted, #9ca3af)', cursor: 'pointer',
+                                        }}
+                                    >
+                                        <X size={13} />
+                                    </button>
+                                )}
+                            </div>
+                            <span style={{ width: 1, height: 20, background: 'var(--bs-border-color)' }} />
                             <Button
                                 variant={showFilterChrome ? 'secondary' : 'outline-secondary'}
                                 size="sm"
@@ -677,6 +703,7 @@ const SprintKanbanPageV2: React.FC = () => {
                                     sprintId={filterSprintId}
                                     themeFilter={themeFilterIds.length > 0 ? themeFilterIds : null}
                                     goalFilter={goalFilterIds.length > 0 ? goalFilterIds : null}
+                                    searchTerm={searchTerm}
                                     focusOnly={showFocusOnly}
                                     focusGoalIds={activeFocusGoalIds}
                                     onItemSelect={(item, type) => showSidebar(item, type)}
@@ -699,6 +726,7 @@ const SprintKanbanPageV2: React.FC = () => {
                                     goals={goals}
                                     sprints={sprints as any}
                                     filterSprintId={filterSprintId}
+                                    searchTerm={searchTerm}
                                     onEditStory={setEditStory}
                                     onEditTask={setEditTask}
                                     onEditGoal={setEditGoal}

@@ -26,6 +26,9 @@ interface KanbanBoardV2Props {
     sprintId?: string | null;
     themeFilter?: number | number[] | null;
     goalFilter?: string | string[] | null;
+    /** Case-insensitive title substring match — lets you find a specific story/task without
+     * hunting through every theme/goal/status filter combination. */
+    searchTerm?: string;
     onItemSelect?: (item: Story | Task, type: 'story' | 'task') => void;
     onEdit?: (item: Story | Task, type: 'story' | 'task') => void;
     onParentClick?: (parentId: string, parentType: 'story' | 'goal') => void;
@@ -60,6 +63,7 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
     sprintId,
     themeFilter,
     goalFilter,
+    searchTerm = '',
     onItemSelect,
     onEdit,
     onParentClick,
@@ -506,8 +510,13 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
         }
 
         result = result.filter((t) => matchesDueFilter(t, isTop3Task(t, getTaskManualRank)));
+
+        const term = searchTerm.trim().toLowerCase();
+        if (term) {
+            result = result.filter((t) => String(t.title || '').toLowerCase().includes(term));
+        }
         return result;
-    }, [tasks, stories, goals, sprintId, goalFilter, themeFilter, dueFilter, focusOnly, focusGoalIds, showCompletedItems, showAiScoredOnly, showDelegatedOnly]);
+    }, [tasks, stories, goals, sprintId, goalFilter, themeFilter, dueFilter, focusOnly, focusGoalIds, showCompletedItems, showAiScoredOnly, showDelegatedOnly, searchTerm]);
 
     const filteredStories = useMemo(() => {
         let result = stories;
@@ -553,8 +562,13 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
         }
 
         result = result.filter((s) => matchesDueFilter(s, isTop3Story(s)));
+
+        const term = searchTerm.trim().toLowerCase();
+        if (term) {
+            result = result.filter((s) => String(s.title || '').toLowerCase().includes(term));
+        }
         return result;
-    }, [stories, goals, sprintId, goalFilter, themeFilter, dueFilter, focusOnly, focusGoalIds, showCompletedItems, showAiScoredOnly, showDelegatedOnly]);
+    }, [stories, goals, sprintId, goalFilter, themeFilter, dueFilter, focusOnly, focusGoalIds, showCompletedItems, showAiScoredOnly, showDelegatedOnly, searchTerm]);
 
     const visibleEntityIds = useMemo(() => {
         const ids = new Set<string>();

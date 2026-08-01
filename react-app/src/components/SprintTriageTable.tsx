@@ -38,6 +38,9 @@ interface SprintTriageTableProps {
     /** iPad landscape: show only Title/Status/AI/Actions — the rest needs horizontal
      * scrolling on that width. Confirmed by Jim, 2026-07-24. */
     compactColumns?: boolean;
+    /** Case-insensitive title substring match, shared with the board/swimlane views via
+     * SprintKanbanPageV2's toolbar. */
+    searchTerm?: string;
 }
 
 // Three canonical lanes only — see utils/workStatus.ts. This dropdown previously offered a
@@ -103,6 +106,7 @@ const abtn = (color?: string): React.CSSProperties => ({
 const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
     stories, tasks, goals, sprints, filterSprintId,
     onEditStory, onEditTask, onEditGoal, compactColumns = false,
+    searchTerm = '',
 }) => {
     const navigate = useNavigate();
     const { backgrounds } = useThemeAwareColors();
@@ -189,20 +193,24 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
 
     // Sprint-scoped data (with the optimistic overlay applied, and rows the user has just
     // deleted removed immediately rather than waiting on the index listener)
+    const searchTermNormalized = searchTerm.trim().toLowerCase();
+
     const sprintStories = useMemo(() =>
         stories
             .filter(s => !hiddenRowIds.has(s.id))
             .map(applyPatch)
-            .filter(s => !filterSprintId || (s as any).sprintId === filterSprintId),
-    [stories, filterSprintId, hiddenRowIds, applyPatch]);
+            .filter(s => !filterSprintId || (s as any).sprintId === filterSprintId)
+            .filter(s => !searchTermNormalized || String(s.title || '').toLowerCase().includes(searchTermNormalized)),
+    [stories, filterSprintId, hiddenRowIds, applyPatch, searchTermNormalized]);
 
     const sprintTasks = useMemo(() =>
         tasks
             .filter(t => !hiddenRowIds.has(t.id))
             .map(applyPatch)
             .filter(t => !filterSprintId || (t as any).sprintId === filterSprintId)
-            .filter(t => !EXCLUDED_TASK_TYPES.has(String((t as any).type || '').toLowerCase())),
-    [tasks, filterSprintId, hiddenRowIds, applyPatch]);
+            .filter(t => !EXCLUDED_TASK_TYPES.has(String((t as any).type || '').toLowerCase()))
+            .filter(t => !searchTermNormalized || String(t.title || '').toLowerCase().includes(searchTermNormalized)),
+    [tasks, filterSprintId, hiddenRowIds, applyPatch, searchTermNormalized]);
 
     // Activity stream subscription for latest notes
     useEffect(() => {
