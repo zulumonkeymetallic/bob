@@ -55,12 +55,6 @@ function isSprintStatusActive(sprint: Sprint) {
   return ['active', 'current', 'in-progress', 'inprogress', '1', 'true'].includes(status);
 }
 
-function isSprintInWindow(sprint: Sprint, nowMs = Date.now()) {
-  const start = typeof sprint.startDate === 'number' ? sprint.startDate : null;
-  const end = typeof sprint.endDate === 'number' ? sprint.endDate : null;
-  return start != null && end != null ? nowMs >= start && nowMs <= end : false;
-}
-
 // A sprint's date window merely overlapping "now" doesn't make it active — a planned
 // (status=0) sprint scheduled for this month is not the active sprint just because
 // today falls inside its window. Only fall back to date-window matching when nothing
@@ -68,10 +62,19 @@ function isSprintInWindow(sprint: Sprint, nowMs = Date.now()) {
 // even if a later-starting planned sprint's window also happens to include today.
 function pickActiveSprint(sprints: Sprint[]) {
   if (!Array.isArray(sprints) || sprints.length === 0) return null;
+  // Status is the ONLY thing that makes a sprint current. This used to fall back to "any
+  // sprint whose date window contains today" when nothing was marked active, which quietly
+  // invented a current sprint out of a planned one — so the app could disagree with itself
+  // about which sprint you were in, and an overdue active sprint got papered over by whatever
+  // happened to span today instead of being surfaced. Confirmed by Jim, 2026-08-01: "the
+  // current sprint must only be the one that is active, and if a sprint is overdue the user
+  // must be prompted to make a new sprint active".
+  //
+  // Returning null when nothing is active is the point: no sprint is selected, the overdue
+  // banner stays on screen, and the fix is to activate one.
   const statusActive = sprints.filter((s) => isSprintStatusActive(s));
-  const candidates = statusActive.length ? statusActive : sprints.filter((s) => isSprintInWindow(s));
-  if (!candidates.length) return null;
-  return candidates.sort((a, b) => (b.startDate ?? 0) - (a.startDate ?? 0))[0];
+  if (!statusActive.length) return null;
+  return statusActive.sort((a, b) => (b.startDate ?? 0) - (a.startDate ?? 0))[0];
 }
 
 function loadCachedSprints(uid: string, persona: string) {
