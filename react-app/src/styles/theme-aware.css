@@ -547,17 +547,35 @@
   gap: 8px;
 }
 
-.btn:not(.btn-sm):not(.btn-lg) {
+/* `:not(.p-0)` on every one of these, and it is load-bearing.
+ *
+ * These blanket paddings are `!important`, and this stylesheet loads AFTER Bootstrap — so
+ * against Bootstrap's `.p-0 { padding: 0 !important }` the specificity is a tie (0,1,0) and
+ * source order handed the win to these rules. Every icon-only button in the app is written
+ * `<Button size="sm" className="p-0" style={{ width: 24, height: 24 }}>`, so it was getting
+ * 32px of horizontal padding inside a 24px border-box: a 2px content box, into which a 12px
+ * lucide icon (a shrinkable flex item, since .btn above is display:inline-flex) collapsed to
+ * width 0. The icons were in the DOM, coloured correctly, and completely invisible — only the
+ * one action that renders text instead of an SVG (the manual-priority rank) showed up.
+ *
+ * A component asking for zero padding by name must beat a blanket theme default. */
+.btn:not(.btn-sm):not(.btn-lg):not(.p-0) {
   padding: 12px 24px !important;
 }
 
-.btn-sm {
+.btn-sm:not(.p-0) {
   padding: 8px 16px !important;
+}
+
+.btn-sm {
   font-size: 14px !important;
 }
 
-.btn-lg {
+.btn-lg:not(.p-0) {
   padding: 16px 32px !important;
+}
+
+.btn-lg {
   font-size: 16px !important;
 }
 
