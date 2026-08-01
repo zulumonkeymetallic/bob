@@ -107,23 +107,21 @@ async function _sendModelFailureEmail(purpose, primaryError, fallbackError) {
 // there's no separate free-tier path any more.
 // ---------------------------------------------------------------------------
 
+// 2026-08-01: Vertex is now the primary and OpenRouter the fallback — the reverse of the
+// 2026-07-17 arrangement, per Jim.
+//
+// Two reasons. OpenRouter has been returning `402 Insufficient credits` since at least
+// 2026-08-01, so every call paid the latency of a guaranteed failure before falling
+// through; the nightly briefing has been running on the fallback path for days without
+// anything saying so. And Jim is in China from September, where Vertex is reachable and
+// OpenRouter may not be — a primary that cannot be reached is not a primary.
+//
+// This delegates to `callLLMVertexFirst` rather than restating the logic, so there is one
+// ordering in this file and not two that can drift. That function already falls back to
+// OpenRouter only on quota/503, which is the right trigger: a malformed prompt should fail
+// loudly, not quietly get a second opinion from a different model.
 async function callLLM(systemPrompt, userPrompt, modelName = VERTEX_DEFAULT_MODEL) {
-  const openRouterKey = (process.env.OPENROUTER_API_KEY || '').trim();
-  if (openRouterKey) {
-    try {
-      return await _callOpenRouter(openRouterKey, systemPrompt, userPrompt);
-    } catch (openRouterError) {
-      console.warn('[llmHelper] OpenRouter auto failed — falling back to Vertex AI:', openRouterError.message);
-      try {
-        return await _callVertexAI(systemPrompt, userPrompt, modelName);
-      } catch (vertexError) {
-        await _sendModelFailureEmail(null, openRouterError, vertexError);
-        throw vertexError;
-      }
-    }
-  }
-  // No OpenRouter key configured for this trigger — go straight to Vertex.
-  return _callVertexAI(systemPrompt, userPrompt, modelName);
+  return callLLMVertexFirst(systemPrompt, userPrompt, modelName);
 }
 
 async function callLLMVertexFirst(systemPrompt, userPrompt, modelName = VERTEX_DEFAULT_MODEL) {
