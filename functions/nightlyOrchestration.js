@@ -38,6 +38,7 @@ const {
   schedulePlannerItemMutation,
 } = require('./services/schedulingService');
 const { isOrchestrationLocked, isManuallyPlacedBlock } = require('./utils/manualPlacement');
+const { PLANNING_HORIZON_DAYS } = require('./lib/planningHorizon');
 const fuzzyTaskLinking = require('./fuzzyTaskLinking');
 const semanticClustering = require('./semanticClustering');
 
@@ -3612,15 +3613,13 @@ async function runCalendarPlannerJob({ onlyUserId } = {}) {
   const db = ensureFirestore();
   const profiles = await resolveProfilesToProcess(db, onlyUserId);
   const now = DateTime.now();
-  // Must match sprintForwardPlanner.js's CALENDAR_VISIBILITY_HORIZON_DAYS and
-  // calendarSync.js's GCAL_FUTURE_DAYS (both 90). This window governs how far ahead
-  // recurring "Work (Main Gig)" / theme_allocation blocks get materialised into real
-  // calendar_blocks documents. It previously stopped at 21 days while
-  // sprintForwardPlanner scheduled out to a sprint's end date (often 60-90+ days) —
-  // beyond day 21 there was no real work block left to check against, so personal
-  // items landed straight through the working day. Confirmed live in production
-  // 2026-07-16 (227 of 251 forward-scheduled personal items fell in that gap).
-  const MAX_PLANNING_DAYS = 90;
+  // Shared with sprintForwardPlanner via lib/planningHorizon.js — the two planners must
+  // not disagree about how far ahead work may be placed. This window also governs how far
+  // ahead recurring "Work (Main Gig)" / theme_allocation blocks get materialised into real
+  // calendar_blocks documents, so shortening it shortens both together and cannot reopen
+  // the 2026-07-16 gap (planning ran to 90 days while work blocks stopped at 21, and 227
+  // of 251 forward-scheduled personal items landed straight through the working day).
+  const MAX_PLANNING_DAYS = PLANNING_HORIZON_DAYS;
 
   for (const prof of profiles.docs) {
     const userId = prof.id;

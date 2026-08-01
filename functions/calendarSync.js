@@ -3,10 +3,14 @@ const admin = require('firebase-admin');
 const { google } = require('googleapis');
 const { loadThemesForUser, mapThemeIdToLabel, mapThemeLabelToId, getGoogleColorForThemeId, DEFAULT_THEMES } = require('./services/themeManager');
 const { buildAbsoluteUrl, buildEntityUrl } = require('./utils/urlHelpers');
+const { CALENDAR_VISIBILITY_DAYS } = require('./lib/planningHorizon');
 
 const MS_IN_DAY = 24 * 60 * 60 * 1000;
 const GCAL_PAST_DAYS = 14;
-const GCAL_FUTURE_DAYS = 90;
+// How far ahead real events are pulled in. This IS the visibility horizon the planners
+// are capped against, so it is defined once in lib/planningHorizon.js alongside the
+// planning horizon that must never exceed it.
+const GCAL_FUTURE_DAYS = CALENDAR_VISIBILITY_DAYS;
 const ALLOWED_ROUTINE_TYPES = new Set(['chore', 'routine', 'habit']);
 const TASK_TABLE_LIMIT = 12;
 const MAX_PRIVATE_TASK_REFS = 6;
