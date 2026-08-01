@@ -567,6 +567,71 @@ export async function getActiveFocusGoal(userId: string, timeframe: 'sprint' | '
 }
 
 /**
+ * Add or remove one goal from every ACTIVE focus set the user has.
+ *
+ * BOB had two unrelated things both called "focus goal":
+ *  - `focusGoals` documents (this collection), written by the Focus Goal Wizard and read by
+ *    everything that actually plans — the Sprint Planner Wizard's pre-selection, the roadmap
+ *    and Kanban "Focus goals only" filters, the planner's focus alignment checks.
+ *  - `isBannerGoal` / `showInDashboardBanner` on the goal doc, written by the star on a goal
+ *    card and read by exactly one consumer: the focus banner in the notification stream.
+ *
+ * So starring a goal looked like "make this a focus goal" and changed nothing about planning.
+ * Confirmed by Jim, 2026-08-01, against his own stated model: focus goals come from the sprint
+ * planner, the focus wizard, or picking one on the goal — and that third path was writing
+ * somewhere the other two never read. The star now does both.
+ *
+ * Writes goalIds and focusLeafGoalIds together because consumers disagree about which they
+ * read (getActiveFocusLeafGoalIds prefers focusLeafGoalIds and falls back to goalIds), and a
+ * goal present in only one of them is visible to some surfaces and invisible to others.
+ *
+ * Returns the number of focus sets changed — 0 means there was no active set to join, which
+ * the caller should surface rather than swallow, since the star will otherwise look inert.
+ */
+export async function setGoalFocusMembership(
+  userId: string,
+  goalId: string,
+  shouldBeFocus: boolean,
+): Promise<number> {
+  const snap = await getDocs(
+    query(
+      collection(db, 'focusGoals'),
+      where('ownerUid', '==', userId),
+      where('isActive', '==', true),
+    ),
+  );
+  if (snap.empty) return 0;
+
+  let changed = 0;
+  await Promise.all(snap.docs.map(async (docSnap) => {
+    const data = docSnap.data() as FocusGoal;
+    const apply = (list: unknown): string[] | null => {
+      const current = Array.isArray(list) ? (list as string[]) : [];
+      const has = current.includes(goalId);
+      if (shouldBeFocus === has) return null;
+      return shouldBeFocus ? [...current, goalId] : current.filter((id) => id !== goalId);
+    };
+
+    const patch: Record<string, unknown> = {};
+    const nextGoalIds = apply(data.goalIds);
+    if (nextGoalIds) patch.goalIds = nextGoalIds;
+    // Only maintained when the doc already uses it — creating it on a doc that never had it
+    // would silently narrow what getActiveFocusLeafGoalIds returns for every other goal.
+    if (Array.isArray(data.focusLeafGoalIds)) {
+      const nextLeaf = apply(data.focusLeafGoalIds);
+      if (nextLeaf) patch.focusLeafGoalIds = nextLeaf;
+    }
+    if (Object.keys(patch).length === 0) return;
+
+    patch.updatedAt = serverTimestamp();
+    await updateDoc(doc(db, 'focusGoals', docSnap.id), patch);
+    changed += 1;
+  }));
+
+  return changed;
+}
+
+/**
  * Trigger a manual refresh for focus-goal countdown data.
  * Optionally forces a global hierarchy snapshot refresh used by AI context flows.
  */

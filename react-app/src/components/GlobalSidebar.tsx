@@ -1037,6 +1037,8 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                     size="sm"
                     style={{ color: actionIconColor, padding: '4px' }}
                     onClick={handleDelete}
+                    title="Delete"
+                    aria-label="Delete this item"
                   >
                     <Trash2 size={16} />
                   </Button>

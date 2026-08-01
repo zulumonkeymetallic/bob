@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Badge, Button, Card } from 'react-bootstrap';
+import { Badge, Button } from 'react-bootstrap';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { addDays, format, startOfDay } from 'date-fns';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -72,34 +72,40 @@ const UnifiedPlannerLevels: React.FC = () => {
     const endDate = addDays(anchorDate, 4);
     return (
       <div className={embedded ? 'p-2' : 'p-3'}>
+        {/* Header, date range and day navigation on one row. Previously this was three stacked
+            blocks — a header, an empty `<Card><Card.Body className="py-2">   </Card.Body></Card>`
+            that rendered nothing but still took vertical space, and a full-width card holding
+            two small nav buttons — which pushed the actual planner well down the page and
+            looked nothing like the roadmap's single compact toolbar. */}
         {!embedded && (
-          <>
-            <div className="d-flex justify-content-between align-items-center gap-2 flex-wrap mb-3">
-              <div>
-                <h3 className="mb-1">{plannerLevelLabel(level)}</h3>
-                <div className="text-muted small">Backlog and calendar for the current sprint, rolling 5 days at a time.</div>
-              </div>
-              <Badge bg="info">
-                {format(anchorDate, 'dd MMM')} - {format(endDate, 'dd MMM yyyy')}
-              </Badge>
+          <div className="d-flex justify-content-between align-items-center gap-2 flex-wrap mb-3">
+            <div>
+              <h2 style={{ margin: '0 0 4px 0', fontSize: '20px', fontWeight: 700 }}>{plannerLevelLabel(level)}</h2>
+              <div className="text-muted small">Backlog and calendar for the current sprint, rolling 5 days at a time.</div>
             </div>
-            <Card className="shadow-sm border-0 mb-3">
-              <Card.Body className="py-2">              </Card.Body>
-            </Card>
-          </>
+            <div className="d-flex align-items-center gap-2 flex-wrap">
+              <Button
+                size="sm"
+                variant="outline-secondary"
+                title="Move the window back one day"
+                onClick={() => navigate(withAnchor(level, addDays(anchorDate, -1), location.search))}
+              >
+                <ChevronLeft size={14} />
+              </Button>
+              <Badge bg="info" className="py-2 px-3">
+                {format(anchorDate, 'dd MMM')} – {format(endDate, 'dd MMM yyyy')}
+              </Badge>
+              <Button
+                size="sm"
+                variant="outline-secondary"
+                title="Move the window forward one day"
+                onClick={() => navigate(withAnchor(level, addDays(anchorDate, 1), location.search))}
+              >
+                <ChevronRight size={14} />
+              </Button>
+            </div>
+          </div>
         )}
-
-        <Card className="shadow-sm border-0 mb-3">
-          <Card.Body className="d-flex align-items-center justify-content-between gap-2 flex-wrap">
-            <Button size="sm" variant="outline-secondary" onClick={() => navigate(withAnchor(level, addDays(anchorDate, -1), location.search))}>
-              <ChevronLeft size={14} className="me-1" /> Previous day
-            </Button>
-            <div className="small text-muted">Anchor: {format(anchorDate, 'EEE d MMM yyyy')}</div>
-            <Button size="sm" variant="outline-secondary" onClick={() => navigate(withAnchor(level, addDays(anchorDate, 1), location.search))}>
-              Next day <ChevronRight size={14} className="ms-1" />
-            </Button>
-          </Card.Body>
-        </Card>
 
         <SprintWeekPlanner anchorDate={anchorDate} />
       </div>

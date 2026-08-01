@@ -16,6 +16,7 @@ import { ChoiceHelper } from '../config/choices';
 import { getStatusName } from '../utils/statusHelpers';
 import { themeVars, rgbaCard } from '../utils/themeVars';
 import { ActivityStreamService } from '../services/ActivityStreamService';
+import { setGoalFocusMembership } from '../services/focusGoalsService';
 import { toDate, formatDate } from '../utils/firestoreAdapters';
 import { computeWindowExpectedProgress, evaluateGoalTargetStatus } from '../utils/goalKpiStatus';
 import type { GlobalTheme } from '../constants/globalThemes';
@@ -812,7 +813,28 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
             const next = !isGoalFocusFlagged;
             try {
               await onGoalUpdate(goal.id, { isBannerGoal: next, showInDashboardBanner: next } as any);
-            } catch { /* handled upstream */ }
+              // The banner flags above are read by one component. Everything that actually
+              // plans — Sprint Planner Wizard pre-selection, "Focus goals only" on the roadmap
+              // and Kanban, planner focus alignment — reads the focusGoals collection instead,
+              // so starring a goal used to look like "make this a focus goal" while changing
+              // nothing about planning. See setGoalFocusMembership.
+              if (currentUser?.uid) {
+                const changed = await setGoalFocusMembership(currentUser.uid, goal.id, next);
+                if (changed === 0 && next) {
+                  // No active focus set to join: say so rather than leave a lit star that no
+                  // planning surface agrees with.
+                  setToastVariant('info');
+                  setToastMsg('Starred for the banner. No active focus set to add it to — create one from Focus Goals to include it in sprint planning.');
+                } else if (changed > 0) {
+                  setToastVariant('success');
+                  setToastMsg(next
+                    ? `"${goal.title}" added to your focus goals`
+                    : `"${goal.title}" removed from your focus goals`);
+                }
+              }
+            } catch (err) {
+              console.warn('Failed to toggle focus goal membership', err);
+            }
           };
           const latestActivityLabel = latestActivity
             ? latestActivity.activityType === 'note_added'
@@ -931,7 +953,9 @@ const GoalsCardView: React.FC<GoalsCardViewProps> = ({
                       size="sm"
                       className="p-0"
                       style={{ width: 24, height: 24, color: isGoalFocusFlagged ? 'var(--focus-gold, #f5a623)' : mutedTextColor }}
-                      title={isGoalFocusFlagged ? 'Remove from focus goals banner' : 'Mark as focus goal (show in banner)'}
+                      title={isGoalFocusFlagged
+                        ? 'Remove from focus goals — drops out of the banner and your active focus set'
+                        : 'Mark as focus goal — shows in the banner and joins your active focus set for sprint planning'}
                       onClick={handleToggleFocusGoal}
                     >
                       <Star size={14} fill={isGoalFocusFlagged ? 'currentColor' : 'none'} />

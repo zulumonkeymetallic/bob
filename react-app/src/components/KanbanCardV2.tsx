@@ -832,6 +832,8 @@ const KanbanCardV2: React.FC<KanbanCardV2Props> = ({
                 type="button"
                 className="kanban-card__handle"
                 style={handleStyle}
+                title="Drag to move between columns"
+                aria-label={`Drag ${item.title || 'card'} to another column`}
                 onClick={(event) => event.stopPropagation()}
             >
                 <GripVertical size={16} />
