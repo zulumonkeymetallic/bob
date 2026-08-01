@@ -39,6 +39,7 @@ const {
 } = require('./services/schedulingService');
 const { isOrchestrationLocked, isManuallyPlacedBlock } = require('./utils/manualPlacement');
 const { PLANNING_HORIZON_DAYS } = require('./lib/planningHorizon');
+const { hasDeviceClaimedTonight } = require('./lib/deviceOrchestrationClaim');
 const fuzzyTaskLinking = require('./fuzzyTaskLinking');
 const semanticClustering = require('./semanticClustering');
 
@@ -2896,6 +2897,21 @@ async function runPriorityScoringJob({ onlyUserId } = {}) {
 
   for (const prof of profiles.docs) {
     const userId = prof.id;
+
+    // The user's phone already scored and picked its Top 3 tonight, so redoing it here
+    // would overwrite the device's answer with an identical one at best, and race it at
+    // worst. This is the ONLY step a device claim suppresses — see
+    // lib/deviceOrchestrationClaim.js for why the rest of the chain still runs.
+    //
+    // Deliberately NOT the profile timezone. The date key only has to name the same night
+    // on both ends, and the device cannot read the profile's zone; pinning both to
+    // Europe/London — where this chain's own cron already lives — removes a mismatch that
+    // would silently stop suppressing anything the moment a profile zone changed.
+    if (await hasDeviceClaimedTonight(db, userId)) {
+      console.log(`[Priority] Skipping ${userId}: device completed tonight's orchestration`);
+      continue;
+    }
+
     const goalMap = new Map();
     const goalSnap = await db.collection('goals').where('ownerUid', '==', userId).get().catch(() => ({ docs: [] }));
     goalSnap.docs.forEach((d) => {
@@ -3687,9 +3703,18 @@ async function runCalendarPlannerJob({ onlyUserId } = {}) {
       ),
     );
 
-    await recomputeTop3ForUser(db, userId).catch((err) => {
-      console.warn('[calendar-planner] top3 refresh failed', userId, err?.message || err);
-    });
+    // Gated on the same device claim as runPriorityScoringJob, and for the same reason:
+    // this recomputes Top 3, so leaving it ungated would hand the device's selection
+    // straight back to the server an hour after skipping the step that made it. The
+    // planner below still runs either way — it reads whichever Top 3 is current, and the
+    // device does not place calendar blocks.
+    if (await hasDeviceClaimedTonight(db, userId)) {
+      console.log(`[calendar-planner] keeping device Top 3 for ${userId}`);
+    } else {
+      await recomputeTop3ForUser(db, userId).catch((err) => {
+        console.warn('[calendar-planner] top3 refresh failed', userId, err?.message || err);
+      });
+    }
 
     let storiesSnap = { docs: [] };
     try {

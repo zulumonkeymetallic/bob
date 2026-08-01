@@ -111,6 +111,14 @@ service cloud.firestore {
       allow read, update, delete: if isOwner();
     }
     match /calendar_blocks/{id} { allow create: if isOwnerForCreate(); allow read, update, delete: if isOwner(); }
+    // A device's claim on tonight's orchestration, telling the nightly chain to skip
+    // priority scoring for that user. Doc id is {uid}_{yyyy-MM-dd}; see
+    // functions/lib/deviceOrchestrationClaim.js. Owner-scoped like everything else — the
+    // Admin SDK bypasses these rules, so this governs only the device's own write.
+    match /orchestration_runs/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, update, delete: if isOwner();
+    }
     // Per-user planner stats summary (keyed by uid)
     match /planner_stats/{uid} {
       allow create: if isSignedIn() && (
