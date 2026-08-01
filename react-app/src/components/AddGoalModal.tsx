@@ -8,6 +8,7 @@ import { generateRef } from '../utils/referenceGenerator';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { normalizeGoalCostType } from '../utils/goalCost';
 import { errorMessage } from '../utils/errorMessage';
+import { dateInputToQuarterKey, quarterKeyLabel, quarterKeyToDateInputs, quarterOptionsIncluding } from '../utils/quarters';
 
 // Goal type options — maps to goalKind in Firestore
 const GOAL_TYPES = [
@@ -492,27 +493,58 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
                 </Form.Text>
               </Form.Group>
             </div>
-            <div className="col-md-3">
-              <Form.Group className="mb-3">
-                <Form.Label>Start Date</Form.Label>
-                <Form.Control
-                  type="date"
-                  value={formData.startDate}
-                  onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
-                />
-              </Form.Group>
-            </div>
-            <div className="col-md-3">
-              <Form.Group className="mb-3">
-                <Form.Label>End Date</Form.Label>
-                <Form.Control
-                  type="date"
-                  value={formData.endDate}
-                  onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
-                />
-              </Form.Group>
-            </div>
           </div>
+
+          {/* Dates grouped together rather than tacked onto the end of the confidence row.
+              Quarter leads because that is the granularity goals are actually planned at —
+              picking one fills the exact dates, which stay editable for the cases that need
+              a specific day. */}
+          <fieldset className="mb-3 p-3" style={{ border: '1px solid var(--line, #e5e7eb)', borderRadius: 8 }}>
+            <legend className="small text-muted mb-2" style={{ float: 'none', width: 'auto', fontSize: 12 }}>
+              Timing
+            </legend>
+            <div className="row">
+              <div className="col-md-4">
+                <Form.Group>
+                  <Form.Label>Quarter</Form.Label>
+                  <Form.Select
+                    value={dateInputToQuarterKey(formData.startDate)}
+                    onChange={(e) => {
+                      const bounds = quarterKeyToDateInputs(e.target.value);
+                      if (!bounds) return;
+                      setFormData({ ...formData, startDate: bounds.start, endDate: bounds.end });
+                    }}
+                  >
+                    <option value="">Pick a quarter…</option>
+                    {quarterOptionsIncluding(dateInputToQuarterKey(formData.startDate)).map((key) => (
+                      <option key={key} value={key}>{quarterKeyLabel(key)}</option>
+                    ))}
+                  </Form.Select>
+                  <Form.Text className="text-muted">Fills the dates below.</Form.Text>
+                </Form.Group>
+              </div>
+              <div className="col-md-4">
+                <Form.Group>
+                  <Form.Label>Start Date</Form.Label>
+                  <Form.Control
+                    type="date"
+                    value={formData.startDate}
+                    onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
+                  />
+                </Form.Group>
+              </div>
+              <div className="col-md-4">
+                <Form.Group>
+                  <Form.Label>End Date</Form.Label>
+                  <Form.Control
+                    type="date"
+                    value={formData.endDate}
+                    onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
+                  />
+                </Form.Group>
+              </div>
+            </div>
+          </fieldset>
 
           <div className="row">
             <div className="col-md-6">

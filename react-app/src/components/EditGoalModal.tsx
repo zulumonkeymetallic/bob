@@ -25,6 +25,7 @@ import { resolveLeafGoalSelection } from '../utils/goalHierarchy';
 import { buildGoalTimelineImpactPlan, GoalTimelineAffectedStory } from './visualization/goalTimelineImpact';
 import GoalKpiLivePanel from './goals/GoalKpiLivePanel';
 import { applyGoalTimelineChanges } from '../utils/goalTimelineChanges';
+import { dateInputToQuarterKey, quarterKeyLabel, quarterKeyToDateInputs, quarterOptionsIncluding } from '../utils/quarters';
 import { KPIDesignerForm } from './KPIDesigner';
 
 interface EditGoalModalProps {
@@ -1391,46 +1392,74 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                 </div>
               </div>
 
-              <div className="row">
-                <div className="col-md-4">
-                  <Form.Group className="mb-3">
-                    <Form.Label>Start Date</Form.Label>
-                    <Form.Control
-                      type="date"
-                      value={formData.startDate}
-                      onChange={(e) => handleStartDateChange(e.target.value)}
-                    />
-                  </Form.Group>
+              {/* Quarter, dates and duration boxed together as one Timing group. Quarter leads
+                  because that is the granularity goals get planned at; picking one fills the
+                  exact dates and recomputes duration, and all three stay editable. */}
+              <fieldset className="mb-3 p-3" style={{ border: '1px solid var(--line, #e5e7eb)', borderRadius: 8 }}>
+                <legend className="small text-muted mb-2" style={{ float: 'none', width: 'auto', fontSize: 12 }}>
+                  Timing
+                </legend>
+                <div className="row">
+                  <div className="col-md-3">
+                    <Form.Group className="mb-0">
+                      <Form.Label>Quarter</Form.Label>
+                      <Form.Select
+                        value={dateInputToQuarterKey(formData.startDate)}
+                        onChange={(e) => {
+                          const bounds = quarterKeyToDateInputs(e.target.value);
+                          if (!bounds) return;
+                          setFormData(prev => ({ ...prev, startDate: bounds.start, endDate: bounds.end }));
+                          setDurationDays(calculateDurationDays(bounds.start, bounds.end));
+                        }}
+                      >
+                        <option value="">Pick a quarter…</option>
+                        {quarterOptionsIncluding(dateInputToQuarterKey(formData.startDate)).map((key) => (
+                          <option key={key} value={key}>{quarterKeyLabel(key)}</option>
+                        ))}
+                      </Form.Select>
+                      <Form.Text className="text-muted">Fills the dates.</Form.Text>
+                    </Form.Group>
+                  </div>
+                  <div className="col-md-3">
+                    <Form.Group className="mb-0">
+                      <Form.Label>Start Date</Form.Label>
+                      <Form.Control
+                        type="date"
+                        value={formData.startDate}
+                        onChange={(e) => handleStartDateChange(e.target.value)}
+                      />
+                    </Form.Group>
+                  </div>
+                  <div className="col-md-3">
+                    <Form.Group className="mb-0">
+                      <Form.Label>End Date (Planned)</Form.Label>
+                      <Form.Control
+                        type="date"
+                        value={formData.endDate}
+                        onChange={(e) => {
+                          const newEnd = e.target.value;
+                          setFormData(prev => ({ ...prev, endDate: newEnd }));
+                          setDurationDays(calculateDurationDays(formData.startDate, newEnd));
+                        }}
+                      />
+                    </Form.Group>
+                  </div>
+                  <div className="col-md-3">
+                    <Form.Group className="mb-0">
+                      <Form.Label>Duration (days)</Form.Label>
+                      <Form.Control
+                        type="number"
+                        min={0}
+                        value={durationDays}
+                        onChange={(e) => handleDurationChange(e.target.value)}
+                      />
+                      <Form.Text className="text-muted">
+                        Updates end date when start date changes.
+                      </Form.Text>
+                    </Form.Group>
+                  </div>
                 </div>
-                <div className="col-md-4">
-                  <Form.Group className="mb-3">
-                    <Form.Label>End Date (Planned)</Form.Label>
-                    <Form.Control
-                      type="date"
-                      value={formData.endDate}
-                      onChange={(e) => {
-                        const newEnd = e.target.value;
-                        setFormData(prev => ({ ...prev, endDate: newEnd }));
-                        setDurationDays(calculateDurationDays(formData.startDate, newEnd));
-                      }}
-                    />
-                  </Form.Group>
-                </div>
-                <div className="col-md-4">
-                  <Form.Group className="mb-3">
-                    <Form.Label>Duration (days)</Form.Label>
-                    <Form.Control
-                      type="number"
-                      min={0}
-                      value={durationDays}
-                      onChange={(e) => handleDurationChange(e.target.value)}
-                    />
-                    <Form.Text className="text-muted">
-                      Updates end date when start date changes.
-                    </Form.Text>
-                  </Form.Group>
-                </div>
-              </div>
+              </fieldset>
 
               <div className="row">
                 <div className="col-md-12">
