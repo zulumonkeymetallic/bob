@@ -312,12 +312,8 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
       setSaving(false);
       return;
     }
+    // No blocking branch: strict mode warns rather than refusing — see utils/sprintAlignment.
     if (form.type !== 'chore' && form.sprintId && sprintAlignment.hasRule && !sprintAlignment.aligned && !form.sprintAlignmentOverride) {
-      if (sprintAlignment.blocking) {
-        alert(sprintAlignment.message);
-        setSaving(false);
-        return;
-      }
       setShowAlignmentWarning(true);
       setSaving(false);
       return;

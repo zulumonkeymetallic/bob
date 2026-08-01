@@ -264,16 +264,13 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
       }
     }
 
-    if (formData.sprintId && sprintAlignment.hasRule && !sprintAlignment.aligned) {
-      if (sprintAlignment.blocking) {
-        setSubmitResult(`❌ ${sprintAlignment.message}`);
-        return;
-      }
-      const proceed = window.confirm(`${sprintAlignment.message} Continue anyway?`);
-      if (!proceed) {
-        return;
-      }
-    }
+    // Misalignment no longer refuses the work, in either mode — strict defers the story,
+    // warn puts it in the sprint's backlog, and the inline notice above the button already
+    // says which. Matches the FAB's create path; see utils/sprintAlignment.
+    const deferForStrictFocus = !!formData.sprintId
+      && sprintAlignment.hasRule
+      && !sprintAlignment.aligned
+      && !!sprintAlignment.deferOnCreate;
 
     const resolvedGoalSelection = resolveLeafGoalSelection(formData.goalId || null, goals);
     if (formData.goalId && !resolvedGoalSelection.goalId) {
@@ -337,6 +334,13 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
         orderIndex: Date.now(), // Simple ordering by creation time
         tags: formData.tags,
         acceptanceCriteria: [],
+        // Strict focus mode: created and deferred rather than refused, using the same fields
+        // plannerDeferral writes so the existing defer surfaces understand it.
+        ...(deferForStrictFocus ? {
+          deferredUntil: Date.now(),
+          deferredAt: Date.now(),
+          deferredReason: 'Outside sprint focus goals (strict mode)',
+        } : {}),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       };
@@ -489,7 +493,7 @@ const AddStoryModal: React.FC<AddStoryModalProps> = ({ onClose, show, goalId }) 
           )}
 
           {formData.sprintId && sprintAlignment.hasRule && !sprintAlignment.aligned && (
-            <Alert variant={sprintAlignment.blocking ? 'danger' : 'warning'} className="mb-3">
+            <Alert variant="info" className="mb-3">
               {sprintAlignment.message}
             </Alert>
           )}

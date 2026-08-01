@@ -279,12 +279,10 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
     setLoading(true);
     setError(null);
 
+    // No blocking branch: strict mode no longer refuses a save, it warns like every other
+    // misalignment (see utils/sprintAlignment). The warning modal below is the whole
+    // behaviour now.
     if (editedStory.sprintId && sprintAlignment.hasRule && !sprintAlignment.aligned) {
-      if (sprintAlignment.blocking) {
-        setError(sprintAlignment.message);
-        setLoading(false);
-        return;
-      }
       setShowAlignmentWarning(true);
       setLoading(false);
       return;
@@ -911,7 +909,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
 
                 {editedStory.sprintId && sprintAlignment.hasRule && !sprintAlignment.aligned && (
                   <Col md={12}>
-                    <Alert variant={sprintAlignment.blocking ? 'danger' : 'warning'} className="mb-3">
+                    <Alert variant="info" className="mb-3">
                       {sprintAlignment.message}
                     </Alert>
                   </Col>
