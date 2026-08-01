@@ -14828,9 +14828,13 @@ async function _getFitnessOverview(uid, days) {
     if (!workout) return 'other';
     if (String(workout.provider || '').toLowerCase() === 'parkrun') return 'run';
     if (workout.run === true) return 'run';
-    const type = String(workout.sportType || workout.type || '').toLowerCase();
+    // HealthKit writes its own already-bucketed value ("run"/"swim"/"cycle"/"other") via
+    // HealthKitSyncService.category(for:); Strava writes a raw activity name in sportType.
+    // Read the explicit category first so we never re-derive what iOS already decided.
+    const type = String(workout.category || workout.sportType || workout.type || '').toLowerCase();
     if (type.includes('swim')) return 'swim';
-    if (type.includes('ride') || type.includes('bike') || type.includes('cycling')) return 'bike';
+    // 'cycl' not 'cycling' — HealthKit's category is the bare word "cycle".
+    if (type.includes('ride') || type.includes('bike') || type.includes('cycl')) return 'bike';
     if (type.includes('run') || type.includes('walk') || type.includes('hike')) return 'run';
     return 'other';
   };
@@ -14883,23 +14887,46 @@ async function _getFitnessOverview(uid, days) {
   const dist30 = last30.reduce((s, w) => s + km(w.distance_m), 0);
   const time30 = last30.reduce((s, w) => s + sec(w.movingTime_s || w.elapsedTime_s), 0);
   const avgPaceMinPerKm = dist30 > 0 ? (time30 / 60) / dist30 : null;
+  const since7 = nowMs - 7 * 24 * 60 * 60 * 1000;
+  const last7 = workouts.filter(w => (w.startDate || 0) >= since7);
+  const sportDistanceLast7 = { runKm: 0, swimKm: 0, bikeKm: 0 };
   const sportDistanceLast30 = { runKm: 0, swimKm: 0, bikeKm: 0 };
   const sportDistanceRange = { runKm: 0, swimKm: 0, bikeKm: 0 };
   const sportDistanceYtd = { runKm: 0, swimKm: 0, bikeKm: 0 };
-  for (const w of workouts) {
+  const addSportKm = (bucket, w) => {
     const sport = classifySport(w);
     const distKmVal = km(w.distance_m);
-    if (sport === 'run') sportDistanceRange.runKm += distKmVal;
-    else if (sport === 'swim') sportDistanceRange.swimKm += distKmVal;
-    else if (sport === 'bike') sportDistanceRange.bikeKm += distKmVal;
-  }
-  for (const w of last30) {
-    const sport = classifySport(w);
-    const distKmVal = km(w.distance_m);
-    if (sport === 'run') sportDistanceLast30.runKm += distKmVal;
-    else if (sport === 'swim') sportDistanceLast30.swimKm += distKmVal;
-    else if (sport === 'bike') sportDistanceLast30.bikeKm += distKmVal;
-  }
+    if (sport === 'run') bucket.runKm += distKmVal;
+    else if (sport === 'swim') bucket.swimKm += distKmVal;
+    else if (sport === 'bike') bucket.bikeKm += distKmVal;
+  };
+  // An empty window means "nothing synced", not "no training" — those must not look alike
+  // to a KPI. Distances stay null until at least one workout lands in the window; after
+  // that a 0 for one discipline is a genuine 0. daysCovered distinguishes a light week
+  // from a partial sync.
+  const withCoverage = (bucket, windowWorkouts) => {
+    const sessions = windowWorkouts.length;
+    if (!sessions) {
+      return { runKm: null, swimKm: null, bikeKm: null, sessions: 0, daysCovered: 0, hasData: false };
+    }
+    const days = new Set(
+      windowWorkouts
+        .map((w) => Number(w.startDate || 0))
+        .filter(Boolean)
+        .map((ms) => new Date(ms).toISOString().slice(0, 10)),
+    );
+    return {
+      runKm: Number(bucket.runKm.toFixed(2)),
+      swimKm: Number(bucket.swimKm.toFixed(2)),
+      bikeKm: Number(bucket.bikeKm.toFixed(2)),
+      sessions,
+      daysCovered: days.size,
+      hasData: true,
+    };
+  };
+  for (const w of workouts) addSportKm(sportDistanceRange, w);
+  for (const w of last7) addSportKm(sportDistanceLast7, w);
+  for (const w of last30) addSportKm(sportDistanceLast30, w);
   for (const w of rawWorkouts) {
     const startMs = Number(w.startDate || 0);
     if (!startMs || startMs < yearStartMs) continue;
@@ -15029,11 +15056,17 @@ async function _getFitnessOverview(uid, days) {
         swimKm: Number(sportDistanceRange.swimKm.toFixed(2)),
         bikeKm: Number(sportDistanceRange.bikeKm.toFixed(2)),
       },
-      last30: {
-        runKm: Number(sportDistanceLast30.runKm.toFixed(2)),
-        swimKm: Number(sportDistanceLast30.swimKm.toFixed(2)),
-        bikeKm: Number(sportDistanceLast30.bikeKm.toFixed(2)),
-      },
+      // Weekly targets (Phase 0/1: run 50km, bike 150km, swim 8km per week) need a weekly
+      // number. `last7` never existed, so every `sportTotals?.last7?.runKm ?? ...last30...`
+      // in coachOrchestrator silently reported a 30-day total against a 7-day target.
+      //
+      // Sync is intermittent — a phone that did not sync is not a week without training —
+      // so an empty window reports null, not 0. `computeProgressPct` already returns null
+      // for a null current, which blanks the bar instead of rendering 0% achieved.
+      // Zero survives only when workouts DID sync and none were that discipline, which is
+      // a real zero. `daysCovered` lets the UI tell a light week from a dead pipe.
+      last7: withCoverage(sportDistanceLast7, last7),
+      last30: withCoverage(sportDistanceLast30, last30),
       ytd: {
         runKm: Number(sportDistanceYtd.runKm.toFixed(2)),
         swimKm: Number(sportDistanceYtd.swimKm.toFixed(2)),
@@ -20340,10 +20373,70 @@ function shouldAutoConvertTaskData(taskData, profile = {}) {
   return false;
 }
 
+/**
+ * Lowercase, strip punctuation, collapse whitespace — for comparing story titles.
+ *
+ * Deliberately NOT transcriptIngestion's `normalizeTitle`, and deliberately not writing to
+ * its `normalizedTitle` field. That one only lowercases and collapses spaces, so
+ * "Establish 'True Fire' Budget" and "Establish a True fire budget" stay distinct under
+ * it — exactly the near-duplicate class this guard exists to catch. Two writers with
+ * different rules sharing one field would corrupt its entity matching, so this keeps its
+ * own key.
+ */
+function dedupeTitleKeyFor(title) {
+  return String(title || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 async function autoConvertTask({ db, taskDoc, profile, runId }) {
   const task = taskDoc.data() || {};
   const userId = task.ownerUid;
   if (!userId) return null;
+
+  // shouldAutoConvert() guards `autoConverted`/`convertedToStoryId` on the TASK, which
+  // only stops one task converting twice. It cannot see that a different task carries the
+  // same title — and Reminders sync routinely produces many. Each duplicate task passed
+  // its own guard and minted its own story: 200 duplicate stories in a fortnight, 23 of
+  // them "Watch the TPSM accelerator course". The task-level dedupe pass then soft-deleted
+  // the tasks and left every story it had already spawned behind.
+  //
+  // So dedupe on the destination, not the source: if a live story already carries this
+  // title, adopt it and mark the task converted rather than creating a second one.
+  const dedupeTitleKey = dedupeTitleKeyFor(task.title);
+  if (dedupeTitleKey) {
+    // Two lookups because only stories written after this change carry dedupeTitleKey.
+    // The exact-title fallback covers the ~950 existing ones, which is where the current
+    // duplicates actually live — without it the guard would not fire for a year.
+    const findLive = async (field, value) => {
+      const snap = await db.collection('stories')
+        .where('ownerUid', '==', userId)
+        .where(field, '==', value)
+        .limit(5)
+        .get()
+        .catch(() => null);
+      if (!snap || snap.empty) return null;
+      return snap.docs.find((d) => !d.data()?.deleted) || null;
+    };
+    const match = await findLive('dedupeTitleKey', dedupeTitleKey)
+      || (task.title ? await findLive('title', task.title) : null);
+    if (match) {
+      await taskDoc.ref.update({
+        status: 2,
+        convertedToStoryId: match.id,
+        autoConvertedAt: admin.firestore.FieldValue.serverTimestamp(),
+        autoConvertedRunId: runId,
+        autoConverted: true,
+        autoConversionDedupedTo: match.id,
+        reminderSyncDirective: 'complete',
+        syncState: 'dirty',
+      }).catch(() => { });
+      console.log(`[autoConvertTask] ${taskDoc.id} deduped onto existing story ${match.id}`);
+      return { storyId: match.id, deduped: true };
+    }
+  }
 
   const now = Date.now();
   const goalSnap = task.goalId ? await db.collection('goals').doc(task.goalId).get().catch(() => null) : null;
@@ -20361,6 +20454,9 @@ async function autoConvertTask({ db, taskDoc, profile, runId }) {
   const storyPayload = {
     ref: storyRefValue,
     title: task.title || 'Story created from task',
+    // Persisted so the dedupe query above can match on it. Without an indexed field the
+    // check would need a full-collection scan on every conversion.
+    dedupeTitleKey,
     description: task.description || '',
     goalId: task.goalId || null,
     sprintId: task.sprintId || null,
@@ -20368,7 +20464,10 @@ async function autoConvertTask({ db, taskDoc, profile, runId }) {
     priority: task.priority || 2,
     points: computedPoints,
     status: 0,
-    theme: task.theme || goal?.theme || 1,
+    // `|| 1` silently stamped a raw numeric theme on anything untyped — 237 stories now
+    // carry theme "1" rather than a real one, which is why the theme breakdown is a mix of
+    // ids and names. Null is honest: unthemed, and filterable as such.
+    theme: task.theme || goal?.theme || null,
     persona: task.persona || profile?.persona || 'personal',
     ownerUid: userId,
     orderIndex: now,

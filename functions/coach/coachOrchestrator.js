@@ -583,8 +583,13 @@ async function _runOrchestratorForUser(uid) {
   // 12c. Weekly volume nudges — mid-week only (Tue–Thu)
   const dayOfWeek = todayDt.weekday; // 1=Mon … 7=Sun
   const weeklyNudges = [];
-  const weeklyRunKm = fitnessOverview?.sportTotals?.last7?.runKm ?? fitnessOverview?.sportTotals?.last30?.runKm ?? null;
-  const weeklySwimKm = fitnessOverview?.sportTotals?.last7?.swimKm ?? fitnessOverview?.sportTotals?.last30?.swimKm ?? null;
+  // `last7` genuinely exists now (see sportTotals in index.js). It previously did not, so
+  // the old `?? last30` fallback meant every "this week" figure below was a 30-day total.
+  // Do NOT reinstate that fallback: last7 is null precisely when nothing synced, and
+  // borrowing the 30-day number there would turn a dead pipe into a plausible-looking week.
+  const weekSport = fitnessOverview?.sportTotals?.last7 ?? null;
+  const weeklyRunKm = weekSport?.runKm ?? null;
+  const weeklySwimKm = weekSport?.swimKm ?? null;
   if (dayOfWeek >= 2 && dayOfWeek <= 4) {
     // Run: target 15km mid-week check (half of 30km weekly)
     if (weeklyRunKm !== null && weeklyRunKm < 15) {
@@ -604,8 +609,7 @@ async function _runOrchestratorForUser(uid) {
   // 12e. Generate the briefing via LLM with the triathlon coach persona +
   // focus-goal awareness. Falls back to the programmatic template if the LLM
   // call fails (missing key, quota, etc.) so the nightly job is never broken.
-  const weeklyBikeKmCtx = fitnessOverview?.sportTotals?.last7?.bikeKm
-    ?? fitnessOverview?.sportTotals?.last30?.bikeKm ?? null;
+  const weeklyBikeKmCtx = weekSport?.bikeKm ?? null;
 
   const llmBriefing = await generateCoachBriefingLLM(uid, firestore, {
     readinessPct,
@@ -664,9 +668,12 @@ async function _runOrchestratorForUser(uid) {
     // Fitness overview fields surfaced for the UI
     fitnessScore: fitnessOverview?.fitnessScore ?? null,
     fitnessLevel: fitnessOverview?.fitnessLevel ?? null,
-    weeklyRunKm: fitnessOverview?.sportTotals?.last7?.runKm ?? fitnessOverview?.sportTotals?.last30?.runKm ?? null,
-    weeklyBikeKm: fitnessOverview?.sportTotals?.last7?.bikeKm ?? fitnessOverview?.sportTotals?.last30?.bikeKm ?? null,
-    weeklySwimKm: fitnessOverview?.sportTotals?.last7?.swimKm ?? fitnessOverview?.sportTotals?.last30?.swimKm ?? null,
+    weeklyRunKm,
+    weeklyBikeKm: weeklyBikeKmCtx,
+    weeklySwimKm,
+    // Lets the UI say "2 of 7 days synced" rather than presenting a partial week as whole.
+    weeklyVolumeDaysCovered: weekSport?.daysCovered ?? 0,
+    weeklyVolumeHasData: weekSport?.hasData === true,
     stepsToday: profile.healthkitStepsToday ?? profile.stepsToday ?? null,
     currentBodyFatPct: bodyFatPct,
     currentWeightKg: weightKg,

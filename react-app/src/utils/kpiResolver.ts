@@ -15,7 +15,7 @@ import { db } from '../firebase';
 import type { Goal, Story, Task } from '../types';
 import type { Kpi, KpiDataSource, MetricBinding } from '../types/KpiTypes';
 import { getLatestMetricValue, toPeriodKey } from './metricValues';
-import { isFreshTimestamp, toMillis } from './kpiFreshness';
+import { isFreshTimestamp, toMillis, newestTimestamp, freshnessWindowFor } from './kpiFreshness';
 
 type ResolvedGoalKpiRow = Record<string, any>;
 const WEEK_FORMAT = "yyyy-'W'II";
@@ -82,7 +82,10 @@ async function resolveObservationSource(ownerUid: string, source: KpiDataSource,
     observedAt: metricValue.observedAt,
     isFresh: source === 'user_input' || source === 'manual_task'
       ? true
-      : isFreshTimestamp(metricValue.syncedAt || metricValue.observedAt, 24),
+      : isFreshTimestamp(
+        newestTimestamp(metricValue.syncedAt, metricValue.observedAt),
+        freshnessWindowFor(binding.metricKey),
+      ),
   };
 }
 
@@ -95,14 +98,21 @@ async function resolveProfileSource(ownerUid: string, source: KpiDataSource, bin
   const currentValue = toNumber(value);
   if (currentValue == null) return null;
   const manualObservedAt = profile.updatedAt || null;
-  const automatedTimestamp = source === 'strava' ? profile.stravaLastSyncAt : (profile.healthkitLastSyncAt || profile.updatedAt || null);
+  // Newest wins, not first-non-null. healthkitLastSyncAt is written by a path that has
+  // stopped running (stuck at 2026-06-06) while the iOS app writes health_metrics and
+  // bumps profile.updatedAt daily — `a || b` believed the dead field and marked every
+  // HealthKit KPI stale. See newestTimestamp.
+  const automatedTimestamp = source === 'strava'
+    ? newestTimestamp(profile.stravaLastSyncAt, profile.stravaUpdatedAt)
+    : newestTimestamp(profile.healthkitLastSyncAt, profile.updatedAt);
+  const effectiveWindowHours = freshnessWindowFor(binding.metricKey, freshnessWindowHours);
   return {
     source,
     currentValue,
     unit: binding.unit || '',
     observedAt: toMillis(manualObservedAt),
     isFresh: source === 'healthkit' || source === 'strava'
-      ? isFreshTimestamp(automatedTimestamp, freshnessWindowHours)
+      ? isFreshTimestamp(automatedTimestamp, effectiveWindowHours)
       : true,
     automatedTimestamp,
     manualObservedAt,
@@ -301,7 +311,11 @@ export async function resolveKpiForGoal(options: {
 }): Promise<ResolvedGoalKpiRow> {
   const { ownerUid, goal, kpi } = options;
   const sources = getCandidateSources(kpi);
-  const freshnessWindowHours = Number(kpi.freshnessWindowHours || 24);
+  // Null, not 24, when the KPI does not specify one — a hardcoded 24 here would be passed
+  // down as an explicit override and defeat the per-signal defaults in freshnessWindowFor.
+  const freshnessWindowHours = Number.isFinite(Number(kpi.freshnessWindowHours))
+    ? Number(kpi.freshnessWindowHours)
+    : null;
   const sourceFreshness: Record<string, any> = {};
   let resolved: any = null;
 

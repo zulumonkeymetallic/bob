@@ -119,10 +119,18 @@ const VitalsDialsRow: React.FC<{ coachData: CoachDaily }> = ({ coachData }) => {
   // No true real-time strain metric available (would need Strava suffer score / active
   // energy) — this is weekly training volume vs a nominal 100km/wk combined target,
   // the closest proxy we can compute from data we actually have.
-  const weeklyVolumeKm = (coachData.weeklyRunKm || 0) + (coachData.weeklyBikeKm || 0) + (coachData.weeklySwimKm || 0);
+  // `|| 0` here used to turn "nothing synced" into a confident 0km — a dead sync and a
+  // week off looked identical, both rendering green at 0% load. Sync is intermittent, so
+  // the three fields are null when the 7-day window is empty; keep the whole figure null
+  // in that case and let the UI show a dash.
+  const volumeParts = [coachData.weeklyRunKm, coachData.weeklyBikeKm, coachData.weeklySwimKm];
+  const weeklyVolumeKm = volumeParts.every((v) => v == null)
+    ? null
+    : volumeParts.reduce((sum: number, v) => sum + (v ?? 0), 0);
   const loadTargetKm = 100;
-  const loadPct = Math.round((weeklyVolumeKm / loadTargetKm) * 100);
-  const loadColour = loadPct >= 100 ? 'var(--bs-danger)' : loadPct >= 60 ? 'var(--bs-warning)' : 'var(--bs-success)';
+  const loadPct = weeklyVolumeKm == null ? null : Math.round((weeklyVolumeKm / loadTargetKm) * 100);
+  const loadColour = loadPct == null ? 'var(--bs-secondary)'
+    : loadPct >= 100 ? 'var(--bs-danger)' : loadPct >= 60 ? 'var(--bs-warning)' : 'var(--bs-success)';
 
   return (
     <div className="card border-0 shadow-sm">
@@ -149,11 +157,17 @@ const VitalsDialsRow: React.FC<{ coachData: CoachDaily }> = ({ coachData }) => {
             sub={`Target ${sleepTarget}h`}
           />
           <CircularDial
-            pct={Math.min(100, loadPct)}
+            pct={loadPct == null ? null : Math.min(100, loadPct)}
             colour={loadColour}
             label="Training Load"
-            value={`${Math.round(weeklyVolumeKm)}km`}
-            sub={`Wk target ${loadTargetKm}km`}
+            value={weeklyVolumeKm == null ? '—' : `${Math.round(weeklyVolumeKm)}km`}
+            sub={
+              weeklyVolumeKm == null
+                ? 'No workouts synced'
+                : coachData.weeklyVolumeDaysCovered != null && coachData.weeklyVolumeDaysCovered < 7
+                  ? `${coachData.weeklyVolumeDaysCovered}/7 days · target ${loadTargetKm}km`
+                  : `Wk target ${loadTargetKm}km`
+            }
           />
         </div>
         {(coachData.readinessLabel === 'red' || coachData.readinessLabel === 'amber') && (
@@ -294,12 +308,19 @@ const PhaseCard: React.FC<{
                 // time and never refreshed — fall back to the live weekly volume BOB
                 // already computes nightly for the matching sport, so these bars
                 // actually move instead of always reading "—".
+                const isVolumeKpi = kpi.type === 'fitness_running'
+                  || kpi.type === 'fitness_cycling'
+                  || kpi.type === 'fitness_swimming';
                 const liveValue =
                   kpi.type === 'fitness_running' ? coachData.weeklyRunKm :
                   kpi.type === 'fitness_cycling' ? coachData.weeklyBikeKm :
                   kpi.type === 'fitness_swimming' ? coachData.weeklySwimKm :
                   null;
-                const current = liveValue ?? kpi.current ?? null;
+                // For a volume KPI the live figure is authoritative *including its null* —
+                // null means the 7-day window had no synced workouts, and falling through
+                // to the stale creation-time kpi.current would dress that up as progress.
+                // Non-volume KPIs have no live source, so kpi.current is all there is.
+                const current = isVolumeKpi ? liveValue : (kpi.current ?? null);
                 const pct = (current !== null && kpi.target > 0)
                   ? Math.min(100, Math.round((current / kpi.target) * 100)) : null;
                 const variant =

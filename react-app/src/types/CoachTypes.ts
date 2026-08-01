@@ -77,9 +77,15 @@ export interface CoachDaily {
   // Surfaced from fitness_overview
   fitnessScore: number | null;          // 0-100 composite fitness score
   fitnessLevel: string | null;          // 'Peak' | 'Sharp' | 'Building' | 'Base' | 'Rebuild'
+  // Trailing 7 days. null means nothing synced in the window — NOT a week of zero
+  // training — so render these blank rather than as 0 against a weekly target.
   weeklyRunKm: number | null;
   weeklyBikeKm: number | null;
   weeklySwimKm: number | null;
+  /** Distinct days in the last 7 that carried at least one workout. */
+  weeklyVolumeDaysCovered?: number;
+  /** False when the 7-day window is empty; the km fields are null in that case. */
+  weeklyVolumeHasData?: boolean;
   currentBodyFatPct: number | null;
   currentWeightKg: number | null;
   createdAt: any;
