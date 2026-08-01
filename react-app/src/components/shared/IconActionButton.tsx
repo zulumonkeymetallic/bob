@@ -20,7 +20,9 @@ import { Button, OverlayTrigger, Tooltip } from 'react-bootstrap';
 export interface IconActionButtonProps {
   /** Tooltip text and accessible name. */
   label: string;
-  onClick?: (event: React.MouseEvent<HTMLElement>) => void;
+  /** Typed to HTMLButtonElement, not the wider HTMLElement: call sites hand over handlers
+   *  already typed for a button, and a narrower parameter cannot accept a wider one. */
+  onClick?: (event: React.MouseEvent<HTMLButtonElement>) => void;
   disabled?: boolean;
   /** Overrides the default muted colour — e.g. a delegation state or a set priority. */
   color?: string;

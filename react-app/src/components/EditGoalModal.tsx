@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Modal, Button, Form, Alert, InputGroup, Toast, ToastContainer, Nav } from 'react-bootstrap';
 import { db, functions } from '../firebase';
 import { doc, updateDoc, serverTimestamp, collection, query, where, getDocs, setDoc, getDoc, addDoc, deleteDoc, onSnapshot, orderBy } from 'firebase/firestore';
@@ -72,7 +72,11 @@ const shiftDateInputToYear = (value: string, year: number) => {
   return formatDateInput(next);
 };
 
-const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, currentUserId, allGoals = [] }) => {
+/** Module-level so the default keeps a stable identity across renders. As an inline `= []`
+ *  default it produced a new array every render, re-firing effects that depend on it. */
+const EMPTY_GOALS: Goal[] = [];
+
+const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, currentUserId, allGoals = EMPTY_GOALS }) => {
   const { currentPersona } = usePersona();
   const { sprints } = useSprint();
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -480,8 +484,29 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     setLinkedTasks((prev) => [...prev, { id: ref.id, ...(payload as any) } as Task]);
   };
 
-  // Load goal data when modal opens
+  // Load goal data when modal opens.
+  //
+  // Guarded, because this effect REPLACES the whole form and its dependency list includes
+  // incidental lookup data (monzoPots, allGoals, formatParentGoalOption). Any of those
+  // changing identity re-ran it and wiped whatever you were typing — the Description field
+  // was unusable: keystrokes landed and reverted within a frame. Reproduced 2026-08-01.
+  //
+  // The trigger was `allGoals = []` as a default parameter: a fresh array on every render for
+  // the three callers that don't pass the prop (GoalsManagement, GoalsCardView,
+  // EnhancedGanttChart — /goals among them). That default is now a module constant, but the
+  // guard matters independently: any caller passing an inline `allGoals={x.filter(...)}`
+  // would reintroduce it, and this effect should only hydrate on open or on a goal change
+  // regardless of what else churns.
+  const hydratedForRef = useRef<string | null>(null);
   useEffect(() => {
+    if (!show) {
+      hydratedForRef.current = null;
+      return;
+    }
+    const hydrationKey = goal?.id ?? '__new__';
+    if (hydratedForRef.current === hydrationKey) return;
+    hydratedForRef.current = hydrationKey;
+
     if (show) {
       setActiveTab('details');
       if (goal) {
