@@ -27,7 +27,9 @@ import {
   updateFocusGoal,
 } from '../services/focusGoalsService';
 import { getActiveFocusLeafGoalIds, getProtectedFocusGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
-import { Plus, Zap } from 'lucide-react';
+import { History, Plus, Target, Zap } from 'lucide-react';
+import { themeVars } from '../utils/themeVars';
+import { useDeviceInfo } from '../utils/deviceDetection';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -52,6 +54,7 @@ export const FocusGoalsPage: React.FC = () => {
   const { currentPersona } = usePersona();
   const navigate = useNavigate();
   const location = useLocation();
+  const deviceInfo = useDeviceInfo();
   const { focusGoals, activeFocusGoals, loading } = useFocusGoals(currentUser?.uid);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [stories, setStories] = useState<Story[]>([]);
@@ -101,10 +104,17 @@ export const FocusGoalsPage: React.FC = () => {
     [goals, activeFocusLeafGoalIdSet]
   );
 
+  /**
+   * Strictly the goals under an active focus set. This used to fall back to EVERY goal the
+   * user owns when nothing was focused, which turned "Focus Goals" into an unfiltered goals
+   * page — a fourth way to edit and delete goals competing with /goals, the sprint planner
+   * and the focus wizard. With no active focus the page now says so (see the empty state
+   * below) rather than dumping the whole backlog under a "Focus" heading.
+   */
   const kpiStudioGoals = React.useMemo(
     () => (activeProtectedGoalIdSet.size > 0
       ? goals.filter((goal) => isGoalInHierarchySet(goal.id, goals, activeProtectedGoalIdSet))
-      : goals),
+      : []),
     [activeProtectedGoalIdSet, goals]
   );
 
@@ -535,24 +545,37 @@ export const FocusGoalsPage: React.FC = () => {
 
   return (
     <Container fluid style={{ padding: '20px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+      {/* Same header shape as /goals: stacked on phones, because side by side at 375px the
+          flex row squeezes the action button's label to one letter per line. */}
+      <div style={{
+        display: 'flex',
+        flexDirection: deviceInfo.isMobile ? 'column' : 'row',
+        justifyContent: 'space-between',
+        alignItems: deviceInfo.isMobile ? 'stretch' : 'center',
+        gap: deviceInfo.isMobile ? 8 : 0,
+        marginBottom: '16px',
+      }}>
         <div>
-          <h2 style={{ display: 'flex', alignItems: 'center', gap: '12px', margin: 0 }}>
-            <Zap size={28} style={{ color: '#ffc107' }} />
+          <h2 style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '0 0 4px 0', fontSize: '20px', fontWeight: 700 }}>
+            <Zap size={20} style={{ color: 'var(--bs-warning, #ffc107)' }} />
             Focus Goals
           </h2>
-          <small style={{ color: '#666' }}>Select and track your top priorities</small>
+          {!deviceInfo.isMobile && (
+            <p style={{ margin: 0, color: themeVars.muted as string, fontSize: '13px' }}>
+              Select and track your top priorities
+            </p>
+          )}
         </div>
         <Button
           variant="primary"
-          size="lg"
+          size="sm"
           onClick={() => {
             setEditingFocusGoal(null);
             setWizardPrefill(null);
             setShowWizard(true);
           }}
         >
-          <Plus size={18} className="me-2" />
+          <Plus size={16} className="me-1" />
           Create Focus Goals
         </Button>
       </div>
@@ -560,26 +583,15 @@ export const FocusGoalsPage: React.FC = () => {
       {/* Active Focus Goals */}
       {activeFocusGoals.length > 0 ? (
         <div style={{ marginBottom: '32px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap', marginBottom: '16px' }}>
-            <h4 style={{ margin: 0, fontWeight: '600' }}>
-              🎯 Active Focus ({activeFocusGoals.length})
+          {/* The Detail selector that used to sit here controlled the GoalsCardView inside the
+              KPI Studio card further down, not this section — two selectors bound to one piece
+              of state, so moving either silently moved the other. It now lives only on the card
+              it actually affects. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+            <Target size={16} style={{ color: themeVars.muted as string }} />
+            <h4 style={{ margin: 0, fontWeight: 600, fontSize: '16px' }}>
+              Active Focus ({activeFocusGoals.length})
             </h4>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <Form.Label htmlFor="focus-goals-detail-level" style={{ margin: 0, fontSize: '12px', fontWeight: 500, color: 'var(--notion-text-secondary, #666)' }}>
-                Detail
-              </Form.Label>
-              <Form.Select
-                id="focus-goals-detail-level"
-                size="sm"
-                value={goalsDetailLevel}
-                onChange={(e) => setGoalsDetailLevel(e.target.value as 'minimal' | 'medium' | 'full')}
-                style={{ width: 'auto', border: '1px solid var(--notion-border)', background: 'var(--notion-bg)', color: 'var(--notion-text)' }}
-              >
-                <option value="minimal">Minimal</option>
-                <option value="medium">Medium</option>
-                <option value="full">Full</option>
-              </Form.Select>
-            </div>
           </div>
           {activeFocusGoals.map(focusGoal => (
             <div key={focusGoal.id} style={{ marginBottom: '20px' }}>
@@ -629,7 +641,7 @@ export const FocusGoalsPage: React.FC = () => {
                       <ListGroup.Item key={goal.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
                         <div>
                           <div style={{ fontWeight: 600 }}>{goal.title}</div>
-                          <small style={{ color: '#666' }}>
+                          <small style={{ color: themeVars.muted as string }}>
                             Ref: {goal.monzoPotGoalRef || 'n/a'}
                             {goal.monzoPotLinkError ? ` • ${goal.monzoPotLinkError}` : ''}
                           </small>
@@ -672,7 +684,7 @@ export const FocusGoalsPage: React.FC = () => {
                     <ListGroup.Item key={story.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
                       <div>
                         <div style={{ fontWeight: 600 }}>{story.ref || story.referenceNumber || story.id}</div>
-                        <small style={{ color: '#666' }}>{story.title}</small>
+                        <small style={{ color: themeVars.muted as string }}>{story.title}</small>
                       </div>
                       <div style={{ display: 'flex', gap: '8px' }}>
                         <Button size="sm" variant="warning" disabled={busy} onClick={() => handleAlignStoryToFocus(story.id)}>
@@ -688,7 +700,7 @@ export const FocusGoalsPage: React.FC = () => {
               </ListGroup>
 
               {unalignedStoriesInActiveSprint.length > 10 && (
-                <div style={{ marginTop: '8px', fontSize: '12px', color: '#666' }}>
+                <div style={{ marginTop: '8px', fontSize: '12px', color: themeVars.muted as string }}>
                   Showing first 10 unaligned stories.
                 </div>
               )}
@@ -715,46 +727,81 @@ export const FocusGoalsPage: React.FC = () => {
         <Card.Body>
           <div className="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
             <div>
-              <div className="fw-semibold">
-                {activeFocusLeafGoalIdSet.size > 0 ? 'Focus KPI Studio' : 'Goal KPI Studio'}
-              </div>
+              <div className="fw-semibold">Focus KPI Studio</div>
               <div className="text-muted small">
-                {activeFocusLeafGoalIdSet.size > 0
-                  ? 'Design KPIs for your active focus goals and pin the right ones to the dashboard.'
-                  : 'Design KPIs for your current goals and pin the right ones to the dashboard.'}
+                Design KPIs for your active focus goals and pin the right ones to the dashboard.
               </div>
             </div>
-            <Form.Select
-              size="sm"
-              value={goalsDetailLevel}
-              onChange={(e) => setGoalsDetailLevel(e.target.value as 'minimal' | 'medium' | 'full')}
-              style={{ width: 'auto' }}
-            >
-              <option value="minimal">Minimal</option>
-              <option value="medium">Medium</option>
-              <option value="full">Full</option>
-            </Form.Select>
+            {kpiStudioGoals.length > 0 && (
+              <div className="d-flex align-items-center gap-2">
+                <Form.Label htmlFor="focus-goals-detail-level" className="mb-0 small text-muted">
+                  Detail
+                </Form.Label>
+                <Form.Select
+                  id="focus-goals-detail-level"
+                  size="sm"
+                  value={goalsDetailLevel}
+                  onChange={(e) => setGoalsDetailLevel(e.target.value as 'minimal' | 'medium' | 'full')}
+                  style={{ width: 'auto' }}
+                >
+                  <option value="minimal">Minimal</option>
+                  <option value="medium">Medium</option>
+                  <option value="full">Full</option>
+                </Form.Select>
+              </div>
+            )}
           </div>
-          <GoalsCardView
-            goals={kpiStudioGoals}
-            onGoalUpdate={handleGoalUpdate}
-            onGoalDelete={handleGoalDelete}
-            onGoalPriorityChange={handleGoalPriorityChange}
-            themes={globalThemes}
-            focusGoalIds={Array.from(activeFocusLeafGoalIdSet)}
-            groupByParent
-            onDesignKpi={handleOpenKpiDesigner}
-            cardLayout={goalsDetailLevel === 'full' ? 'comfortable' : 'grid'}
-            showDescriptions={goalsDetailLevel !== 'minimal'}
-            subtitleByGoalId={sprintWindowSubtitleByGoalId}
-          />
+          {kpiStudioGoals.length > 0 ? (
+            <GoalsCardView
+              goals={kpiStudioGoals}
+              onGoalUpdate={handleGoalUpdate}
+              onGoalDelete={handleGoalDelete}
+              onGoalPriorityChange={handleGoalPriorityChange}
+              themes={globalThemes}
+              focusGoalIds={Array.from(activeFocusLeafGoalIdSet)}
+              groupByParent
+              onDesignKpi={handleOpenKpiDesigner}
+              cardLayout={goalsDetailLevel === 'full' ? 'comfortable' : 'grid'}
+              showDescriptions={goalsDetailLevel !== 'minimal'}
+              subtitleByGoalId={sprintWindowSubtitleByGoalId}
+            />
+          ) : (
+            <div style={{ textAlign: 'center', padding: '28px 16px', color: themeVars.muted as string }}>
+              <Target size={24} style={{ opacity: 0.4, marginBottom: 10 }} />
+              <div className="fw-medium" style={{ color: themeVars.text as string }}>No focus goals selected</div>
+              <div className="small mt-1" style={{ maxWidth: 460, margin: '0 auto' }}>
+                Focus goals come from the focus wizard, the sprint planner, or the Focus toggle
+                on a goal. Pick some and their KPIs appear here.
+              </div>
+              <div className="d-flex justify-content-center gap-2 mt-3">
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={() => {
+                    setEditingFocusGoal(null);
+                    setWizardPrefill(null);
+                    setShowWizard(true);
+                  }}
+                >
+                  <Plus size={16} className="me-1" />
+                  Create Focus Goals
+                </Button>
+                <Button size="sm" variant="outline-secondary" onClick={() => navigate('/goals')}>
+                  Browse all goals
+                </Button>
+              </div>
+            </div>
+          )}
         </Card.Body>
       </Card>
 
       {/* Past Focus Goals */}
       {focusGoals.length > activeFocusGoals.length && (
         <div>
-          <h4 style={{ marginBottom: '16px', fontWeight: '600' }}>📋 Previous Focus Goals</h4>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+            <History size={16} style={{ color: themeVars.muted as string }} />
+            <h4 style={{ margin: 0, fontWeight: 600, fontSize: '16px' }}>Previous Focus Goals</h4>
+          </div>
           <Row>
             {focusGoals
               .filter(fg => !fg.isActive)
@@ -766,7 +813,7 @@ export const FocusGoalsPage: React.FC = () => {
                       <Card.Body>
                         <div style={{ marginBottom: '12px' }}>
                           <strong>{focusGoal.title?.trim() || `${selectedGoals.length} goals`}</strong>
-                          <div style={{ fontSize: '12px', color: '#666' }}>
+                          <div style={{ fontSize: '12px', color: themeVars.muted as string }}>
                             {focusGoal.timeframe === 'sprint' ? '2 weeks' : focusGoal.timeframe === 'quarter' ? '13 weeks' : '52 weeks'}
                           </div>
                         </div>
@@ -776,7 +823,7 @@ export const FocusGoalsPage: React.FC = () => {
                           ))}
                           {selectedGoals.length > 3 && <li>+{selectedGoals.length - 3} more</li>}
                         </ul>
-                        <small style={{ color: '#666' }}>
+                        <small style={{ color: themeVars.muted as string }}>
                           Completed: {Number.isFinite(toMillis(focusGoal.endDate)) ? new Date(toMillis(focusGoal.endDate)).toLocaleDateString() : 'Unknown'}
                         </small>
                         <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
