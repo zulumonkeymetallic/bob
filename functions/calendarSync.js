@@ -231,13 +231,29 @@ function priorityLabel(entity) {
 // GCal event titles are the one surface Jim actually looks at while his day is happening —
 // a Top 3 item, its user order/priority, and its AI score should be identifiable without
 // opening BOB.
+/**
+ * Event title: `Title [REF] [AI n]`, with a leading ⭐ for a Top 3 item.
+ *
+ * Jim's format, 2026-08-01, replacing `⭐ TOP3 · P3 · Title [REF] [THEME] · AI 88`.
+ *
+ * **No priority prefix.** A calendar is read by scanning down the left edge, and a column
+ * of `P3 ·` / `#1 ·` pushed the actual title out of the first glance. Priority is still in
+ * the description's AI line, where it is reference data rather than the first thing read.
+ *
+ * Top 3 keeps the emoji and loses the word — one glyph carries it.
+ *
+ * `baseTitle` is now `Title [REF]` only; the theme bracket is gone. Calendar apps truncate
+ * hard in month view, so every bracket spent is a word of the title lost, and the theme is
+ * already in the description.
+ *
+ * The matching iOS implementation is `CalendarEventText.title` in bob-ios. The two write
+ * into the same calendar and must agree — if you change one, change the other.
+ */
 function decorateEventTitle(baseTitle, entity, aiScoreVal) {
-  const top3Prefix = isEntityTop3(entity) ? '⭐ TOP3 · ' : '';
-  const pLabel = priorityLabel(entity);
-  const priorityPrefix = pLabel ? `${pLabel} · ` : '';
+  const top3Prefix = isEntityTop3(entity) ? '⭐ ' : '';
   const score = aiScoreVal === null || aiScoreVal === undefined || aiScoreVal === '' ? NaN : Number(aiScoreVal);
-  const aiSuffix = Number.isFinite(score) && score > 0 ? ` · AI ${Math.round(score)}` : '';
-  return `${top3Prefix}${priorityPrefix}${baseTitle}${aiSuffix}`;
+  const aiSuffix = Number.isFinite(score) && score > 0 ? ` [AI ${Math.round(score)}]` : '';
+  return `${top3Prefix}${baseTitle}${aiSuffix}`;
 }
 
 function isDoneStatus(value) {
@@ -1253,6 +1269,7 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
         lines.push('', `Calendar: ${buildAbsoluteUrl('/calendar')}`);
         lines.push(`Overview: ${buildAbsoluteUrl('/dashboard')}`);
 
+        lines.push('', 'Source: cloud function');
         enrichedDesc = lines.join('\n');
       } else {
         // SINGLE ITEM: Existing logic for single task/story/routine
@@ -1278,7 +1295,7 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
             const acArr = Array.isArray(sd.acceptanceCriteria)
               ? sd.acceptanceCriteria.filter(Boolean).map((x) => String(x)).slice(0, 3)
               : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x) => String(x)).slice(0, 3) : []);
-            summaryText = decorateEventTitle(`${sd.title || activityName} [${storyRef}] [${themeLabel}]`, sd, aiScoreVal);
+            summaryText = decorateEventTitle(`${sd.title || activityName} [${storyRef}]`, sd, aiScoreVal);
             const lines = [];
             if (enrichedDesc) lines.push(enrichedDesc);
             lines.push(`Story: ${sd.title || 'Story'} – ${storyRef}`);
@@ -1317,6 +1334,10 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
               lines.push('', 'Acceptance criteria:');
               for (const item of acArr) lines.push(`- ${item}`);
             }
+            // Which writer made this event. The on-device planner writes
+            // `Source: on-device`; see CalendarEventText.notes in bob-ios. When an
+            // event looks wrong the first question is which side placed it.
+            lines.push('', 'Source: cloud function');
             enrichedDesc = lines.join('\n');
           }
         } else if (block.taskId) {
@@ -1337,7 +1358,7 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
                 aiReasonVal = tdTopReason || td.aiCriticalityReason || '';
               }
             }
-            summaryText = decorateEventTitle(`${td.title || activityName} [${taskRef}] [${themeLabel}]`, td, aiScoreVal);
+            summaryText = decorateEventTitle(`${td.title || activityName} [${taskRef}]`, td, aiScoreVal);
             const lines = [];
             if (enrichedDesc) lines.push(enrichedDesc);
             lines.push(`Task: ${td.title || 'Task'} – ${taskRef}`);
@@ -1392,6 +1413,10 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
             if (aiLineParts.length) lines.push('', aiLineParts.join(' – '));
             if (block.placementReason) lines.push(`Placement: ${block.placementReason}`);
 
+            // Which writer made this event. The on-device planner writes
+            // `Source: on-device`; see CalendarEventText.notes in bob-ios. When an
+            // event looks wrong the first question is which side placed it.
+            lines.push('', 'Source: cloud function');
             enrichedDesc = lines.join('\n');
           }
         } else if (block.routineId) {
@@ -1455,6 +1480,10 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
             if (aiReasonVal) aiLineParts.push(aiReasonVal);
             if (aiLineParts.length) lines.push('', aiLineParts.join(' – '));
             if (block.placementReason) lines.push(`Placement: ${block.placementReason}`);
+            // Which writer made this event. The on-device planner writes
+            // `Source: on-device`; see CalendarEventText.notes in bob-ios. When an
+            // event looks wrong the first question is which side placed it.
+            lines.push('', 'Source: cloud function');
             enrichedDesc = lines.join('\n');
           }
         }
@@ -1725,7 +1754,7 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
             const acArr = Array.isArray(sd.acceptanceCriteria)
               ? sd.acceptanceCriteria.filter(Boolean).map((x) => String(x)).slice(0, 3)
               : (Array.isArray(sd.acceptance_criteria) ? sd.acceptance_criteria.filter(Boolean).map((x) => String(x)).slice(0, 3) : []);
-            summaryText = decorateEventTitle(`${sd.title || activityName} [${storyRef}] [${themeLabel}]`, sd, aiScoreVal);
+            summaryText = decorateEventTitle(`${sd.title || activityName} [${storyRef}]`, sd, aiScoreVal);
             const lines = [];
             if (enrichedDesc2) lines.push(enrichedDesc2);
             lines.push(`Story: ${sd.title || 'Story'} – ${storyRef}`);
@@ -1784,7 +1813,7 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
                 aiReasonVal2 = tdTopReason || td.aiCriticalityReason || '';
               }
             }
-            summaryText = decorateEventTitle(`${td.title || activityName} [${taskRef}] [${themeLabel}]`, td, aiScoreVal);
+            summaryText = decorateEventTitle(`${td.title || activityName} [${taskRef}]`, td, aiScoreVal);
             const lines = [];
             if (enrichedDesc2) lines.push(enrichedDesc2);
             lines.push(`Task: ${td.title || 'Task'} – ${taskRef}`);
