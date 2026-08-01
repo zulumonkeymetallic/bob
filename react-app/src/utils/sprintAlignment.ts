@@ -6,7 +6,10 @@ export type SprintAlignmentMode = 'warn' | 'strict';
 export interface SprintAlignmentEvaluation {
   hasRule: boolean;
   mode: SprintAlignmentMode;
+  /** Retained so existing callers keep compiling; nothing sets it true any more. */
   blocking: boolean;
+  /** Strict mode: create the story but defer it, rather than refusing to create it. */
+  deferOnCreate?: boolean;
   aligned: boolean;
   message: string;
 }
@@ -60,13 +63,19 @@ export const evaluateStorySprintAlignment = (
     };
   }
 
+  // Neither mode refuses the work any more. Strict used to hard-block creation, which meant
+  // the thought you were trying to capture was simply lost — you either abandoned it or
+  // mislabelled its goal to get past the gate, and the second is worse than an unaligned
+  // story. Confirmed by Jim, 2026-08-01: strict should still add it, deferred; warn should
+  // add it to the sprint's backlog and say so.
   if (mode === 'strict') {
     return {
       hasRule: true,
       mode,
-      blocking: true,
+      blocking: false,
+      deferOnCreate: true,
       aligned: false,
-      message: 'This sprint is in strict focus mode. Story goal must map to one of the sprint focus goals or one of their leaf goals.',
+      message: 'This sprint is in strict focus mode and this goal is outside its focus goals. The story will be created and deferred, so it stays out of this sprint until you schedule it.',
     };
   }
 
@@ -74,7 +83,8 @@ export const evaluateStorySprintAlignment = (
     hasRule: true,
     mode,
     blocking: false,
+    deferOnCreate: false,
     aligned: false,
-    message: 'This story is outside sprint focus goals. You can continue, but it will stay in the sprint’s unaligned-story warning until you link it to a focus leaf goal.',
+    message: 'This goal is outside the sprint’s focus goals. The story will be created in the sprint’s backlog rather than the active plan.',
   };
 };

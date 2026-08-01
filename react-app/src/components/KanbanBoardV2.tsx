@@ -497,8 +497,16 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
             });
         }
 
+        // Done is always scoped to the selected sprint, never "everything ever finished".
+        // The sprintId query filter alone was not enough: with no sprint selected the query
+        // loads every sprint, and tasks come from sprint_task_index, a materialised mirror
+        // that can carry rows whose sprintId has moved on. Confirmed by Jim, 2026-08-01 —
+        // he was seeing other sprints' completed work in Done.
         if (!showCompletedItems) {
             result = result.filter((t) => !isDoneStatus((t as any).status, 'task'));
+        } else {
+            result = result.filter((t) => !isDoneStatus((t as any).status, 'task')
+                || (!!sprintId && String((t as any).sprintId || '') === sprintId));
         }
 
         if (showAiScoredOnly) {
@@ -549,8 +557,12 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
                 return false;
             });
         }
+        // Same sprint scoping as tasks above — Done shows this sprint's completed work only.
         if (!showCompletedItems) {
             result = result.filter((s) => !isDoneStatus((s as any).status, 'story'));
+        } else {
+            result = result.filter((s) => !isDoneStatus((s as any).status, 'story')
+                || (!!sprintId && String((s as any).sprintId || '') === sprintId));
         }
 
         if (showAiScoredOnly) {

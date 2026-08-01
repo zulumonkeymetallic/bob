@@ -107,6 +107,9 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
     persona: (currentPersona || 'personal') as 'personal' | 'work',
     goalId: '',
     storyId: '',
+    /** Goal type only: optional parent goal, so a quick-added goal can be filed under a
+     *  program/phase instead of always landing at the top level. */
+    parentGoalId: '',
     sprintId: '',
     dueDate: getTomorrowStr(),
     startQuarter: currentQuarterKey(),
@@ -115,6 +118,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
   // (Story's Linked Goal, Task's Parent Story). Mirrors the pattern in
   // EditTaskModal: typed text resolves to a real id on blur via exact title match.
   const [goalInput, setGoalInput] = useState('');
+  const [parentGoalInput, setParentGoalInput] = useState('');
   const [storyInput, setStoryInput] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
@@ -282,6 +286,13 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
     setGoalInput(match ? match.title : val);
   };
 
+  const resolveParentGoalSelection = (value: string) => {
+    const val = value.trim();
+    const match = goals.find((g) => g.title === val);
+    setQuickAddData((prev) => ({ ...prev, parentGoalId: match ? match.id : '' }));
+    setParentGoalInput(match ? match.title : val);
+  };
+
   const resolveStorySelection = (value: string) => {
     const val = value.trim();
     const match = stories.find((s) => s.title === val);
@@ -351,6 +362,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           confidence: 0.5,
           status: 'active',
           startDate: quickAddData.startQuarter ? quarterKeyToMidpointMs(quickAddData.startQuarter) : null,
+          parentGoalId: quickAddData.parentGoalId || null,
           kpis: []
         };
         
@@ -371,18 +383,13 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         });
         setSubmitResult(`✅ Goal created successfully! (${goalRef})`);
       } else if (quickAddType === 'story') {
-        if (quickAddData.sprintId && sprintAlignment.hasRule && !sprintAlignment.aligned) {
-          if (sprintAlignment.blocking) {
-            setSubmitResult(`❌ ${sprintAlignment.message}`);
-            setIsSubmitting(false);
-            return;
-          }
-          const proceed = window.confirm(`${sprintAlignment.message} Continue anyway?`);
-          if (!proceed) {
-            setIsSubmitting(false);
-            return;
-          }
-        }
+        // Misalignment no longer stops creation in either mode — the inline notice above the
+        // Create button already states what will happen, so a second confirm() asking the same
+        // question was pure friction. Strict defers the story instead of refusing it.
+        const deferForStrictFocus = !!quickAddData.sprintId
+          && sprintAlignment.hasRule
+          && !sprintAlignment.aligned
+          && !!sprintAlignment.deferOnCreate;
         const storyRef = generateRef('story');
         const linkedGoal = goals.find(g => g.id === quickAddData.goalId);
         const themeId = (linkedGoal && (linkedGoal as any).theme !== undefined) ? (linkedGoal as any).theme : 1;
@@ -397,7 +404,15 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           theme: themeId,
           orderIndex: 0,
           tags: [],
-          acceptanceCriteria: []
+          acceptanceCriteria: [],
+          // Strict focus mode: the story is still created and still carries its sprintId, but
+          // deferred so it sits out of the active plan rather than being refused outright.
+          // Same fields plannerDeferral writes, so the existing defer surfaces understand it.
+          ...(deferForStrictFocus ? {
+            deferredUntil: Date.now(),
+            deferredAt: Date.now(),
+            deferredReason: 'Outside sprint focus goals (strict mode)',
+          } : {}),
         };
         
         console.log('💾 FloatingActionButton: Saving STORY to database', {
@@ -413,7 +428,9 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
           timestamp: new Date().toISOString(),
           ref: storyRef
         });
-        setSubmitResult(`✅ Story created successfully! (${storyRef})`);
+        setSubmitResult(deferForStrictFocus
+          ? `✅ Story created and deferred — outside this sprint's focus goals (${storyRef})`
+          : `✅ Story created successfully! (${storyRef})`);
       } else if (quickAddType === 'task') {
         const taskRef = generateRef('task');
         const effortData = efforts.find(e => e.value === quickAddData.effort);
@@ -515,11 +532,13 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         persona: (currentPersona || 'personal') as 'personal' | 'work',
         goalId: '',
         storyId: '',
+        parentGoalId: '',
         sprintId: '',
         dueDate: getTomorrowStr(),
         startQuarter: currentQuarterKey(),
       });
       setGoalInput('');
+      setParentGoalInput('');
       setStoryInput('');
 
       // Auto-close after success
@@ -553,6 +572,7 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
       dueDate: getTomorrowStr(),
     }));
     setGoalInput('');
+    setParentGoalInput('');
     setStoryInput('');
     setSubmitResult(null);
     setShowQuickAdd(true);
@@ -789,6 +809,19 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
               />
             </Form.Group>
 
+            {/* description was already in quickAddData and already written to all three
+                collections — there was simply no input for it, so it always saved empty. */}
+            <Form.Group className="mb-3">
+              <Form.Label>Description</Form.Label>
+              <Form.Control
+                as="textarea"
+                rows={2}
+                value={quickAddData.description}
+                onChange={(e) => setQuickAddData({ ...quickAddData, description: e.target.value })}
+                placeholder={`What is this ${quickAddType} about? (optional)`}
+              />
+            </Form.Group>
+
             <Form.Group className="mb-3">
               <Form.Label>Source URL</Form.Label>
               <Form.Control
@@ -801,6 +834,35 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
 
             {quickAddType === 'goal' && (
               <>
+                {/* Optional parent, so a quick-added goal can be filed under an existing
+                    program/phase instead of always landing at the top level. Same
+                    search-by-title + datalist pattern as the Linked Goal / Parent Story
+                    pickers below. */}
+                <Form.Group className="mb-3">
+                  <Form.Label>Parent Goal</Form.Label>
+                  <Form.Control
+                    list="fab-parent-goal-options"
+                    value={parentGoalInput}
+                    onChange={(e) => setParentGoalInput(e.target.value)}
+                    onBlur={(e) => resolveParentGoalSelection(e.target.value)}
+                    placeholder="Search goals by title... (optional)"
+                  />
+                  <datalist id="fab-parent-goal-options">
+                    {goals.map(g => (
+                      <option key={g.id} value={g.title} />
+                    ))}
+                  </datalist>
+                  {parentGoalInput.trim() && !quickAddData.parentGoalId ? (
+                    <Form.Text className="text-warning">
+                      No goal matches "{parentGoalInput.trim()}" — pick one from the list or leave blank.
+                    </Form.Text>
+                  ) : (
+                    <Form.Text className="text-muted">
+                      Leave blank for a top-level goal.
+                    </Form.Text>
+                  )}
+                </Form.Group>
+
                 <Form.Group className="mb-3">
                   <Form.Label>Theme</Form.Label>
                   <Form.Select
@@ -879,8 +941,11 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
                   </Form.Group>
                 )}
 
+                {/* Informational, not a gate: creation proceeds either way, so this states the
+                    outcome rather than warning of a refusal. It used to render alongside a
+                    second identical copy of itself in submitResult when strict mode blocked. */}
                 {quickAddData.sprintId && sprintAlignment.hasRule && !sprintAlignment.aligned && (
-                  <Alert variant={sprintAlignment.blocking ? 'danger' : 'warning'} className="mb-3">
+                  <Alert variant="info" className="mb-3">
                     {sprintAlignment.message}
                   </Alert>
                 )}
