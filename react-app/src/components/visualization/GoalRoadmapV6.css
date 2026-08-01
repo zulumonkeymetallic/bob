@@ -466,11 +466,19 @@ body.grv6-full-active {
   width: 100%;
 }
 
+/* One line, clipped. This was `white-space: normal; word-break: break-word`, but a bar's width
+   is its DURATION — nothing to do with how long its title is — so a goal like "Reduce Body fat
+   to 26% from current baseline" in a one-quarter bar wrapped to three bold lines and spilled
+   out of the bar it belonged to. The full title is already on the shell's `title` attribute,
+   so nothing is lost by clipping. 600 rather than 700: every bar being maximum-bold is what
+   made a dense chart read as noise. */
 .grv6-task-title {
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.2;
-  white-space: normal;
-  word-break: break-word;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
   flex: 1;
   text-align: left;
 }
@@ -1072,13 +1080,23 @@ body.grv6-full-active {
   z-index: 4;
 }
 
+/* Sticks to the left edge of the scrolling timeline instead of being laid out across it. The
+   header band spans left:0/right:0 (the full chart width), so an un-stuck title floated in
+   whatever horizontal position the band happened to start at — reading as stray text dropped
+   over the grid rather than a label for the rows beneath it, and sitting only a row above a
+   bar carrying the same words when a parent section holds a single goal. */
 .grv6-roadmap-section-title {
+  position: sticky;
+  left: 8px;
   font-size: 0.72rem;
-  font-weight: 800;
-  color: var(--text-primary);
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  max-width: 420px;
   padding-right: 8px;
 }
 
