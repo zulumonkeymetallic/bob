@@ -15,6 +15,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { createPortal } from 'react-dom';
 import { Bell, Pin, PinOff, X } from 'lucide-react';
 import { Z, portalTarget } from '../utils/layoutTokens';
+import WorkOnNextBanner from './WorkOnNextBanner';
 import DeferralCandidatesBanner from './DeferralCandidatesBanner';
 import CheckInBanner from './checkins/CheckInBanner';
 import { CoachVerdictBanner } from './coach/CoachVerdictBanner';
@@ -222,6 +223,11 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
           <X size={14} />
         </button>
       </div>
+      {/* First: the stream's other sections all tell you something is wrong or overdue.
+          This one answers "what do I pick up now", so it leads. */}
+      <StreamSection id="workOnNext" onVisibilityChange={handleVisibilityChange}>
+        <WorkOnNextBanner />
+      </StreamSection>
       <StreamSection id="deferral" onVisibilityChange={handleVisibilityChange}>
         <DeferralCandidatesBanner />
       </StreamSection>

@@ -1285,6 +1285,15 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
               <div style={{ borderTop: `1px solid ${themeVars.border}`, paddingTop: '20px', marginTop: '20px' }}>
                 {/* Quick Edit */}
                 <div style={{ marginBottom: '12px', padding: '8px', backgroundColor: rgbaCard(0.06), borderRadius: 6, border: `1px solid ${rgbaCard(0.08)}` }}>
+                  {/* Apply lives here, at the top of the panel, rather than trailing the
+                      fields. It used to be the last element of a long wrapping flex row
+                      (status/priority/due/sprint/story/goal/points/description), which pushed
+                      it below the fold and directly above the notes feed — so a quick edit
+                      looked unsaveable unless you scrolled past everything to find it. */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                    <span className="small fw-semibold" style={{ color: themeVars.muted as string }}>Quick edit</span>
+                    <Button size="sm" variant="primary" onClick={applyQuickEdit}>Apply</Button>
+                  </div>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                     <div>
                       <label className="small" style={{ display: 'block', marginBottom: 4 }}>Status</label>
@@ -1451,9 +1460,6 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                     <div style={{ flex: 1, minWidth: 200 }}>
                       <label className="small" style={{ display: 'block', marginBottom: 4 }}>Description</label>
                       <Form.Control size="sm" type="text" value={quickEdit.description || ''} onChange={(e) => setQuickEdit((q: any) => ({ ...q, description: e.target.value }))} placeholder="Short description" />
-                    </div>
-                    <div style={{ alignSelf: 'end' }}>
-                      <Button size="sm" variant="primary" onClick={applyQuickEdit}>Apply</Button>
                     </div>
                   </div>
                 </div>
