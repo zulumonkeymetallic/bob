@@ -31,6 +31,7 @@ import {
 } from '../../utils/roadmapSchedule';
 import EditGoalModal from '../EditGoalModal';
 import GoalRoadmapV6 from '../visualization/GoalRoadmapV6';
+import WeekPlanGrid from './WeekPlanGrid';
 import ThemeMultiSelect from '../shared/ThemeMultiSelect';
 import YearMultiSelect from '../shared/YearMultiSelect';
 import { useSprint } from '../../contexts/SprintContext';
@@ -231,7 +232,24 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
    * it does not currently take; that is the next step, not this one.
    */
   const [view, setView] = useState<'grid' | 'gantt'>(initialView);
-  const [granularity, setGranularity] = useState<RoadmapGranularity>('quarter');
+  /**
+   * Week is a third detail level rather than another RoadmapGranularity: the quarter/sprint
+   * grid is period columns of goal chips, whereas week is day columns of scheduled cards with
+   * a drag-from backlog — a different component entirely (WeekPlanGrid). `granularity` below
+   * keeps its original two values so all the period maths is untouched.
+   */
+  const [detail, setDetail] = useState<'quarter' | 'sprint' | 'week'>('quarter');
+  const granularity: RoadmapGranularity = detail === 'week' ? 'sprint' : detail;
+  const setGranularity = (g: RoadmapGranularity) => setDetail(g);
+
+  /** Monday of the current week — the window WeekPlanGrid plans over. */
+  const weekStart = useMemo(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    // getDay(): 0 = Sunday. Shift so Monday starts the week.
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    return d;
+  }, []);
   const rowAxis = ROADMAP_ROW_AXIS[granularity];
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
   const [drag, setDrag] = useState<{ kind: 'goal' | 'story'; id: string } | null>(null);
@@ -559,20 +577,22 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
                 own Quarter/Month/Week/Fit-all controls. */}
             {view === 'grid' && (
             <div className="btn-group btn-group-sm" role="group" aria-label="Granularity" style={{ flexShrink: 0 }}>
-              {(['quarter', 'sprint'] as const).map((g) => (
+              {(['quarter', 'sprint', 'week'] as const).map((g) => (
                 <button
                   key={g}
                   type="button"
                   className="grv5-select"
                   style={{
                     cursor: 'pointer', padding: '0 10px', textTransform: 'capitalize',
-                    background: granularity === g ? 'var(--brand, #5f77dc)' : undefined,
-                    color: granularity === g ? '#fff' : undefined,
+                    background: detail === g ? 'var(--brand, #5f77dc)' : undefined,
+                    color: detail === g ? '#fff' : undefined,
                   }}
-                  onClick={() => setGranularity(g)}
+                  onClick={() => setDetail(g)}
                   title={g === 'quarter'
                     ? 'Quarters, one row per theme'
-                    : 'Sprints, one row per goal'}
+                    : g === 'sprint'
+                      ? 'Sprints, one row per goal'
+                      : 'This week, one column per day — drag from the backlog to schedule'}
                 >
                   {g}
                 </button>
@@ -597,7 +617,9 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
         </div>
       )}
 
-      {view === 'gantt' ? (
+      {detail === 'week' && view === 'grid' ? (
+        <WeekPlanGrid weekStart={weekStart} />
+      ) : view === 'gantt' ? (
         <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <GoalRoadmapV6 externalFilters={filters} />
         </div>
