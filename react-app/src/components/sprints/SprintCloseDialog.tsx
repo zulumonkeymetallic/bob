@@ -116,10 +116,19 @@ const SprintCloseDialog: React.FC<SprintCloseDialogProps> = ({ show, onHide, spr
    * as a number, an ISO string or a Firestore Timestamp depending on who wrote it, so it goes
    * through getTimestamp before being used as a query bound.
    */
-  const sprintWindow = React.useMemo(() => ({
-    start: getTimestamp(sprint?.startDate) ?? 0,
-    end: getTimestamp(sprint?.endDate) ?? Date.now(),
-  }), [sprint?.startDate, sprint?.endDate]);
+  const sprintWindow = React.useMemo(() => {
+    const start = getTimestamp(sprint?.startDate);
+    const end = getTimestamp(sprint?.endDate);
+    // A sprint with unusable dates must NOT fall back to `0`/now — that is an unbounded range
+    // and silently restores the everything-fetch this bounded query exists to remove. Four
+    // weeks around today is wrong for such a sprint, but its metrics are meaningless anyway.
+    const fallbackEnd = Date.now();
+    const fallbackStart = fallbackEnd - 28 * 24 * 60 * 60 * 1000;
+    return {
+      start: start ?? fallbackStart,
+      end: end != null && (start == null || end >= start) ? end : fallbackEnd,
+    };
+  }, [sprint?.startDate, sprint?.endDate]);
 
   /**
    * Blocks in the chosen migration target's window. A one-off read rather than a listener:
