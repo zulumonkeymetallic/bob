@@ -16,6 +16,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { Button } from 'react-bootstrap';
 import { collection, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { Filter, Maximize2, Minimize2, Plus, Search } from 'lucide-react';
 import { db } from '../../firebase';
@@ -62,6 +63,7 @@ import {
 import '../visualization/GoalRoadmapV5.css';
 import { Z } from '../../utils/layoutTokens';
 import { accentTint, themeVars } from '../../utils/themeVars';
+import { useDeviceInfo } from '../../utils/deviceDetection';
 
 const GOAL_KIND_ICON: Record<string, string> = {
   focus: '◆', umbrella: '◈', phase: '◉', leaf: '○',
@@ -306,6 +308,7 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
   readOnly = false,
 }) => {
   const { currentUser } = useAuth();
+  const deviceInfo = useDeviceInfo();
   const [ownGoals, setOwnGoals] = useState<Goal[]>([]);
   const [filters, setFilters] = useState<RoadmapFilterState>(EMPTY_ROADMAP_FILTERS);
   const setFilter = <K extends keyof RoadmapFilterState>(key: K, value: RoadmapFilterState[K]) =>
@@ -796,35 +799,35 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
               ))}
             </div>
           )}
-          {view === 'grid' && !readOnly && (
-            <button
-              type="button"
-              className="grv5-select"
-              style={{
-                cursor: 'pointer', padding: '0 10px', whiteSpace: 'nowrap',
-                background: 'var(--brand, #5f77dc)', color: '#fff',
-                display: 'inline-flex', alignItems: 'center', gap: 4,
-              }}
-              onClick={() => (addsGoal ? setShowAddGoal(true) : setShowAddStory(true))}
-              title={addsGoal
-                ? 'Create a goal — it lands on this grid straight away'
-                : 'Create a story — it lands in the backlog, ready to schedule'}
-            >
-              <Plus size={14} />
-              {addsGoal ? 'Add goal' : 'Add story'}
-            </button>
-          )}
           {/* Public sharing. Only offered on the goal-shaped levels: the public view renders
               goals, so sharing from the week grid would produce a link showing something the
               user was not looking at. */}
           {view === 'grid' && addsGoal && !readOnly && currentUser?.uid && (
             <ShareGoalsPanel uid={currentUser.uid} />
           )}
+          {/* ms-auto: the count and the full-screen toggle are not controls you choose
+              between, so they sit apart from the ones you do. */}
           {view === 'grid' && detail !== 'week' && (
-            <span className="text-muted small text-nowrap">{goals.length} goals</span>
+            <span className="text-muted small text-nowrap ms-auto">{goals.length} goals</span>
+          )}
+          {/* Deliberately the SAME control as the Add Goal / Add Story buttons on the goals and
+              stories list pages — react-bootstrap primary, Plus at 16, same inline style, same
+              position at the right of the header row. Which entity it creates follows the
+              detail level, because that is what the level is made of. */}
+          {view === 'grid' && !readOnly && (
+            <Button
+              variant="primary"
+              size={deviceInfo.isMobile ? 'sm' : undefined}
+              onClick={() => (addsGoal ? setShowAddGoal(true) : setShowAddStory(true))}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap', flexShrink: 0 }}
+            >
+              <Plus size={16} />
+              {addsGoal ? 'Add Goal' : 'Add Story'}
+            </Button>
           )}
           <button
-            type="button" className="grv5-select" style={{ cursor: 'pointer', padding: '0 10px' }}
+            type="button" className="grv5-select"
+            style={{ cursor: 'pointer', padding: '0 10px', marginLeft: view === 'grid' && detail !== 'week' ? 0 : 'auto' }}
             onClick={toggleFullScreen}
             title={fullScreen ? 'Exit full screen' : 'Full screen'}
           >

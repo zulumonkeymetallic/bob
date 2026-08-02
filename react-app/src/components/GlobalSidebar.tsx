@@ -28,6 +28,8 @@ import { useNavigate } from 'react-router-dom';
 import { isStatus, getPriorityBadge } from '../utils/statusHelpers';
 import { LANE_LABELS, LANE_VARIANTS, laneFor } from '../utils/workStatus';
 import { normalizePriorityValue } from '../utils/priorityUtils';
+import { computeQuarterKey, rescheduleGoalToPeriod } from '../utils/roadmapSchedule';
+import { buildQuarterOptions, quarterKeyLabel } from '../utils/quarters';
 import { resolveThemeFromValue } from '../utils/themeResolver';
 import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
 import {
@@ -490,6 +492,27 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
       if (quickEdit.priority !== undefined && quickEdit.priority !== '' && Number(quickEdit.priority) !== Number((selectedItem as any).priority)) {
         updates.priority = Number(quickEdit.priority);
         before.priority = (selectedItem as any).priority;
+      }
+      /**
+       * A goal's QUARTER, written as start/end dates — goals have no quarter field, the
+       * roadmap derives the column from endDate. Uses the same mid-quarter anchor a drag on
+       * the roadmap does (rescheduleGoalToPeriod), so editing the quarter here and dragging
+       * the goal there produce identical dates rather than two competing conventions.
+       */
+      if (selectedType === 'goal' && quickEdit.quarter) {
+        const prevKey = computeQuarterKey((selectedItem as any).endDate || (selectedItem as any).dueDate || null);
+        if (quickEdit.quarter !== prevKey) {
+          const next = rescheduleGoalToPeriod(
+            quickEdit.quarter, 'quarter',
+            (selectedItem as any).startDate,
+            (selectedItem as any).endDate ?? (selectedItem as any).dueDate,
+          );
+          if (next) {
+            updates.startDate = next.startDate;
+            updates.endDate = next.endDate;
+            before.endDate = (selectedItem as any).endDate ?? null;
+          }
+        }
       }
       if (selectedType === 'task') {
         const newDueMs = fromDateInput(quickEdit.dueDate);
@@ -1122,37 +1145,9 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                 )}
               </div>
 
-              {/* Tags */}
-              <div style={{ marginBottom: '20px' }}>
-                <label style={{ fontSize: '14px', fontWeight: '500', color: themeVars.text, marginBottom: '6px', display: 'block' }}>
-                  Tags
-                </label>
-                {isEditing ? (
-                  <TagInput
-                    value={Array.isArray(editForm.tags) ? editForm.tags : []}
-                    onChange={(tags) => setEditForm({ ...editForm, tags })}
-                    placeholder="Add tags..."
-                    formatTag={formatTag}
-                  />
-                ) : (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                    {(selectedItem as any)?.tags?.length ? (
-                      (selectedItem as any).tags.map((tag: string) => {
-                        const formatted = formatTag(tag);
-                        const display = formatted && String(formatted).trim().length > 0 ? formatted : tag;
-                        const title = display !== tag ? `#${tag}` : undefined;
-                        return (
-                          <Badge key={tag} bg="secondary" style={{ fontSize: '12px' }} title={title}>
-                            #{display}
-                          </Badge>
-                        );
-                      })
-                    ) : (
-                      <span style={{ color: themeVars.muted }}>No tags</span>
-                    )}
-                  </div>
-                )}
-              </div>
+              {/* Tags removed 2026-08-02: nothing read them — no filter, sort or view used
+                  the field — so the section was a text box that cost a line of vertical space on
+                  every entity and gave nothing back. The data is untouched on existing docs. */}
 
               {/* Status and Priority */}
               <Row style={{ marginBottom: '20px' }}>
@@ -1253,34 +1248,6 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                 </div>
               )}
 
-              {/* Metadata */}
-              <div style={{ borderTop: `1px solid ${themeVars.border}`, paddingTop: '20px', marginTop: '20px' }}>
-                <h6 style={{ fontSize: '14px', fontWeight: '600', color: themeVars.text, marginBottom: '12px' }}>
-                  Metadata
-                </h6>
-
-                <div style={{ fontSize: '13px', color: themeVars.muted, lineHeight: '1.6' }}>
-                  <div style={{ marginBottom: '8px' }}>
-                    <strong>ID:</strong> <code style={{ fontSize: '11px' }}>{selectedItem.id}</code>
-                  </div>
-                  <div style={{ marginBottom: '8px' }}>
-                    <strong>Created:</strong> {formatDate(selectedItem.createdAt)}
-                  </div>
-                  <div style={{ marginBottom: '8px' }}>
-                    <strong>Updated:</strong> {formatDate(selectedItem.updatedAt)}
-                  </div>
-                  <div style={{ marginBottom: '8px' }}>
-                    <strong>Owner:</strong> {selectedItem.ownerUid}
-                  </div>
-                  <div style={{ marginTop: '12px' }}>
-                    <Button size="sm" variant="outline-secondary" onClick={() => { navigator.clipboard?.writeText(deepLink); }}>
-                      <LinkIcon size={12} className="me-1" /> Copy Deep Link
-                    </Button>
-                    <div className="small text-muted" style={{ marginTop: 4, wordBreak: 'break-all' }}>{deepLink}</div>
-                  </div>
-                </div>
-              </div>
-
               {/* Save Button */}
               {isEditing && (
                 <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: `1px solid ${themeVars.border}` }}>
@@ -1310,6 +1277,21 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                     <Button size="sm" variant="primary" onClick={applyQuickEdit}>Apply</Button>
                   </div>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    {selectedType === 'goal' && (
+                      <div>
+                        <label className="small" style={{ display: 'block', marginBottom: 4 }}>Quarter</label>
+                        <Form.Select
+                          size="sm"
+                          value={quickEdit.quarter ?? (computeQuarterKey((selectedItem as any).endDate || (selectedItem as any).dueDate || null) || '')}
+                          onChange={(e) => setQuickEdit((q: any) => ({ ...q, quarter: e.target.value }))}
+                        >
+                          <option value="">Unscheduled</option>
+                          {buildQuarterOptions(9).map((key) => (
+                            <option key={key} value={key}>{quarterKeyLabel(key)}</option>
+                          ))}
+                        </Form.Select>
+                      </div>
+                    )}
                     <div>
                       <label className="small" style={{ display: 'block', marginBottom: 4 }}>Status</label>
                       <Form.Select size="sm" value={Number(quickEdit.status ?? (selectedItem as any).status) || 0} onChange={(e) => setQuickEdit((q: any) => ({ ...q, status: Number(e.target.value) }))}>
@@ -1570,6 +1552,39 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   )}
                 </div>
               </div>
+
+              {/* Metadata LAST. It was sitting between the fields and the quick-edit/activity
+                  panel, so the controls you actually use — status, priority, due date, sprint —
+                  were below a block of ids and timestamps you read once a month. Reference data
+                  belongs at the bottom; the things you act on belong above it. */}
+              {/* Metadata */}
+              <div style={{ borderTop: `1px solid ${themeVars.border}`, paddingTop: '20px', marginTop: '20px' }}>
+                <h6 style={{ fontSize: '14px', fontWeight: '600', color: themeVars.text, marginBottom: '12px' }}>
+                  Metadata
+                </h6>
+
+                <div style={{ fontSize: '13px', color: themeVars.muted, lineHeight: '1.6' }}>
+                  <div style={{ marginBottom: '8px' }}>
+                    <strong>ID:</strong> <code style={{ fontSize: '11px' }}>{selectedItem.id}</code>
+                  </div>
+                  <div style={{ marginBottom: '8px' }}>
+                    <strong>Created:</strong> {formatDate(selectedItem.createdAt)}
+                  </div>
+                  <div style={{ marginBottom: '8px' }}>
+                    <strong>Updated:</strong> {formatDate(selectedItem.updatedAt)}
+                  </div>
+                  <div style={{ marginBottom: '8px' }}>
+                    <strong>Owner:</strong> {selectedItem.ownerUid}
+                  </div>
+                  <div style={{ marginTop: '12px' }}>
+                    <Button size="sm" variant="outline-secondary" onClick={() => { navigator.clipboard?.writeText(deepLink); }}>
+                      <LinkIcon size={12} className="me-1" /> Copy Deep Link
+                    </Button>
+                    <div className="small text-muted" style={{ marginTop: 4, wordBreak: 'break-all' }}>{deepLink}</div>
+                  </div>
+                </div>
+              </div>
+
             </div>
           </>
         )}

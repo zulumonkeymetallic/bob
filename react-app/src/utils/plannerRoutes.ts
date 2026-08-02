@@ -28,7 +28,14 @@ export type RoadmapDetail = 'year' | 'quarter' | 'sprint' | 'week';
 
 const VALID_DETAILS = new Set<RoadmapDetail>(['year', 'quarter', 'sprint', 'week']);
 
-export const DEFAULT_ROADMAP_DETAIL: RoadmapDetail = 'quarter';
+/**
+ * Year, not quarter.
+ *
+ * A roadmap opened on quarters shows the next few months; opened on years it shows the shape of
+ * the whole plan, which is the question the surface is called "roadmap" to answer. Quarter is
+ * one click away and the level is deep-linkable either way.
+ */
+export const DEFAULT_ROADMAP_DETAIL: RoadmapDetail = 'year';
 
 /**
  * NOT `detail` — that param is already owned app-wide by the entity detail pane
