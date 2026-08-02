@@ -10,6 +10,11 @@ import {
   computeSprintKey,
   roadmapSprintOrder,
   periodLabel,
+  computePeriodKey,
+  computeYearKey,
+  quarterOrdinal,
+  roadmapYearOrder,
+  yearMidTimestamp,
 } from './roadmapSchedule';
 
 const q = (key: string) => new Date(quarterMidTimestamp(key)!);
@@ -229,14 +234,70 @@ describe('sprint granularity', () => {
   });
 
   it('pairs each granularity with the row axis that suits it', () => {
-    // Quarter asks how themes balance; sprint asks which goals are in flight.
+    // Year and quarter ask how themes balance; sprint asks which goals are in flight.
+    expect(ROADMAP_ROW_AXIS.year).toBe('theme');
     expect(ROADMAP_ROW_AXIS.quarter).toBe('theme');
     expect(ROADMAP_ROW_AXIS.sprint).toBe('goal');
   });
 
-  it('offers exactly two granularities', () => {
-    // Month was removed deliberately: it sat between the two real planning horizons and
-    // produced 100+ goal rows without answering a question the other two did not.
-    expect(Object.keys(ROADMAP_ROW_AXIS).sort()).toEqual(['quarter', 'sprint']);
+  it('offers exactly three granularities', () => {
+    // Month was removed deliberately: it sat between the real planning horizons and produced
+    // 100+ goal rows without answering a question the others did not. Year was added at the
+    // other end, where a multi-year quarter grid is too wide to read.
+    expect(Object.keys(ROADMAP_ROW_AXIS).sort()).toEqual(['quarter', 'sprint', 'year']);
+  });
+});
+
+describe('year granularity', () => {
+  it('keys a timestamp by its calendar year', () => {
+    expect(computeYearKey(new Date(2026, 6, 14).getTime())).toBe('2026');
+    expect(computeYearKey(new Date(2027, 0, 1).getTime())).toBe('2027');
+    expect(computeYearKey(null)).toBeNull();
+    expect(computeYearKey(0)).toBeNull();
+  });
+
+  it('cannot be confused with a quarter key', () => {
+    // The two granularities share one column-key space; a bare year and `YYYY-Qn` are
+    // unambiguous, which is why no discriminator prefix is needed.
+    expect(quarterOrdinal('2026')).toBeNull();
+    expect(yearMidTimestamp('2026-Q1')).toBeNull();
+  });
+
+  it('anchors a dropped goal to the middle of the target year', () => {
+    const mid = new Date(yearMidTimestamp('2026')!);
+    expect(mid.getFullYear()).toBe(2026);
+    expect(mid.getMonth()).toBe(6);   // July — months are 0-indexed
+  });
+
+  it('preserves duration across a year move, like every other granularity', () => {
+    const s = new Date(2025, 0, 1).getTime();
+    const r = rescheduleGoalToPeriod('2027', 'year', s, s + 40 * 86_400_000)!;
+    expect(r.endDate - r.startDate).toBe(40 * 86_400_000);
+    expect(new Date(r.endDate).getFullYear()).toBe(2027);
+  });
+
+  it('declines an unparseable year instead of writing garbage', () => {
+    expect(rescheduleGoalToPeriod('20xx', 'year', null, null)).toBeNull();
+  });
+
+  it('orders columns Unscheduled, previous, current, future', () => {
+    expect(roadmapYearOrder(['2024', '2025', '2026', '2028'], '2026'))
+      .toEqual(['unscheduled', '2025', '2026', '2028']);
+  });
+
+  it('always gives the current year a column, even with nothing in it', () => {
+    expect(roadmapYearOrder(['2028'], '2026')).toEqual(['unscheduled', '2026', '2028']);
+  });
+
+  it('ignores junk keys and de-duplicates', () => {
+    expect(roadmapYearOrder(['2026', '2026', '', 'Q1', '2026-Q2'], '2026'))
+      .toEqual(['unscheduled', '2026']);
+  });
+
+  it('routes through the granularity-aware helpers', () => {
+    expect(computePeriodKey(new Date(2026, 2, 3).getTime(), 'year')).toBe('2026');
+    expect(periodLabel('2026', 'year')).toBe('2026');
+    expect(periodLabel('unscheduled', 'year')).toBe('Backlog');
+    expect(roadmapPeriodOrder(['2026'], '2026', 'year')).toEqual(['unscheduled', '2026']);
   });
 });

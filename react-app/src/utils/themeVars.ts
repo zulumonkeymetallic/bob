@@ -23,6 +23,18 @@ export const themeVars = {
 // Helper to create rgba using the card RGB triplet
 export const rgbaCard = (alpha: number) => `rgba(var(--card-rgb), ${alpha})`;
 
+/**
+ * A "this one is selected / current / being dropped on" wash: the brand colour mixed into
+ * whatever surface sits behind it.
+ *
+ * Use this instead of `var(--accent-soft, #dbeafe)`. Neither theme defines `--accent-soft`, so
+ * that pattern always resolves to its light-blue literal — which reads as an almost-white box
+ * in dark mode, with `--text` light grey printed on it and effectively invisible. Mixing into
+ * the surface keeps the highlight legible in both themes without a per-theme branch.
+ */
+export const accentTint = (surface: string = themeVars.card, percent: number = 18) =>
+  `color-mix(in srgb, ${themeVars.brand} ${percent}%, ${surface})`;
+
 // Domain theme helpers (maps extended theme labels to base CSS keys)
 const normalizeDomain = (name: string) => {
   const raw = String(name || '').toLowerCase().trim();

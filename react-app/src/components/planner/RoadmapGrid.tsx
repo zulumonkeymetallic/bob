@@ -1,5 +1,9 @@
 /**
- * RoadmapGrid — themes × quarters, drag a goal to reschedule it.
+ * RoadmapGrid — rows × time periods, drag a goal to reschedule it.
+ *
+ * Four detail levels, chosen by `?detailLevel=` and switchable from the toolbar: year and
+ * quarter put themes on the rows, sprint puts goals on them, and week hands over to
+ * WeekPlanGrid, which is an hour-by-hour time grid rather than a period grid at all.
  *
  * Extracted from VisualCanvas so the roadmap can be a real planner level
  * (/planner?level=roadmap) instead of a layout mode buried in a 1,500-line canvas component.
@@ -11,6 +15,7 @@
  * filter state, none of which a planner level has or wants.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { collection, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
 import { Filter, Maximize2, Minimize2, Search } from 'lucide-react';
 import { db } from '../../firebase';
@@ -29,6 +34,10 @@ import {
   quarterLabel,
   type RoadmapGranularity,
 } from '../../utils/roadmapSchedule';
+import {
+  buildPlannerPath, normalizePlannerLevel, parsePlannerSearch,
+  DEFAULT_ROADMAP_DETAIL, ROADMAP_DETAIL_PARAM, type RoadmapDetail,
+} from '../../utils/plannerRoutes';
 import EditGoalModal from '../EditGoalModal';
 import GoalRoadmapV6 from '../visualization/GoalRoadmapV6';
 import WeekPlanGrid from './WeekPlanGrid';
@@ -44,6 +53,7 @@ import {
 } from '../../utils/roadmapFilters';
 import '../visualization/GoalRoadmapV5.css';
 import { Z } from '../../utils/layoutTokens';
+import { accentTint, themeVars } from '../../utils/themeVars';
 
 const GOAL_KIND_ICON: Record<string, string> = {
   focus: '◆', umbrella: '◈', phase: '◉', leaf: '○',
@@ -184,9 +194,13 @@ interface RoadmapGridProps {
   goals?: Goal[];
   /** Which rendering to open on. `?level=gantt` routes here with 'gantt'. */
   initialView?: 'grid' | 'gantt';
+  /** Time axis to open on, from `?detailLevel=`. Changing it here writes back to the URL. */
+  detail?: RoadmapDetail;
 }
 
-const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: providedGoals, initialView = 'grid' }) => {
+const RoadmapGrid: React.FC<RoadmapGridProps> = ({
+  showFilters = true, goals: providedGoals, initialView = 'grid', detail: detailProp,
+}) => {
   const { currentUser } = useAuth();
   const [ownGoals, setOwnGoals] = useState<Goal[]>([]);
   const [filters, setFilters] = useState<RoadmapFilterState>(EMPTY_ROADMAP_FILTERS);
@@ -233,14 +247,28 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
    */
   const [view, setView] = useState<'grid' | 'gantt'>(initialView);
   /**
-   * Week is a third detail level rather than another RoadmapGranularity: the quarter/sprint
-   * grid is period columns of goal chips, whereas week is day columns of scheduled cards with
-   * a drag-from backlog — a different component entirely (WeekPlanGrid). `granularity` below
-   * keeps its original two values so all the period maths is untouched.
+   * Week is a detail level rather than another RoadmapGranularity: year/quarter/sprint are
+   * period columns of goal chips, whereas week is a day-by-hour time grid of scheduled work —
+   * a different component entirely (WeekPlanGrid). `granularity` below therefore maps week
+   * onto sprint so none of the period maths has to know about it.
+   *
+   * The level is deep-linkable (`?level=roadmap&detailLevel=week`) and the buttons write back
+   * to the URL, so the address bar always describes what is on screen and any view can be
+   * shared. See ROADMAP_DETAIL_PARAM for why it is not simply `detail`.
    */
-  const [detail, setDetail] = useState<'quarter' | 'sprint' | 'week'>('quarter');
+  const detail: RoadmapDetail = detailProp ?? DEFAULT_ROADMAP_DETAIL;
+  const navigate = useNavigate();
+  const location = useLocation();
+  const setDetail = useCallback((next: RoadmapDetail) => {
+    const params = parsePlannerSearch(location.search);
+    const level = normalizePlannerLevel(params.get('level'));
+    params.set(ROADMAP_DETAIL_PARAM, next);
+    // Levels that merely alias the roadmap (`year`, `quarter`) would otherwise fight the
+    // detail buttons — ?level=year&detailLevel=sprint reads as a contradiction. Normalise to
+    // the one level that owns a detail axis.
+    navigate(buildPlannerPath(level === 'gantt' ? 'gantt' : 'roadmap', params), { replace: true });
+  }, [location.search, navigate]);
   const granularity: RoadmapGranularity = detail === 'week' ? 'sprint' : detail;
-  const setGranularity = (g: RoadmapGranularity) => setDetail(g);
 
   /** Monday of the current week — the window WeekPlanGrid plans over. */
   const weekStart = useMemo(() => {
@@ -490,8 +518,12 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
       ? { position: 'fixed', inset: 0, zIndex: Z.panel, background: 'var(--bg, #f8f9fa)',
           display: 'flex', flexDirection: 'column' }
       : { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+      {/* One control row: which rendering (Grid/Gantt) and which time axis (Year…Week) are the
+          same decision — "what am I looking at" — and used to sit on two separate rows with the
+          detail buttons stranded at the end of the filter toolbar. Filters stay on their own row
+          below, because they answer a different question. */}
       {showFilters && (
-        <div className="d-flex align-items-center gap-2 px-3 pt-2" style={{ flexShrink: 0 }}>
+        <div className="d-flex align-items-center gap-2 flex-wrap px-3 pt-2" style={{ flexShrink: 0 }}>
           <div className="btn-group btn-group-sm" role="group" aria-label="Roadmap view">
             {([['grid', 'Grid'], ['gantt', 'Gantt']] as const).map(([key, label]) => (
               <button
@@ -512,12 +544,55 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
               </button>
             ))}
           </div>
+          {/* Detail also flips the row axis — themes across a year or quarter (the balance
+              question), goals across a sprint (the what-is-in-flight question), and the week
+              is a time grid entirely. Grid-only: the Gantt has a continuous time axis with its
+              own Quarter/Month/Week/Fit-all controls. */}
+          {view === 'grid' && (
+            <div className="btn-group btn-group-sm" role="group" aria-label="Detail level">
+              {(['year', 'quarter', 'sprint', 'week'] as const).map((g) => (
+                <button
+                  key={g}
+                  type="button"
+                  className="grv5-select"
+                  style={{
+                    cursor: 'pointer', padding: '0 10px', textTransform: 'capitalize',
+                    background: detail === g ? 'var(--brand, #5f77dc)' : undefined,
+                    color: detail === g ? '#fff' : undefined,
+                  }}
+                  onClick={() => setDetail(g)}
+                  title={g === 'year'
+                    ? 'Years, one row per theme'
+                    : g === 'quarter'
+                      ? 'Quarters, one row per theme'
+                      : g === 'sprint'
+                        ? 'Sprints, one row per goal'
+                        : 'This week by the hour — drag from the backlog to schedule'}
+                >
+                  {g}
+                </button>
+              ))}
+            </div>
+          )}
+          {view === 'grid' && detail !== 'week' && (
+            <span className="text-muted small text-nowrap">{goals.length} goals</span>
+          )}
+          <button
+            type="button" className="grv5-select" style={{ cursor: 'pointer', padding: '0 10px' }}
+            onClick={toggleFullScreen}
+            title={fullScreen ? 'Exit full screen' : 'Full screen'}
+          >
+            {fullScreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+          </button>
           {view === 'gantt' && (
             <span className="text-muted small">Zoom, Arrange and the time axis are in the Gantt&apos;s own toolbar.</span>
           )}
         </div>
       )}
-      {showFilters && (
+      {/* Hidden at week detail: every one of these filters selects GOALS, and the week grid
+          shows scheduled work and a backlog, not goals — leaving them on offered controls that
+          do nothing. The week grid carries its own controls instead. */}
+      {showFilters && !(view === 'grid' && detail === 'week') && (
         <div className="d-flex flex-column gap-2 px-3 pt-2" style={{ flexShrink: 0 }}>          {/* Same filter set as the Gantt — search, theme, years — so switching between the two
               views does not mean relearning the controls. */}
           {/* Deliberately the Gantt's own markup and classes (grv5-filters / grv5-search /
@@ -570,49 +645,12 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
                 Focus goals only
               </label>
             </div>
-            {/* Granularity also flips the row axis — themes across a quarter (the balance
-                question), goals across a sprint (the what-is-in-flight question). Two levels
-                only: days belong to the Calendar, and story-level sprint capacity belongs to
-                /planner?level=sprint. Grid-only: the Gantt has a continuous time axis with its
-                own Quarter/Month/Week/Fit-all controls. */}
-            {view === 'grid' && (
-            <div className="btn-group btn-group-sm" role="group" aria-label="Granularity" style={{ flexShrink: 0 }}>
-              {(['quarter', 'sprint', 'week'] as const).map((g) => (
-                <button
-                  key={g}
-                  type="button"
-                  className="grv5-select"
-                  style={{
-                    cursor: 'pointer', padding: '0 10px', textTransform: 'capitalize',
-                    background: detail === g ? 'var(--brand, #5f77dc)' : undefined,
-                    color: detail === g ? '#fff' : undefined,
-                  }}
-                  onClick={() => setDetail(g)}
-                  title={g === 'quarter'
-                    ? 'Quarters, one row per theme'
-                    : g === 'sprint'
-                      ? 'Sprints, one row per goal'
-                      : 'This week, one column per day — drag from the backlog to schedule'}
-                >
-                  {g}
-                </button>
-              ))}
-            </div>
-            )}
             {hasActiveRoadmapFilters(filters) && (
               <button type="button" className="grv5-select" style={{ cursor: 'pointer', padding: '0 10px' }}
                 onClick={() => setFilters(EMPTY_ROADMAP_FILTERS)}>
                 Clear filters
               </button>
             )}
-            {view === 'grid' && <span className="text-muted small text-nowrap">{goals.length} goals</span>}
-            <button
-              type="button" className="grv5-select" style={{ cursor: 'pointer', padding: '0 10px' }}
-              onClick={toggleFullScreen}
-              title={fullScreen ? 'Exit full screen' : 'Full screen'}
-            >
-              {fullScreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-            </button>
           </div>
         </div>
       )}
@@ -653,7 +691,7 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
                   width: COL_W, flexShrink: 0, padding: '17px 10px 5px',
                   fontSize: 11, fontWeight: 700, color: 'var(--text, #374151)',
                   borderLeft: '1px solid var(--line, #e5e7eb)',
-                  background: qKey === currentPeriodKey ? 'var(--accent-soft, #dbeafe)' : 'var(--panel, #f1f5f9)',
+                  background: qKey === currentPeriodKey ? accentTint(themeVars.panel, 20) : 'var(--panel, #f1f5f9)',
                   position: 'sticky', top: 0,
                 }}>
                   {periodLabel(qKey, granularity, sprints as any)}
@@ -712,7 +750,7 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({ showFilters = true, goals: pr
                         style={{
                           width: COL_W, flexShrink: 0, padding: '6px 8px', minHeight: 72,
                           borderLeft: '1px solid var(--line, #e5e7eb)', borderTop: '1px solid var(--line, #e5e7eb)',
-                          background: isDropTarget ? 'var(--accent-soft, #dbeafe)' : 'var(--card, #fff)',
+                          background: isDropTarget ? accentTint(themeVars.card, 22) : 'var(--card, #fff)',
                           boxShadow: isDropTarget ? `inset 0 0 0 2px ${theme.color}` : undefined,
                           display: 'flex', flexDirection: 'column', gap: 4,
                         }}

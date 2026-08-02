@@ -127,9 +127,13 @@ export function quarterLabel(key: string): string {
   return `${q} ${year}`;
 }
 
-export type RoadmapGranularity = 'quarter' | 'sprint';
+export type RoadmapGranularity = 'year' | 'quarter' | 'sprint';
 
 export const ROADMAP_ROW_AXIS: Record<RoadmapGranularity, 'theme' | 'goal'> = {
+  // Year is the same question as quarter asked at a longer range — is the portfolio balanced —
+  // so it shares the theme row axis. It is a separate granularity rather than a zoom of quarter
+  // because a quarter grid spanning several years is 12+ columns wide before you see anything.
+  year: 'theme',
   // Quarter is the strategic horizon: themes as rows, because the question is balance
   // between them.
   quarter: 'theme',
@@ -143,19 +147,25 @@ export const ROADMAP_ROW_AXIS: Record<RoadmapGranularity, 'theme' | 'goal'> = {
 export function computePeriodKey(
   ts: number | null | undefined, g: RoadmapGranularity, sprints: RoadmapSprint[] = [],
 ): string | null {
-  return g === 'sprint' ? computeSprintKey(ts, sprints) : computeQuarterKey(ts);
+  if (g === 'sprint') return computeSprintKey(ts, sprints);
+  if (g === 'year') return computeYearKey(ts);
+  return computeQuarterKey(ts);
 }
 
 export function periodLabel(key: string, g: RoadmapGranularity, sprints: RoadmapSprint[] = []): string {
   if (key === UNSCHEDULED_COLUMN) return 'Backlog';
-  return g === 'sprint' ? sprintLabel(key, sprints) : quarterLabel(key);
+  if (g === 'sprint') return sprintLabel(key, sprints);
+  if (g === 'year') return yearLabel(key);
+  return quarterLabel(key);
 }
 
 /** Mid-period timestamp — the anchor a dropped goal's end date takes. */
 export function periodMidTimestamp(
   key: string, g: RoadmapGranularity, sprints: RoadmapSprint[] = [],
 ): number | null {
-  return g === 'sprint' ? sprintMidTimestamp(key, sprints) : quarterMidTimestamp(key);
+  if (g === 'sprint') return sprintMidTimestamp(key, sprints);
+  if (g === 'year') return yearMidTimestamp(key);
+  return quarterMidTimestamp(key);
 }
 
 /** Granularity-aware sibling of rescheduleGoalToQuarter. Same end-anchored rule. */
@@ -168,7 +178,7 @@ export function rescheduleGoalToPeriod(
   return { startDate: end - goalDurationMs(prevStart, prevEnd), endDate: end };
 }
 
-/** Column order at either granularity: [Unscheduled, P(n-1), P(n), P(n+1), ...]. */
+/** Column order at any granularity: [Unscheduled, P(n-1), P(n), P(n+1), ...]. */
 export function roadmapPeriodOrder(
   keys: string[], currentKey: string | null, g: RoadmapGranularity,
   sprints: RoadmapSprint[] = [],
@@ -176,7 +186,56 @@ export function roadmapPeriodOrder(
   // Sprint columns come from the sprint list, not from the keys present in the data — an empty
   // sprint still needs a column to drag INTO.
   if (g === 'sprint') return roadmapSprintOrder(sprints);
+  if (g === 'year') return roadmapYearOrder(keys, currentKey);
   return roadmapColumnOrder(keys, currentKey);
+}
+
+// ── Year granularity ─────────────────────────────────────────────────────────
+
+/**
+ * Years as roadmap columns — quarter's row axis and drag rules at a longer range.
+ *
+ * Keys are the bare four-digit year (`"2026"`), which cannot collide with a quarter key
+ * (`"2026-Q1"`) or a sprint id, so the three granularities can share one column-key space
+ * without a discriminator.
+ */
+export function computeYearKey(ts: number | null | undefined): string | null {
+  if (!ts || !Number.isFinite(ts)) return null;
+  return String(new Date(ts).getFullYear());
+}
+
+export function yearLabel(key: string): string {
+  return key === UNSCHEDULED_COLUMN ? 'Backlog' : key;
+}
+
+/** Middle of a year: 1 July, local noon — same "land in the middle" rule as quarters. */
+export function yearMidTimestamp(key: string): number | null {
+  if (!/^\d{4}$/.test(key)) return null;
+  return new Date(Number(key), 6, 1, 12, 0, 0).getTime();
+}
+
+/**
+ * [Unscheduled, Y(n-1), Y(n), Y(n+1), ...] — one year of history kept, and the current year
+ * always gets a column even when nothing is scheduled in it. Same shape as roadmapColumnOrder;
+ * separate because that one parses quarter keys and would discard every year key as junk.
+ */
+export function roadmapYearOrder(yearKeys: string[], currentKey: string | null): string[] {
+  const cur = currentKey && /^\d{4}$/.test(currentKey) ? Number(currentKey) : null;
+
+  const sorted = [...new Set(yearKeys)]
+    .filter((k) => /^\d{4}$/.test(k))
+    .map(Number)
+    .sort((a, b) => a - b);
+
+  if (cur == null) return [UNSCHEDULED_COLUMN, ...sorted.map(String)];
+
+  const kept = sorted.filter((y) => y >= cur - 1);
+  if (!kept.includes(cur)) {
+    kept.push(cur);
+    kept.sort((a, b) => a - b);
+  }
+
+  return [UNSCHEDULED_COLUMN, ...kept.map(String)];
 }
 
 // ── Sprint granularity ───────────────────────────────────────────────────────

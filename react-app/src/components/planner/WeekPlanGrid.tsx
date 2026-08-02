@@ -1,27 +1,30 @@
 /**
  * WeekPlanGrid — the roadmap's week detail level.
  *
- * A planning surface, not a diary. The existing calendar view (SprintWeekPlanner) renders a
- * react-big-calendar time grid, which is the right shape for "where exactly does this sit
- * today" and the wrong one for "does this week hold together". Here each day is a COLUMN OF
- * CARDS in the same format the rest of the roadmap uses, with the day's theme allocations
- * shown as coloured bands above them for context.
+ * A TIME GRID, the same shape as the calendar's day view: hours down the left, one column per
+ * day, and everything on it — theme allocations and scheduled work alike — drawn spanning the
+ * hours it actually occupies. It was previously an agenda: a stack of cards per day in
+ * start-time order, which told you what was on a day but not whether the day held together,
+ * where the gaps were, or that two things overlapped.
  *
  * What appears where:
- *  - Backlog column: sprint stories that have no calendar block yet — the pile you drag from.
- *  - Day columns: whatever the AI (or you) has scheduled, as cards, read from calendar_blocks
- *    joined back to their story/task.
- *  - Theme bands: the theme_allocations plan for that weekday, straight from the plan doc
- *    rather than from materialised blocks — the same fix applied to the calendar's overlay,
- *    since only Fitness and Work are ever materialised into real blocks.
+ *  - Backlog column: open work with no calendar block this week — the pile you drag from.
+ *  - Day columns: whatever the AI (or you) has scheduled, read from calendar_blocks joined
+ *    back to their story/task, positioned and sized by the block's start and end.
+ *  - Theme allocations: a translucent underlay behind the cards, straight from the plan doc
+ *    rather than from materialised blocks — only Fitness and Work are ever materialised. It is
+ *    context, not content, so it can be switched off and the choice is remembered.
  *
  * Dragging a card onto a day calls schedulePlannerItem, the same callable the calendar's
  * drag-from-backlog uses. That matters: it already honours planningMode, so in strict mode
  * the item is placed inside a matching theme allocation rather than any free gap, which is
- * exactly the behaviour the nightly orchestration applies.
+ * exactly the behaviour the nightly orchestration applies. Because this grid has a time axis,
+ * the drop also carries the exact time you dropped on rather than just the date.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { collection, doc, onSnapshot, query, where } from 'firebase/firestore';
+import { useNavigate } from 'react-router-dom';
+import { Eye, EyeOff } from 'lucide-react';
 import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
@@ -29,16 +32,40 @@ import { useSprint } from '../../contexts/SprintContext';
 import { useSidebar } from '../../contexts/SidebarContext';
 import { useThemeAppearance } from '../../hooks/useThemeAppearance';
 import { schedulePlannerItem, normalizePlannerSchedulingError } from '../../utils/plannerScheduling';
+import { inferPlannerDurationMinutes } from '../../utils/plannerDeferral';
 import { isDoneStatus } from '../../utils/workStatus';
-import { compareTop3Stories, getEntityAiScore } from '../../utils/top3';
+import { compareTop3Stories, compareTop3Tasks, getEntityAiScore } from '../../utils/top3';
 import { getManualPriorityRank } from '../../utils/manualPriority';
-import { themeVars } from '../../utils/themeVars';
+import { accentTint, themeVars } from '../../utils/themeVars';
 import type { Story, Task } from '../../types';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const MIN_MS = 60 * 1000;
 const VISIBLE_DAYS = 7;
 const COL_W = 200;
 const BACKLOG_W = 220;
+const GUTTER_W = 46;
+/** Row height for one hour. 48px fits a 15-minute block at a legible 12px. */
+const PX_PER_HOUR = 48;
+/** Snap dropped items to the quarter hour — finer than that is noise on a 48px hour. */
+const SNAP_MINUTES = 15;
+/** Default visible window when nothing on the week falls outside it. */
+const DEFAULT_START_HOUR = 6;
+const DEFAULT_END_HOUR = 22;
+/** Anything shorter still needs to be readable, so it gets a floor rather than a hairline. */
+const MIN_CARD_PX = 18;
+/** The backlog is a drag source, not a browsable list — past this it is a scroll marathon. */
+const BACKLOG_LIMIT = 60;
+/**
+ * Left inset, carried on the BACKLOG COLUMN rather than on the scroll container.
+ * Padding on a scroll container leaves a strip at its inner edge that a sticky child can never
+ * cover — sticky only sticks as far as the padding edge — so day columns scrolled through it
+ * and appeared beside the backlog. Same trap the roadmap grid hit on its vertical axis.
+ */
+const EDGE_PAD = 16;
+
+const THEME_OVERLAY_STORAGE_KEY = 'bob-roadmap-week-show-theme-allocations';
+const BACKLOG_SCOPE_STORAGE_KEY = 'bob-roadmap-week-backlog-scope';
 
 type ThemeAllocationRow = {
   dayOfWeek: number;
@@ -47,6 +74,12 @@ type ThemeAllocationRow = {
   theme: string;
   subTheme?: string | null;
 };
+
+/** Anything the grid positions on the time axis. */
+interface Spanning {
+  startMs: number;
+  endMs: number;
+}
 
 interface WeekPlanGridProps {
   /** Start of the displayed week (local midnight). */
@@ -61,12 +94,70 @@ const startOfDayMs = (d: Date | number) => {
   return x.getTime();
 };
 
+/** "HH:mm" to minutes past midnight, or null if it is not a time. */
+const parseClock = (value: unknown): number | null => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(value || '').trim());
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h > 23 || min > 59) return null;
+  return h * 60 + min;
+};
+
+const readFlag = (key: string, fallback: boolean): boolean => {
+  try {
+    const stored = window.localStorage.getItem(key);
+    return stored == null ? fallback : stored === '1';
+  } catch { return fallback; }
+};
+
+/**
+ * Side-by-side placement for things that overlap in time.
+ *
+ * Events are grouped into clusters of transitively-overlapping items, and every item in a
+ * cluster is given the SAME column count, so a 09:00–17:00 block and a 10:00–10:30 one sitting
+ * inside it each take half the width rather than the short one shrinking on its own and leaving
+ * a gap. Within a cluster each item takes the first column free at its start time.
+ */
+function packLanes<T extends Spanning>(items: T[]): Array<T & { lane: number; laneCount: number }> {
+  const sorted = [...items].sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
+  const out: Array<T & { lane: number; laneCount: number }> = [];
+  let cluster: Array<T & { lane: number; laneCount: number }> = [];
+  let clusterEnd = -Infinity;
+  let laneEnds: number[] = [];
+
+  const flush = () => {
+    const laneCount = Math.max(1, laneEnds.length);
+    cluster.forEach((item) => { item.laneCount = laneCount; });
+    out.push(...cluster);
+    cluster = [];
+    laneEnds = [];
+    clusterEnd = -Infinity;
+  };
+
+  for (const item of sorted) {
+    if (cluster.length && item.startMs >= clusterEnd) flush();
+    let lane = laneEnds.findIndex((end) => end <= item.startMs);
+    if (lane === -1) {
+      laneEnds.push(item.endMs);
+      lane = laneEnds.length - 1;
+    } else {
+      laneEnds[lane] = item.endMs;
+    }
+    cluster.push({ ...item, lane, laneCount: 1 });
+    clusterEnd = Math.max(clusterEnd, item.endMs);
+  }
+  if (cluster.length) flush();
+  return out;
+}
+
 const WeekPlanGrid: React.FC<WeekPlanGridProps> = ({ weekStart, planningMode = 'smart' }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const { selectedSprintId } = useSprint();
   const { showSidebar } = useSidebar();
   const { resolveThemeAppearance } = useThemeAppearance();
+  const navigate = useNavigate();
 
   const [stories, setStories] = useState<Story[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -75,10 +166,26 @@ const WeekPlanGrid: React.FC<WeekPlanGridProps> = ({ weekStart, planningMode = '
     allocations: ThemeAllocationRow[];
     weeklyOverrides: Record<string, ThemeAllocationRow[]>;
   }>({ allocations: [], weeklyOverrides: {} });
-  const [dragItem, setDragItem] = useState<{ type: 'story' | 'task'; id: string; title: string } | null>(null);
+  const [dragItem, setDragItem] = useState<{ type: 'story' | 'task'; id: string; title: string; entity: Story | Task } | null>(null);
   const [dragOverDay, setDragOverDay] = useState<number | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
+  /** Theme allocations are context, not content — off is a legitimate way to work. */
+  const [showAllocations, setShowAllocations] = useState<boolean>(() => readFlag(THEME_OVERLAY_STORAGE_KEY, true));
+  /**
+   * 'sprint' is the focused pile; 'all' is every open story and task with nothing on the
+   * calendar this week — the answer to "did the orchestrator miss anything".
+   */
+  const [backlogScope, setBacklogScope] = useState<'sprint' | 'all'>(() => {
+    try { return window.localStorage.getItem(BACKLOG_SCOPE_STORAGE_KEY) === 'all' ? 'all' : 'sprint'; } catch { return 'sprint'; }
+  });
+
+  useEffect(() => {
+    try { window.localStorage.setItem(THEME_OVERLAY_STORAGE_KEY, showAllocations ? '1' : '0'); } catch { /* private mode */ }
+  }, [showAllocations]);
+  useEffect(() => {
+    try { window.localStorage.setItem(BACKLOG_SCOPE_STORAGE_KEY, backlogScope); } catch { /* private mode */ }
+  }, [backlogScope]);
 
   const days = useMemo(
     () => Array.from({ length: VISIBLE_DAYS }, (_, i) => new Date(startOfDayMs(weekStart) + i * DAY_MS)),
@@ -119,7 +226,7 @@ const WeekPlanGrid: React.FC<WeekPlanGridProps> = ({ weekStart, planningMode = '
 
   /** Scheduled work per day — calendar blocks in range that point at a story or task. */
   const scheduledByDay = useMemo(() => {
-    const map = new Map<number, Array<{ block: any; entity: Story | Task; type: 'story' | 'task' }>>();
+    const map = new Map<number, Array<{ block: any; entity: Story | Task; type: 'story' | 'task'; startMs: number; endMs: number }>>();
     days.forEach((d) => map.set(startOfDayMs(d), []));
     for (const b of blocks) {
       const start = Number(b.start || 0);
@@ -130,10 +237,12 @@ const WeekPlanGrid: React.FC<WeekPlanGridProps> = ({ weekStart, planningMode = '
       if (!entity) continue;
       const key = startOfDayMs(start);
       if (!map.has(key)) continue;
-      map.get(key)!.push({ block: b, entity, type: storyId ? 'story' : 'task' });
+      // A block with no usable end still has to be drawable — 30 minutes matches what the
+      // scheduler gives a task with no estimate.
+      const rawEnd = Number(b.end || 0);
+      const endMs = Number.isFinite(rawEnd) && rawEnd > start ? rawEnd : start + 30 * MIN_MS;
+      map.get(key)!.push({ block: b, entity, type: storyId ? 'story' : 'task', startMs: start, endMs });
     }
-    // Highest priority first, mirroring how the AI is meant to schedule.
-    map.forEach((list) => list.sort((a, b) => Number(a.block.start || 0) - Number(b.block.start || 0)));
     return map;
   }, [blocks, days, rangeStart, rangeEnd, storyById, taskById]);
 
@@ -143,21 +252,7 @@ const WeekPlanGrid: React.FC<WeekPlanGridProps> = ({ weekStart, planningMode = '
     return ids;
   }, [scheduledByDay]);
 
-  /**
-   * The pile you drag from: sprint stories that are open and not already on the calendar
-   * anywhere in this week. Ordered by the same comparator the Kanban's priority stack uses,
-   * so the top of the backlog is what should be scheduled first.
-   */
-  const backlog = useMemo(() => {
-    if (!selectedSprintId) return [];
-    return stories
-      .filter((s) => String((s as any).sprintId || '') === selectedSprintId)
-      .filter((s) => !isDoneStatus((s as any).status, 'story'))
-      .filter((s) => !scheduledEntityIds.has(s.id))
-      .sort(compareTop3Stories);
-  }, [stories, selectedSprintId, scheduledEntityIds]);
-
-  /** Theme bands for a given weekday, from the plan doc (week override wins). */
+  /** Theme bands for a given weekday, from the plan doc (this week's override wins). */
   const allocationsForDay = useCallback((day: Date): ThemeAllocationRow[] => {
     const weekKey = new Date(rangeStart).toISOString().slice(0, 10);
     const rows = Array.isArray(allocations.weeklyOverrides[weekKey])
@@ -166,34 +261,125 @@ const WeekPlanGrid: React.FC<WeekPlanGridProps> = ({ weekStart, planningMode = '
     return rows.filter((r) => Number(r.dayOfWeek) === day.getDay());
   }, [allocations, rangeStart]);
 
-  const handleDrop = useCallback(async (day: Date) => {
+  /**
+   * The visible hours. Fixed 06:00–22:00 unless the week actually contains something outside
+   * it, in which case the window grows to include it — a 05:30 gym block or a late shift must
+   * never be silently cropped off the top or bottom of the grid.
+   */
+  const [startHour, endHour] = useMemo(() => {
+    let lo = DEFAULT_START_HOUR;
+    let hi = DEFAULT_END_HOUR;
+    days.forEach((day) => {
+      allocationsForDay(day).forEach((row) => {
+        const s = parseClock(row.startTime);
+        const e = parseClock(row.endTime);
+        if (s != null) lo = Math.min(lo, Math.floor(s / 60));
+        if (e != null) hi = Math.max(hi, Math.ceil(e / 60));
+      });
+      (scheduledByDay.get(startOfDayMs(day)) || []).forEach(({ startMs, endMs }) => {
+        lo = Math.min(lo, new Date(startMs).getHours());
+        // An item ending at 18:00 needs the grid to reach 18, not 19 — hence the -1ms.
+        hi = Math.max(hi, new Date(endMs - 1).getHours() + 1);
+      });
+    });
+    return [Math.max(0, lo), Math.min(24, Math.max(lo + 1, hi))];
+  }, [days, allocationsForDay, scheduledByDay]);
+
+  const hours = useMemo(
+    () => Array.from({ length: endHour - startHour }, (_, i) => startHour + i),
+    [startHour, endHour],
+  );
+  const gridHeight = (endHour - startHour) * PX_PER_HOUR;
+
+  /** Position on the vertical axis, clamped to the visible window. */
+  const offsetFor = useCallback((ms: number, dayStart: number) => {
+    const minutes = (ms - dayStart) / MIN_MS;
+    return ((minutes / 60) - startHour) * PX_PER_HOUR;
+  }, [startHour]);
+
+  /**
+   * The pile you drag from: open work with no calendar block anywhere in the visible week.
+   *
+   * Both scopes include TASKS as well as stories. The sprint scope alone was hiding two whole
+   * categories of unscheduled work — every task, and every story not in the selected sprint —
+   * so the orchestrator could skip an item and nothing on this surface would show it.
+   */
+  const { backlog, backlogTotal } = useMemo(() => {
+    const openStories = stories.filter((s) => !isDoneStatus((s as any).status, 'story') && !scheduledEntityIds.has(s.id));
+    const openTasks = tasks.filter((t) => !isDoneStatus((t as any).status, 'task') && !scheduledEntityIds.has(t.id));
+
+    const scopedStories = backlogScope === 'sprint' && selectedSprintId
+      ? openStories.filter((s) => String((s as any).sprintId || '') === selectedSprintId)
+      : openStories;
+    const scopedTasks = backlogScope === 'sprint' && selectedSprintId
+      ? openTasks.filter((t) => String((t as any).sprintId || '') === selectedSprintId)
+      : openTasks;
+
+    const rows: Array<{ type: 'story' | 'task'; entity: Story | Task }> = [
+      ...scopedStories.sort(compareTop3Stories).map((entity) => ({ type: 'story' as const, entity })),
+      ...scopedTasks.sort((a, b) => compareTop3Tasks(a, b)).map((entity) => ({ type: 'task' as const, entity })),
+    ];
+    // Stories lead tasks at equal priority: a story is the unit the sprint is committed to.
+    rows.sort((a, b) => {
+      const scoreDiff = getEntityAiScore(b.entity) - getEntityAiScore(a.entity);
+      if (scoreDiff !== 0 && Number.isFinite(scoreDiff)) return scoreDiff;
+      if (a.type !== b.type) return a.type === 'story' ? -1 : 1;
+      return String(a.entity.title || '').localeCompare(String(b.entity.title || ''));
+    });
+    return { backlog: rows.slice(0, BACKLOG_LIMIT), backlogTotal: rows.length };
+  }, [stories, tasks, selectedSprintId, scheduledEntityIds, backlogScope]);
+
+  /**
+   * Drop lands at the time you dropped on, not just the date. `exactTargetStartMs` is a request
+   * rather than a command — in strict mode the server still confines placement to a matching
+   * theme allocation — so the response's applied time is what gets reported back.
+   */
+  const handleDrop = useCallback(async (day: Date, offsetY: number) => {
     const item = dragItem;
     setDragItem(null);
     setDragOverDay(null);
     if (!item) return;
+
+    const dayStart = startOfDayMs(day);
+    const rawMinutes = startHour * 60 + (offsetY / PX_PER_HOUR) * 60;
+    const clamped = Math.min(Math.max(rawMinutes, startHour * 60), endHour * 60 - SNAP_MINUTES);
+    const snapped = Math.round(clamped / SNAP_MINUTES) * SNAP_MINUTES;
+    const durationMinutes = inferPlannerDurationMinutes(item.type, item.entity as any);
+    const startMs = dayStart + snapped * MIN_MS;
+
     setBusyId(item.id);
     setFeedback(null);
     try {
-      await schedulePlannerItem({
+      const result = await schedulePlannerItem({
         itemType: item.type,
         itemId: item.id,
-        targetDateMs: startOfDayMs(day),
+        targetDateMs: dayStart,
         intent: 'move',
         source: 'roadmap_week_grid',
         targetSprintId: selectedSprintId || null,
+        durationMinutes,
+        exactTargetStartMs: startMs,
+        exactTargetEndMs: startMs + durationMinutes * MIN_MS,
         // Passed through so strict mode confines placement to a matching theme allocation,
         // the same rule the nightly orchestration applies.
         planningMode,
       });
-      setFeedback({ tone: 'ok', text: `Scheduled "${item.title}"` });
+      const applied = Number(result?.appliedStartMs);
+      const at = Number.isFinite(applied)
+        ? new Date(applied).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+        : null;
+      setFeedback({ tone: 'ok', text: at ? `Scheduled "${item.title}" at ${at}` : `Scheduled "${item.title}"` });
     } catch (err) {
       setFeedback({ tone: 'error', text: normalizePlannerSchedulingError(err).message });
     } finally {
       setBusyId(null);
     }
-  }, [dragItem, selectedSprintId, planningMode]);
+  }, [dragItem, selectedSprintId, planningMode, startHour, endHour]);
 
-  const cardStyle = (accent: string): React.CSSProperties => ({
+  const entityAccent = (entity: Story | Task): string =>
+    resolveThemeAppearance((entity as any).theme)?.color || 'var(--brand, #5f77dc)';
+
+  const backlogCardStyle = (accent: string): React.CSSProperties => ({
     borderLeft: `3px solid ${accent}`,
     background: 'var(--card, #fff)',
     color: themeVars.text as string,
@@ -205,125 +391,270 @@ const WeekPlanGrid: React.FC<WeekPlanGridProps> = ({ weekStart, planningMode = '
     cursor: 'grab',
   });
 
-  const entityAccent = (entity: Story | Task): string =>
-    resolveThemeAppearance((entity as any).theme)?.color || 'var(--brand, #5f77dc)';
+  const todayStart = startOfDayMs(new Date());
+  const nowOffset = offsetFor(Date.now(), todayStart);
 
   return (
-    <div style={{ flex: 1, minHeight: 0, overflow: 'auto', background: 'var(--bg, #f8f9fa)', padding: '0 16px 12px' }}>
-      {feedback && (
-        <div className={`small mb-2 ${feedback.tone === 'ok' ? 'text-success' : 'text-danger'}`}>{feedback.text}</div>
-      )}
-      <div style={{ display: 'flex', minWidth: 'max-content' }}>
-        {/* Backlog */}
-        <div style={{ width: BACKLOG_W, flexShrink: 0, paddingRight: 8, position: 'sticky', left: 0, zIndex: 2, background: 'var(--bg, #f8f9fa)' }}>
-          <div style={{ padding: '8px 4px', fontSize: 11, fontWeight: 700, color: themeVars.text as string }}>
-            Backlog <span style={{ color: themeVars.muted as string }}>({backlog.length})</span>
-          </div>
-          {backlog.length === 0 && (
-            <div style={{ fontSize: 10, color: themeVars.muted as string, padding: '4px' }}>
-              {selectedSprintId ? 'Everything in this sprint is scheduled.' : 'No active sprint selected.'}
-            </div>
-          )}
-          {backlog.map((s) => (
-            <div
-              key={s.id}
-              draggable
-              onDragStart={(e) => {
-                e.dataTransfer.setData('text/plain', s.id);
-                e.dataTransfer.effectAllowed = 'move';
-                setDragItem({ type: 'story', id: s.id, title: s.title || 'Story' });
+    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--bg, #f8f9fa)' }}>
+      {/* The week grid's own controls. The roadmap's goal filters are hidden at this detail
+          level (they select goals, and nothing here is a goal), so this row is what remains. */}
+      <div className="d-flex align-items-center gap-3 flex-wrap px-3 pt-2 pb-1" style={{ flexShrink: 0 }}>
+        <label className="small d-flex align-items-center gap-1" style={{ marginBottom: 0, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={showAllocations}
+            onChange={(e) => setShowAllocations(e.target.checked)}
+          />
+          {showAllocations ? <Eye size={14} /> : <EyeOff size={14} />}
+          Theme allocations
+        </label>
+        <div className="btn-group btn-group-sm" role="group" aria-label="Backlog scope">
+          {/* "This sprint", not "Sprint" — the detail-level group directly above has its own
+              Sprint button, and two adjacent buttons with the same word mean two different
+              things. */}
+          {([['sprint', 'This sprint'], ['all', 'All unscheduled']] as const).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              className="grv5-select"
+              style={{
+                cursor: 'pointer', padding: '0 10px',
+                background: backlogScope === key ? 'var(--brand, #5f77dc)' : undefined,
+                color: backlogScope === key ? '#fff' : undefined,
               }}
-              onDragEnd={() => { setDragItem(null); setDragOverDay(null); }}
-              onClick={() => showSidebar(s as any, 'story')}
-              title={`${s.title} — drag onto a day to schedule, click for detail`}
-              style={{ ...cardStyle(entityAccent(s)), opacity: busyId === s.id ? 0.5 : 1 }}
+              onClick={() => setBacklogScope(key)}
+              title={key === 'sprint'
+                ? 'Backlog shows the selected sprint only'
+                : 'Backlog shows every open story and task with nothing on the calendar this week'}
             >
-              <div style={{ fontWeight: 600, wordBreak: 'break-word' }}>{s.title}</div>
-              <div style={{ color: themeVars.muted as string, fontSize: 9, marginTop: 2, display: 'flex', gap: 6 }}>
-                <span>{(s as any).ref}</span>
-                {getManualPriorityRank(s) && <span style={{ color: 'var(--bs-danger)', fontWeight: 700 }}>P{getManualPriorityRank(s)}</span>}
-                {Number.isFinite(getEntityAiScore(s)) && getEntityAiScore(s) > 0 && <span>AI {Math.round(getEntityAiScore(s))}</span>}
-              </div>
-            </div>
+              {label}
+            </button>
           ))}
         </div>
+        {feedback && (
+          <span className={`small ${feedback.tone === 'ok' ? 'text-success' : 'text-danger'}`}>{feedback.text}</span>
+        )}
+      </div>
 
-        {/* Day columns */}
-        {days.map((day) => {
-          const dayKey = startOfDayMs(day);
-          const scheduled = scheduledByDay.get(dayKey) || [];
-          const bands = allocationsForDay(day);
-          const isToday = dayKey === startOfDayMs(new Date());
-          const isDropTarget = dragItem != null && dragOverDay === dayKey;
-          return (
-            <div
-              key={dayKey}
-              onDragOver={(e) => { if (dragItem) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOverDay(dayKey); } }}
-              onDragLeave={() => setDragOverDay((p) => (p === dayKey ? null : p))}
-              onDrop={(e) => { e.preventDefault(); handleDrop(day); }}
-              style={{
-                width: COL_W, flexShrink: 0, minHeight: 220, padding: '0 6px 8px',
-                borderLeft: '1px solid var(--line, #e5e7eb)',
-                background: isDropTarget ? 'var(--accent-soft, #dbeafe)' : 'transparent',
-              }}
-            >
-              <div style={{
-                position: 'sticky', top: 0, zIndex: 1, padding: '8px 2px 6px',
-                background: isToday ? 'var(--accent-soft, #dbeafe)' : 'var(--bg, #f8f9fa)',
-                fontSize: 11, fontWeight: 700, color: themeVars.text as string,
-              }}>
-                {day.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}
-                {isToday && <span style={{ marginLeft: 5, fontSize: 9, color: 'var(--brand, #3b82f6)' }}>▶ today</span>}
+      <div style={{ flex: 1, minHeight: 0, overflow: 'auto', paddingBottom: 12 }}>
+        <div style={{ display: 'flex', minWidth: 'max-content', alignItems: 'flex-start' }}>
+          {/* Backlog — sticky so it never scrolls away from the day you are dragging onto. */}
+          <div style={{
+            width: BACKLOG_W + EDGE_PAD, flexShrink: 0, paddingLeft: EDGE_PAD, paddingRight: 8,
+            position: 'sticky', left: 0, zIndex: 5, background: 'var(--bg, #f8f9fa)',
+          }}>
+            <div style={{
+              position: 'sticky', top: 0, zIndex: 1, padding: '8px 4px 6px',
+              background: 'var(--bg, #f8f9fa)', fontSize: 11, fontWeight: 700, color: themeVars.text as string,
+            }}>
+              Backlog <span style={{ color: themeVars.muted as string }}>
+                ({backlogTotal > backlog.length ? `${backlog.length} of ${backlogTotal}` : backlogTotal})
+              </span>
+            </div>
+            {backlog.length === 0 && (
+              <div style={{ fontSize: 10, color: themeVars.muted as string, padding: '4px' }}>
+                {backlogScope === 'sprint' && !selectedSprintId
+                  ? 'No active sprint selected — switch to All unscheduled.'
+                  : 'Everything open is scheduled this week.'}
               </div>
+            )}
+            {backlog.map(({ entity, type }) => (
+              <div
+                key={`${type}-${entity.id}`}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData('text/plain', entity.id);
+                  e.dataTransfer.effectAllowed = 'move';
+                  setDragItem({ type, id: entity.id, title: entity.title || (type === 'story' ? 'Story' : 'Task'), entity });
+                }}
+                onDragEnd={() => { setDragItem(null); setDragOverDay(null); }}
+                onClick={() => showSidebar(entity as any, type)}
+                title={`${entity.title} — drag onto the grid to schedule, click for detail and activity`}
+                style={{ ...backlogCardStyle(entityAccent(entity)), opacity: busyId === entity.id ? 0.5 : 1 }}
+              >
+                <div style={{ fontWeight: 600, wordBreak: 'break-word' }}>{entity.title}</div>
+                <div style={{ color: themeVars.muted as string, fontSize: 9, marginTop: 2, display: 'flex', gap: 6 }}>
+                  <span>{(entity as any).ref}</span>
+                  {type === 'task' && <span style={{ textTransform: 'uppercase' }}>task</span>}
+                  {getManualPriorityRank(entity as any) && (
+                    <span style={{ color: 'var(--bs-danger)', fontWeight: 700 }}>P{getManualPriorityRank(entity as any)}</span>
+                  )}
+                  {Number.isFinite(getEntityAiScore(entity)) && getEntityAiScore(entity) > 0 && (
+                    <span>AI {Math.round(getEntityAiScore(entity))}</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
 
-              {/* Theme allocations — context for what this day is FOR, read from the plan doc
-                  rather than materialised blocks (only Fitness and Work ever materialise). */}
-              {bands.map((b, i) => {
-                const appearance = resolveThemeAppearance(b.subTheme || b.theme);
-                return (
-                  <div
-                    key={`${dayKey}-band-${i}`}
-                    title={`${b.subTheme || b.theme} · ${b.startTime}–${b.endTime}`}
-                    style={{
-                      background: `color-mix(in srgb, ${appearance?.color || '#94a3b8'} 22%, transparent)`,
-                      borderLeft: `3px solid ${appearance?.color || '#94a3b8'}`,
-                      borderRadius: '0 4px 4px 0', padding: '2px 6px', marginBottom: 3,
-                      fontSize: 9, color: themeVars.text as string,
-                      display: 'flex', justifyContent: 'space-between', gap: 4,
-                    }}
-                  >
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{b.subTheme || b.theme}</span>
-                    <span style={{ color: themeVars.muted as string, flexShrink: 0 }}>{b.startTime}</span>
-                  </div>
-                );
-              })}
-
-              {bands.length > 0 && scheduled.length > 0 && (
-                <div style={{ height: 1, background: 'var(--line, #e5e7eb)', margin: '6px 0' }} />
-              )}
-
-              {/* Scheduled work, as cards in the roadmap's format. */}
-              {scheduled.map(({ block, entity, type }) => (
-                <div
-                  key={block.id}
-                  onClick={() => showSidebar(entity as any, type)}
-                  title={`${entity.title} — click for detail`}
-                  style={{ ...cardStyle(entityAccent(entity)), cursor: 'pointer' }}
-                >
-                  <div style={{ fontWeight: 600, wordBreak: 'break-word' }}>{entity.title}</div>
-                  <div style={{ color: themeVars.muted as string, fontSize: 9, marginTop: 2, display: 'flex', gap: 6 }}>
-                    <span>{(entity as any).ref}</span>
-                    <span>{new Date(Number(block.start)).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</span>
-                  </div>
+          {/* Hour gutter — sticky beside the backlog so the times stay readable when the week
+              is scrolled sideways. */}
+          <div style={{
+            width: GUTTER_W, flexShrink: 0, position: 'sticky', left: BACKLOG_W + EDGE_PAD, zIndex: 4,
+            background: 'var(--bg, #f8f9fa)',
+          }}>
+            <div style={{ height: 34, position: 'sticky', top: 0, zIndex: 1, background: 'var(--bg, #f8f9fa)' }} />
+            <div style={{ position: 'relative', height: gridHeight }}>
+              {/* Sits just BELOW its hour line rather than centred on it. Centring reads
+                  slightly better mid-grid but pushes the first label half-way above the grid,
+                  where the sticky day header — which owns a stacking context — clips it. */}
+              {hours.map((h, i) => (
+                <div key={h} style={{
+                  position: 'absolute', top: i * PX_PER_HOUR + 2, right: 6, fontSize: 9,
+                  color: themeVars.muted as string,
+                }}>
+                  {String(h).padStart(2, '0')}:00
                 </div>
               ))}
-
-              {scheduled.length === 0 && bands.length === 0 && (
-                <div style={{ fontSize: 10, color: themeVars.muted as string, padding: '6px 2px' }}>Drop here</div>
-              )}
             </div>
-          );
-        })}
+          </div>
+
+          {/* Day columns */}
+          {days.map((day) => {
+            const dayKey = startOfDayMs(day);
+            const scheduled = packLanes(scheduledByDay.get(dayKey) || []);
+            const bands = showAllocations
+              ? packLanes(allocationsForDay(day)
+                .map((row) => {
+                  const s = parseClock(row.startTime);
+                  const e = parseClock(row.endTime);
+                  return s != null && e != null && e > s
+                    ? { row, startMs: dayKey + s * MIN_MS, endMs: dayKey + e * MIN_MS }
+                    : null;
+                })
+                .filter((x): x is { row: ThemeAllocationRow; startMs: number; endMs: number } => x != null))
+              : [];
+            const isToday = dayKey === todayStart;
+            const isDropTarget = dragItem != null && dragOverDay === dayKey;
+            return (
+              <div key={dayKey} style={{ width: COL_W, flexShrink: 0 }}>
+                <div style={{
+                  position: 'sticky', top: 0, zIndex: 3, height: 34, padding: '8px 6px 6px',
+                  background: isToday ? accentTint(themeVars.bg, 18) : 'var(--bg, #f8f9fa)',
+                  borderLeft: '1px solid var(--line, #e5e7eb)',
+                  fontSize: 11, fontWeight: 700, color: themeVars.text as string,
+                }}>
+                  {day.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}
+                  {isToday && <span style={{ marginLeft: 5, fontSize: 9, color: 'var(--brand, #3b82f6)' }}>▶ today</span>}
+                </div>
+
+                <div
+                  onDragOver={(e) => { if (dragItem) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOverDay(dayKey); } }}
+                  onDragLeave={() => setDragOverDay((p) => (p === dayKey ? null : p))}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    // Relative to the column body, so the drop time is the hour under the
+                    // cursor. offsetY would be relative to whatever child was hit instead.
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    handleDrop(day, e.clientY - rect.top);
+                  }}
+                  style={{
+                    position: 'relative', height: gridHeight,
+                    borderLeft: '1px solid var(--line, #e5e7eb)',
+                    background: isDropTarget
+                      ? accentTint(themeVars.card, 22)
+                      : isToday ? accentTint(themeVars.card, 6) : 'var(--card, #fff)',
+                  }}
+                >
+                  {/* Hour lines. The half-hour is a lighter rule so a 30-minute block reads as
+                      half an hour without having to measure it. */}
+                  {hours.map((h, i) => (
+                    <React.Fragment key={h}>
+                      <div style={{
+                        position: 'absolute', left: 0, right: 0, top: i * PX_PER_HOUR,
+                        borderTop: '1px solid var(--line, #e5e7eb)', pointerEvents: 'none',
+                      }} />
+                      <div style={{
+                        position: 'absolute', left: 0, right: 0, top: i * PX_PER_HOUR + PX_PER_HOUR / 2,
+                        borderTop: '1px dotted var(--line, #eef1f4)', opacity: 0.6, pointerEvents: 'none',
+                      }} />
+                    </React.Fragment>
+                  ))}
+
+                  {/* Theme allocations: a translucent underlay, behind the cards and below them
+                      in the stack, so a soft "this was meant to be Family time" band never
+                      competes with what is actually scheduled. Clicking one opens the weekly
+                      capacity planner, which is where allocations are edited. */}
+                  {bands.map(({ row, startMs, endMs, lane, laneCount }, i) => {
+                    const appearance = resolveThemeAppearance(row.subTheme || row.theme);
+                    const color = appearance?.color || '#94a3b8';
+                    const top = offsetFor(startMs, dayKey);
+                    const height = Math.max(MIN_CARD_PX, offsetFor(endMs, dayKey) - top);
+                    return (
+                      <div
+                        key={`${dayKey}-band-${i}`}
+                        onClick={() => navigate('/planner/weekly-capacity')}
+                        title={`${row.subTheme || row.theme} · ${row.startTime}–${row.endTime} — click to edit theme allocations`}
+                        style={{
+                          position: 'absolute', top, height,
+                          left: `${(lane / laneCount) * 100}%`, width: `${(1 / laneCount) * 100}%`,
+                          background: `color-mix(in srgb, ${color} 18%, transparent)`,
+                          borderLeft: `3px solid color-mix(in srgb, ${color} 55%, transparent)`,
+                          borderRadius: '0 4px 4px 0',
+                          padding: '1px 5px', overflow: 'hidden', cursor: 'pointer',
+                          fontSize: 9, color: themeVars.muted as string,
+                        }}
+                      >
+                        <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {row.subTheme || row.theme}
+                        </div>
+                        {height > 30 && <div>{row.startTime}–{row.endTime}</div>}
+                      </div>
+                    );
+                  })}
+
+                  {isToday && nowOffset >= 0 && nowOffset <= gridHeight && (
+                    <div style={{
+                      position: 'absolute', left: 0, right: 0, top: nowOffset, zIndex: 2,
+                      borderTop: '2px solid var(--bs-danger, #ef4444)', pointerEvents: 'none',
+                    }} />
+                  )}
+
+                  {/* Scheduled work, spanning the hours it occupies. Clicking opens the global
+                      sidebar — the app's detail-and-activity-stream surface for an entity — so
+                      you can edit it or read its history without leaving the week. */}
+                  {scheduled.map(({ block, entity, type, startMs, endMs, lane, laneCount }) => {
+                    const top = offsetFor(startMs, dayKey);
+                    const height = Math.max(MIN_CARD_PX, offsetFor(endMs, dayKey) - top);
+                    const accent = entityAccent(entity);
+                    return (
+                      <div
+                        key={block.id}
+                        onClick={() => showSidebar(entity as any, type)}
+                        title={`${entity.title} — click for detail and activity`}
+                        style={{
+                          position: 'absolute', top, height,
+                          left: `calc(${(lane / laneCount) * 100}% + 2px)`,
+                          width: `calc(${(1 / laneCount) * 100}% - 4px)`,
+                          zIndex: 1,
+                          borderLeft: `3px solid ${accent}`,
+                          background: 'var(--card, #fff)',
+                          color: themeVars.text as string,
+                          borderRadius: '0 6px 6px 0',
+                          boxShadow: '0 1px 3px rgba(0,0,0,0.14)',
+                          padding: '2px 6px', overflow: 'hidden', cursor: 'pointer',
+                          fontSize: 11, opacity: isDoneStatus((entity as any).status, type) ? 0.55 : 1,
+                        }}
+                      >
+                        <div style={{ fontWeight: 600, lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {entity.title}
+                        </div>
+                        {height > 34 && (
+                          <div style={{ color: themeVars.muted as string, fontSize: 9, display: 'flex', gap: 6 }}>
+                            <span>{(entity as any).ref}</span>
+                            <span>
+                              {new Date(startMs).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

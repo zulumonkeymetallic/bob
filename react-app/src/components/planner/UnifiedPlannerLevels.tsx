@@ -3,7 +3,10 @@ import { Badge, Button } from 'react-bootstrap';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { addDays, format, startOfDay } from 'date-fns';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { buildPlannerPath, normalizePlannerLevel, plannerLevelLabel, type UnifiedPlannerLevel } from '../../utils/plannerRoutes';
+import {
+  buildPlannerPath, normalizePlannerLevel, normalizePlannerDetail, parsePlannerSearch,
+  plannerLevelLabel, ROADMAP_DETAIL_PARAM, type UnifiedPlannerLevel,
+} from '../../utils/plannerRoutes';
 import UnifiedGoalPlannerLevels from './UnifiedGoalPlannerLevels';
 import UnifiedRoadmapGanttView from './UnifiedRoadmapGanttView';
 import SprintPlanningMatrix from '../SprintPlanningMatrix';
@@ -26,8 +29,11 @@ const withAnchor = (level: UnifiedPlannerLevel, date: Date, search: string) => {
 const UnifiedPlannerLevels: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
-  const query = useMemo(() => new URLSearchParams(location.search), [location.search]);
+  const query = useMemo(() => parsePlannerSearch(location.search), [location.search]);
   const level = normalizePlannerLevel(query.get('level'));
+  // The roadmap's own time axis (year/quarter/sprint/week), deep-linkable as
+  // /planner?level=roadmap&detailLevel=week. Absent, it falls back to quarter.
+  const detail = normalizePlannerDetail(query.get(ROADMAP_DETAIL_PARAM));
   const consolidated = useFeatureFlag('roadmap_replaces_planner_levels');
   const embedded = query.get('embed') === '1' || query.get('embed') === 'true';
   const anchorDate = useMemo(() => {
@@ -38,7 +44,7 @@ const UnifiedPlannerLevels: React.FC = () => {
   }, [level, query]);
 
   if (level === 'roadmap') {
-    return <RoadmapGrid />;
+    return <RoadmapGrid detail={detail} />;
   }
 
   // Gantt is now a view of the roadmap rather than its own level — same surface, same view
@@ -47,20 +53,24 @@ const UnifiedPlannerLevels: React.FC = () => {
   // RoadmapGrid. Behind the same flag as year/quarter, so `roadmap_replaces_planner_levels`
   // false restores the old tabbed page untouched.
   if (level === 'gantt') {
-    return consolidated ? <RoadmapGrid initialView="gantt" /> : <UnifiedRoadmapGanttView initialSubView="gantt" />;
+    return consolidated ? <RoadmapGrid initialView="gantt" detail={detail} /> : <UnifiedRoadmapGanttView initialSubView="gantt" />;
   }
 
   // `year` rendered the same component as `gantt` — a straight duplicate. `quarter` overlapped
   // what the roadmap does better. Both now point at the roadmap, behind a flag: setting
   // roadmap_replaces_planner_levels false restores the original components, which are left
   // in place untouched.
+  // These two levels predate the roadmap's own detail axis and now name a point on it, so each
+  // opens the roadmap at the matching detail unless the URL asks for a different one.
   if (level === 'year') {
-    return consolidated ? <RoadmapGrid /> : <UnifiedRoadmapGanttView initialSubView="roadmap" />;
+    return consolidated
+      ? <RoadmapGrid detail={query.get(ROADMAP_DETAIL_PARAM) ? detail : 'year'} />
+      : <UnifiedRoadmapGanttView initialSubView="roadmap" />;
   }
 
   if (level === 'quarter') {
     return consolidated
-      ? <RoadmapGrid />
+      ? <RoadmapGrid detail={detail} />
       : <UnifiedGoalPlannerLevels level={level} anchorDate={anchorDate} embedded={embedded} />;
   }
 

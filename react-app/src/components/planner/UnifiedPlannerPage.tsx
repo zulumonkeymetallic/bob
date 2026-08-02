@@ -79,7 +79,7 @@ import DeferItemModal from '../DeferItemModal';
 import DayCapacityWarningBanner from './DayCapacityWarningBanner';
 import { useSidebar } from '../../contexts/SidebarContext';
 import UnifiedPlannerLevels from './UnifiedPlannerLevels';
-import { normalizePlannerLevel } from '../../utils/plannerRoutes';
+import { normalizePlannerLevel, parsePlannerSearch } from '../../utils/plannerRoutes';
 import { applyPlannerDefer, type PlannerDeferPayload } from '../../utils/plannerDeferral';
 
 const locales = { 'en-GB': enGB } as const;
@@ -2845,7 +2845,7 @@ const UnifiedPlannerCalendarPage: React.FC = () => {
 
 const UnifiedPlannerPage: React.FC = () => {
   const location = useLocation();
-  const plannerLevel = useMemo(() => normalizePlannerLevel(new URLSearchParams(location.search).get('level')), [location.search]);
+  const plannerLevel = useMemo(() => normalizePlannerLevel(parsePlannerSearch(location.search).get('level')), [location.search]);
 
   if (plannerLevel !== 'calendar') {
     return <UnifiedPlannerLevels />;

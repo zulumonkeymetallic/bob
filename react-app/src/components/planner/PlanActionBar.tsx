@@ -17,6 +17,7 @@ import {
 import {
   buildPlannerPath,
   normalizePlannerLevel,
+  parsePlannerSearch,
   plannerLevelLabel,
   type UnifiedPlannerLevel,
 } from '../../utils/plannerRoutes';
@@ -45,7 +46,7 @@ interface PlanActionBarProps {
 const PlanActionBar: React.FC<PlanActionBarProps> = ({ className }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const query = useMemo(() => new URLSearchParams(location.search), [location.search]);
+  const query = useMemo(() => parsePlannerSearch(location.search), [location.search]);
   const currentPlannerLevel = useMemo(
     () => (location.pathname.startsWith('/planner') ? normalizePlannerLevel(query.get('level')) : null),
     [location.pathname, query],
