@@ -104,6 +104,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
     linkedPotId: '',
     tags: [] as string[],
     autoCreatePot: false,
+    sharePrivate: false,
     showInDashboardBanner: false,
     persona: (currentPersona || 'personal') as 'personal' | 'work',
     isPublished: false,
@@ -553,6 +554,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           linkedPotId: (goal as any).linkedPotId || (goal as any).potId || '',
           tags: (goal as any).tags || [],
           autoCreatePot: !!(goal as any).autoCreatePot,
+          sharePrivate: !!(goal as any).sharePrivate,
           showInDashboardBanner: !!(goal as any).showInDashboardBanner || !!(goal as any).isBannerGoal,
           persona: ((goal as any).persona || currentPersona || 'personal') as 'personal' | 'work',
           isPublished: !!(goal as any).isPublished,
@@ -592,6 +594,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
           linkedPotId: '',
           tags: [],
           autoCreatePot: false,
+          sharePrivate: false,
           showInDashboardBanner: false,
           persona: (currentPersona || 'personal') as 'personal' | 'work',
           isPublished: false,
@@ -743,6 +746,7 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
         updatedAt: serverTimestamp(),
         tags: formData.tags,
         autoCreatePot: formData.autoCreatePot,
+        sharePrivate: formData.sharePrivate,
         showInDashboardBanner: !!formData.showInDashboardBanner,
         isBannerGoal: !!formData.showInDashboardBanner,
         persona: formData.persona || currentPersona || 'personal',
@@ -1232,6 +1236,24 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
                 disabled={formData.costType === 'none'}
                 onChange={(e) => setFormData({ ...formData, autoCreatePot: e.target.checked })}
               />
+
+              {/* Public sharing is opt-OUT: publishing the roadmap stamps every goal with the
+                  share code. This is the switch that holds one back. It takes effect on the
+                  next publish or Re-sync, which is why the help text says so — a goal marked
+                  private here is still on a link that was generated before. */}
+              <Form.Group className="mb-3">
+                <Form.Check
+                  type="checkbox"
+                  label="Keep this goal private — exclude it from the public roadmap link"
+                  checked={formData.sharePrivate}
+                  onChange={(e) => setFormData({ ...formData, sharePrivate: e.target.checked })}
+                />
+                <Form.Text className="text-muted">
+                  {formData.sharePrivate
+                    ? 'Hit Re-sync on the roadmap’s Share panel to withdraw it from a link you have already shared.'
+                    : 'Anyone with the public roadmap link can see this goal, without signing in.'}
+                </Form.Text>
+              </Form.Group>
 
               <Form.Group className="mb-3">
                 <Form.Label>Description</Form.Label>

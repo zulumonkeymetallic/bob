@@ -478,8 +478,15 @@ const WeekPlanGrid: React.FC<WeekPlanGridProps> = ({ weekStart, planningMode = '
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--bg, #f8f9fa)' }}>
-      {/* The week grid's own controls. The roadmap's goal filters are hidden at this detail
-          level (they select goals, and nothing here is a goal), so this row is what remains. */}
+      {/* The week grid's own controls, occupying the row where the other detail levels put
+          their goal filters — so the toolbar is the same two rows everywhere: what am I
+          looking at, then what is in it. The filters themselves are hidden at this level
+          because they select goals and nothing here is a goal.
+
+          Rendered here rather than hoisted into RoadmapGrid's toolbar deliberately: these
+          controls own state that only this component has, and lifting them would mean either
+          a portal or pushing week-specific state up into a component that has no other use
+          for it. Same row position, no coupling. */}
       <div className="d-flex align-items-center gap-3 flex-wrap px-3 pt-2 pb-1" style={{ flexShrink: 0 }}>
         <label className="small d-flex align-items-center gap-1" style={{ marginBottom: 0, cursor: 'pointer' }}>
           <input

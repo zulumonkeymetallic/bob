@@ -79,6 +79,15 @@ export interface Goal {
   url?: string | null;
   documentLink?: string | null; // Google Drive / Docs link
   driveFolderId?: string | null; // Google Drive folder for this goal's hierarchy
+  /**
+   * Hold this goal back from the public roadmap link.
+   *
+   * The share is opt-OUT: publishing stamps `canvasCode` on every goal the user owns, and the
+   * Firestore rule serves any goal that has one to anyone with the link. This flag is what
+   * makes a single sensitive goal survivable without unsharing the whole roadmap. Setting it
+   * takes effect on the next publish or Re-sync — see ShareGoalsPanel.
+   */
+  sharePrivate?: boolean;
   orderIndex?: number; // Stable ordering for modern tables
   // Relationships
   parentGoalId?: string | null; // Optional parent goal relationship

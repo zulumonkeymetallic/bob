@@ -33,6 +33,9 @@ const ShareGoalsPanel: React.FC<Props> = ({ uid }) => {
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [profileChecked, setProfileChecked] = useState(false);
+  /** How the split currently stands, so the panel can say what the link actually exposes. */
+  const [sharedCount, setSharedCount] = useState<number | null>(null);
+  const [privateCount, setPrivateCount] = useState<number | null>(null);
 
   // Load existing canvasShareCode from profile
   useEffect(() => {
@@ -48,31 +51,43 @@ const ShareGoalsPanel: React.FC<Props> = ({ uid }) => {
     ? `${window.location.origin}/public/roadmap/${shareCode}`
     : null;
 
+  /**
+   * Publish, or re-publish after marking goals private.
+   *
+   * `sharePrivate` on a goal holds it back. Sharing used to be all-or-nothing — every goal the
+   * user owned got the code — which meant a single private goal made the whole roadmap
+   * unshareable. Excluded goals get `canvasCode: null` explicitly rather than merely being
+   * skipped: on a re-publish, a goal that WAS public and has since been marked private must
+   * have its old code cleared, or the Firestore rule keeps serving it to anyone with the link.
+   */
   const handleMakePublic = useCallback(async () => {
     setLoading(true);
     try {
-      const code = generateShareCode();
+      // Reuse the existing code on a re-publish so links already shared keep working.
+      const code = shareCode || generateShareCode();
 
-      // Load all user goals
       const goalsSnap = await getDocs(
         query(collection(db, 'goals'), where('ownerUid', '==', uid))
       );
 
-      // Batch-update in chunks of 400
       const docs = goalsSnap.docs;
       for (let i = 0; i < docs.length; i += 400) {
         const batch = writeBatch(db);
-        docs.slice(i, i + 400).forEach(d => batch.update(d.ref, { canvasCode: code }));
+        docs.slice(i, i + 400).forEach((d) => {
+          const isPrivate = d.data()?.sharePrivate === true;
+          batch.update(d.ref, { canvasCode: isPrivate ? null : code });
+        });
         await batch.commit();
       }
 
-      // Save to profile
       await updateDoc(doc(db, 'profiles', uid), { canvasShareCode: code });
       setShareCode(code);
+      setPrivateCount(docs.filter((d) => d.data()?.sharePrivate === true).length);
+      setSharedCount(docs.filter((d) => d.data()?.sharePrivate !== true).length);
     } finally {
       setLoading(false);
     }
-  }, [uid]);
+  }, [uid, shareCode]);
 
   const handleRevoke = useCallback(async () => {
     if (!shareCode) return;
@@ -89,10 +104,24 @@ const ShareGoalsPanel: React.FC<Props> = ({ uid }) => {
       }
       await updateDoc(doc(db, 'profiles', uid), { canvasShareCode: null });
       setShareCode(null);
+      setSharedCount(null);
+      setPrivateCount(null);
     } finally {
       setLoading(false);
     }
   }, [uid, shareCode]);
+
+  /** Current shared/private split, for the panel's summary line. */
+  useEffect(() => {
+    if (!uid || !open) return;
+    getDocs(query(collection(db, 'goals'), where('ownerUid', '==', uid)))
+      .then((snap) => {
+        const priv = snap.docs.filter((d) => d.data()?.sharePrivate === true).length;
+        setPrivateCount(priv);
+        setSharedCount(snap.size - priv);
+      })
+      .catch(() => { /* the counts are informational; failing to load them is not an error */ });
+  }, [uid, open]);
 
   const handleCopy = () => {
     if (!publicUrl) return;
@@ -133,7 +162,16 @@ const ShareGoalsPanel: React.FC<Props> = ({ uid }) => {
                   {copied ? '✓ Copied' : 'Copy'}
                 </button>
               </div>
-              <div className="d-flex justify-content-between align-items-center">
+              {/* What the link actually exposes, in numbers. "Public" on its own does not tell
+                  you whether the goal you meant to hold back is in it. */}
+              {sharedCount != null && (
+                <p className="small mb-2" style={{ color: 'var(--muted, #6b7280)' }}>
+                  {sharedCount} goal{sharedCount === 1 ? '' : 's'} visible
+                  {privateCount ? ` · ${privateCount} kept private` : ''}.
+                  {privateCount === 0 && ' Mark a goal private in its editor to exclude it.'}
+                </p>
+              )}
+              <div className="d-flex justify-content-between align-items-center gap-2">
                 <a
                   href={publicUrl || '#'}
                   target="_blank"
@@ -142,20 +180,35 @@ const ShareGoalsPanel: React.FC<Props> = ({ uid }) => {
                 >
                   Open ↗
                 </a>
-                <button
-                  className="btn btn-sm btn-outline-danger"
-                  onClick={handleRevoke}
-                  disabled={loading}
-                >
-                  {loading ? <span className="spinner-border spinner-border-sm" /> : 'Revoke access'}
-                </button>
+                <div className="d-flex gap-2">
+                  {/* Re-publishing is how a newly-private goal is withdrawn from a live link:
+                      the batch clears its canvasCode. Without this the only way to hide a goal
+                      after the fact was to revoke the whole link. */}
+                  <button
+                    className="btn btn-sm btn-outline-secondary text-nowrap"
+                    onClick={handleMakePublic}
+                    disabled={loading}
+                    title="Re-apply the private flags to this link"
+                  >
+                    {loading ? <span className="spinner-border spinner-border-sm" /> : 'Re-sync'}
+                  </button>
+                  <button
+                    className="btn btn-sm btn-outline-danger"
+                    onClick={handleRevoke}
+                    disabled={loading}
+                  >
+                    Revoke
+                  </button>
+                </div>
               </div>
             </>
           ) : (
             <>
               <p className="small mb-2 text-muted">
-                Make your goal roadmap publicly viewable via a shareable link.
-                Anyone with the link can view your goals (read-only).
+                Make your goal roadmap viewable by anyone with the link — no sign-in, read-only.
+                {privateCount
+                  ? ` ${privateCount} goal${privateCount === 1 ? '' : 's'} marked private will be excluded.`
+                  : ' Goals marked private in their editor are excluded.'}
               </p>
               <button
                 className="btn btn-sm btn-primary w-100"

@@ -283,6 +283,29 @@ export function sprintLabel(key: string, sprints: RoadmapSprint[]): string {
   return s?.name || s?.ref || 'Sprint';
 }
 
+/**
+ * A period's date range as "1 Jun – 31 Jul", or null when it has none.
+ *
+ * A sprint's name says what it is for; the dates say when it is, and a planning column is
+ * useless without them — "Sprint 24 — Taper" alone does not tell you whether dropping work on
+ * it means next week or next quarter. Quarters and years encode their own dates in the label
+ * already, so this returns null for them rather than repeating "Q3 2026" underneath itself.
+ */
+export function periodDateRange(
+  key: string, g: RoadmapGranularity, sprints: RoadmapSprint[] = [],
+): string | null {
+  if (g !== 'sprint' || key === UNSCHEDULED_COLUMN) return null;
+  const win = sprintWindow(sprints.find((x) => x.id === key) ?? { id: key });
+  if (!win) return null;
+  const fmt = (ms: number) => new Date(ms).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  const startYear = new Date(win.start).getFullYear();
+  const endYear = new Date(win.end).getFullYear();
+  // The year only appears when the sprint straddles one, where it is the whole point.
+  return startYear === endYear
+    ? `${fmt(win.start)} – ${fmt(win.end)}`
+    : `${fmt(win.start)} ${startYear} – ${fmt(win.end)} ${endYear}`;
+}
+
 /** Mid-sprint — the anchor a dropped goal's end date takes, matching the quarter/month rule. */
 export function sprintMidTimestamp(key: string, sprints: RoadmapSprint[]): number | null {
   const w = sprints.find((x) => x.id === key);

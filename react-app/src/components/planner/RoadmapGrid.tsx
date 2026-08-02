@@ -28,6 +28,7 @@ import {
   roadmapPeriodOrder,
   computePeriodKey,
   periodLabel,
+  periodDateRange,
   ROADMAP_ROW_AXIS,
   UNSCHEDULED_COLUMN,
   computeQuarterKey,
@@ -48,6 +49,7 @@ import AddStoryModal from '../AddStoryModal';
 import GoalRoadmapV6 from '../visualization/GoalRoadmapV6';
 import WeekPlanGrid from './WeekPlanGrid';
 import ThemeMultiSelect from '../shared/ThemeMultiSelect';
+import ShareGoalsPanel from '../shared/ShareGoalsPanel';
 import YearMultiSelect from '../shared/YearMultiSelect';
 import { useSprint } from '../../contexts/SprintContext';
 import { useSidebar } from '../../contexts/SidebarContext';
@@ -159,7 +161,9 @@ const RoadmapChip: React.FC<{
   onEdit: (goal: Goal) => void;
   onDragStartGoal: (goalId: string) => void;
   onDragEndGoal: () => void;
-}> = ({ goal, themeColor, onEdit, onDragStartGoal, onDragEndGoal }) => {
+  /** Public share view: the chip is a label, not a control. */
+  readOnly?: boolean;
+}> = ({ goal, themeColor, onEdit, onDragStartGoal, onDragEndGoal, readOnly = false }) => {
   const g = goal as any;
   // plannedStartDate is set on zero goals in the live data — startDate is what's actually
   // populated (104 of 119 goals), so anchoring this on plannedStartDate meant the "Start Qx"
@@ -170,15 +174,15 @@ const RoadmapChip: React.FC<{
 
   return (
     <div
-      draggable
-      onDragStart={(e) => {
+      draggable={!readOnly}
+      onDragStart={readOnly ? undefined : (e) => {
         e.dataTransfer.setData('text/plain', goal.id);
         e.dataTransfer.effectAllowed = 'move';
         onDragStartGoal(goal.id);
       }}
-      onDragEnd={onDragEndGoal}
-      onClick={() => onEdit(goal)}
-      title={`${goal.title} — click for detail, drag to reschedule`}
+      onDragEnd={readOnly ? undefined : onDragEndGoal}
+      onClick={readOnly ? undefined : () => onEdit(goal)}
+      title={readOnly ? goal.title : `${goal.title} — click for detail, drag to reschedule`}
       style={{
         borderLeft: `3px solid ${themeColor}`,
         // Theme variables throughout: fixed light greys here left white blocks glowing in dark mode.
@@ -186,7 +190,7 @@ const RoadmapChip: React.FC<{
         color: 'var(--text, #1a1a1a)',
         borderRadius: '0 6px 6px 0',
         padding: '4px 7px',
-        cursor: 'grab',
+        cursor: readOnly ? 'default' : 'grab',
         boxShadow: '0 1px 2px rgba(0,0,0,0.07)',
         fontSize: 11,
         opacity: isDone ? 0.55 : 1,
@@ -287,10 +291,19 @@ interface RoadmapGridProps {
   initialView?: 'grid' | 'gantt';
   /** Time axis to open on, from `?detailLevel=`. Changing it here writes back to the URL. */
   detail?: RoadmapDetail;
+  /**
+   * No dragging, no click-through, no create or share controls.
+   *
+   * For the public share page, which renders this same component so a shared roadmap looks
+   * exactly like the real one — rather than a third parallel implementation, which is what
+   * PublicRoadmapView used to be.
+   */
+  readOnly?: boolean;
 }
 
 const RoadmapGrid: React.FC<RoadmapGridProps> = ({
   showFilters = true, goals: providedGoals, initialView = 'grid', detail: detailProp,
+  readOnly = false,
 }) => {
   const { currentUser } = useAuth();
   const [ownGoals, setOwnGoals] = useState<Goal[]>([]);
@@ -783,7 +796,7 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
               ))}
             </div>
           )}
-          {view === 'grid' && (
+          {view === 'grid' && !readOnly && (
             <button
               type="button"
               className="grv5-select"
@@ -800,6 +813,12 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
               <Plus size={14} />
               {addsGoal ? 'Add goal' : 'Add story'}
             </button>
+          )}
+          {/* Public sharing. Only offered on the goal-shaped levels: the public view renders
+              goals, so sharing from the week grid would produce a link showing something the
+              user was not looking at. */}
+          {view === 'grid' && addsGoal && !readOnly && currentUser?.uid && (
+            <ShareGoalsPanel uid={currentUser.uid} />
           )}
           {view === 'grid' && detail !== 'week' && (
             <span className="text-muted small text-nowrap">{goals.length} goals</span>
@@ -926,6 +945,20 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
                 }}>
                   {periodLabel(qKey, granularity, sprints as any)}
                   {qKey === currentPeriodKey && <span style={{ marginLeft: 5, fontSize: 9, color: 'var(--brand, #3b82f6)' }}>▶ now</span>}
+                  {/* Sprint columns carry their window under the name: the name says what the
+                      sprint is for, the dates say when it is, and dropping work into a column
+                      is a scheduling decision you cannot make without both. */}
+                  {(() => {
+                    const range = periodDateRange(qKey, granularity, sprints as any);
+                    return range ? (
+                      <div style={{
+                        fontSize: 9, fontWeight: 400, color: 'var(--muted, #6b7280)',
+                        textAlign: 'center', marginTop: 1,
+                      }}>
+                        {range}
+                      </div>
+                    ) : null;
+                  })()}
                   {/* Capacity only means something against a weekly plan. With no
                       theme_allocations doc there is nothing to be over, so nothing is drawn. */}
                   {hasAllocationPlan && cap && (
@@ -1058,7 +1091,8 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
                           <RoadmapChip
                             key={g.id} goal={g}
                             themeColor={resolveGoalThemeColor(g, GLOBAL_THEMES) || theme.color}
-                            onEdit={(g) => showSidebar(g, 'goal')}
+                            readOnly={readOnly}
+                            onEdit={(g) => { if (!readOnly) showSidebar(g, 'goal'); }}
                             onDragStartGoal={(id) => setDrag({ kind: 'goal', id })}
                             onDragEndGoal={() => { setDrag(null); setDragOverCell(null); }}
                           />

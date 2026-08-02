@@ -10,6 +10,7 @@ import {
   computeSprintKey,
   roadmapSprintOrder,
   periodLabel,
+  periodDateRange,
   computePeriodKey,
   computeYearKey,
   quarterOrdinal,
@@ -226,6 +227,27 @@ describe('sprint granularity', () => {
   it('labels a column with the sprint name', () => {
     expect(periodLabel('s3', 'sprint', sprints)).toBe('S48');
     expect(periodLabel('unscheduled', 'sprint', sprints)).toBe('Backlog');
+  });
+
+  it('gives a sprint column its date window, which the name alone does not', () => {
+    const dated = [{ id: 'd1', name: 'S50', startDate: new Date(2026, 5, 1).getTime(), endDate: new Date(2026, 6, 31).getTime() }];
+    expect(periodDateRange('d1', 'sprint', dated)).toBe('1 Jun – 31 Jul');
+  });
+
+  it('adds the year only when the sprint straddles one', () => {
+    const straddling = [{ id: 'ny', startDate: new Date(2026, 11, 20).getTime(), endDate: new Date(2027, 0, 3).getTime() }];
+    expect(periodDateRange('ny', 'sprint', straddling)).toBe('20 Dec 2026 – 3 Jan 2027');
+  });
+
+  it('has no range for the Backlog, or for a sprint with unusable dates', () => {
+    expect(periodDateRange('unscheduled', 'sprint', sprints)).toBeNull();
+    expect(periodDateRange('nope', 'sprint', [{ id: 'nope' }])).toBeNull();
+  });
+
+  it('stays silent at quarter and year, where the label already carries the dates', () => {
+    // "Q3 2026" with "1 Jul – 30 Sep" underneath is the same fact twice.
+    expect(periodDateRange('2026-Q3', 'quarter')).toBeNull();
+    expect(periodDateRange('2026', 'year')).toBeNull();
   });
 
   it('falls forward to the next unfinished sprint when none contains today', () => {

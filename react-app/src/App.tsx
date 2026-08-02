@@ -345,6 +345,29 @@ function AppContent() {
   const enableAudit = process.env.REACT_APP_ENABLE_AUDIT === 'true';
   useEntityAudit(enableAudit && currentUser ? { currentUserId: currentUser.uid, currentUserEmail: currentUser.email, persona: currentPersona } : null);
 
+  /**
+   * Publicly shared surfaces, resolved BEFORE the login gate and outside SidebarLayout.
+   *
+   * These routes existed and the Firestore rules already allowed the reads unauthenticated
+   * (`isPublishedGoal()` / `isCanvasPublished()`), but every route in this app sat underneath
+   * the `if (!currentUser) return <LoginPage/>` below — so following a share link while signed
+   * out showed a login page. Sharing has never actually worked for the person receiving it.
+   *
+   * Rendered without the app chrome for everyone, signed in or not: a share link should look
+   * the same to the recipient as it does to the person sending it, and the nav is no use to
+   * someone with no account.
+   */
+  if (/^\/(share|public)\//.test(location.pathname)) {
+    return (
+      <ErrorBoundary>
+        <Routes>
+          <Route path="/share/:shareCode" element={<PublicGoalView />} />
+          <Route path="/public/roadmap/:shareCode" element={<PublicRoadmapView />} />
+        </Routes>
+      </ErrorBoundary>
+    );
+  }
+
   if (authLoading) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh' }}>
@@ -567,8 +590,8 @@ function AppContent() {
             <Route path="/changelog" element={<Navigate to="/dashboard" replace />} />
             
             {/* Public shared goals */}
-            <Route path="/share/:shareCode" element={<PublicGoalView />} />
-            <Route path="/public/roadmap/:shareCode" element={<PublicRoadmapView />} />
+            {/* /share and /public/roadmap are handled above, before the login gate — see the
+                comment there. Declaring them here too would be dead code. */}
             <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
 
