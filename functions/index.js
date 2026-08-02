@@ -17683,7 +17683,7 @@ exports.onTaskWritten = firestoreV2.onDocumentWritten('tasks/{taskId}', async (e
           profile: profileData,
           runId: `trigger_${Date.now()}`,
         });
-        if (forceStory) {
+        if (after.forceStoryConversion === true) {
           await ref.set({ forceStoryConversion: admin.firestore.FieldValue.delete() }, { merge: true });
         }
         return;
