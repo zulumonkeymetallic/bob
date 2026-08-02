@@ -64,6 +64,9 @@ import '../visualization/GoalRoadmapV5.css';
 import { Z } from '../../utils/layoutTokens';
 import { accentTint, themeVars } from '../../utils/themeVars';
 import { useDeviceInfo } from '../../utils/deviceDetection';
+import { isDoneStatus } from '../../utils/workStatus';
+import { proposeRealignments, type RealignProposal } from '../../utils/goalStoryRealignment';
+import GoalMoveDeferralModal from './GoalMoveDeferralModal';
 
 const GOAL_KIND_ICON: Record<string, string> = {
   focus: '◆', umbrella: '◈', phase: '◉', leaf: '○',
@@ -401,6 +404,7 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
    * year and quarter are grids of goals, sprint and week are grids of stories. Offering "Add
    * goal" on the week grid would create something that cannot appear on it.
    */
+  const [deferral, setDeferral] = useState<{ goalTitle: string; proposals: RealignProposal[] } | null>(null);
   const [showAddGoal, setShowAddGoal] = useState(false);
   const [showAddStory, setShowAddStory] = useState(false);
   const addsGoal = detail === 'year' || detail === 'quarter';
@@ -714,13 +718,28 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
       await updateDoc(doc(db, 'goals', goalId), {
         startDate: next.startDate, endDate: next.endDate, updatedAt: serverTimestamp(),
       } as any);
+
+      /**
+       * The goal has moved; its stories have not. Overnight the alignment job would repoint
+       * them silently, so ask now — with that job's own answer — rather than letting the user
+       * find out tomorrow. Only opens when something would actually change.
+       */
+      const proposals = proposeRealignments(
+        next.startDate,
+        stories.filter((s) => s.goalId === goalId) as any,
+        sprints as any,
+        (status) => isDoneStatus(status, 'story'),
+      );
+      if (proposals.length > 0) {
+        setDeferral({ goalTitle: goal.title || 'This goal', proposals });
+      }
     } catch (err) {
       console.error('Failed to reschedule goal', goalId, err);
     }
     // granularity and sprints MUST be dependencies: without them a drop captured the
     // granularity in force when the callback was first created, so switching to sprint
     // columns and dragging wrote quarter dates.
-  }, [goals, granularity, sprints]);
+  }, [goals, granularity, sprints, stories]);
 
   /**
    * A story's sprint is the same explicit `sprintId` field the Kanban and sprint planner read
@@ -1114,6 +1133,14 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
 
       {/* The same two modals the goal list and card views use, so a goal or story created here
           is identical to one created anywhere else — no second creation path to drift. */}
+      {deferral && (
+        <GoalMoveDeferralModal
+          show
+          onClose={() => setDeferral(null)}
+          goalTitle={deferral.goalTitle}
+          proposals={deferral.proposals}
+        />
+      )}
       <AddGoalModal show={showAddGoal} onClose={() => setShowAddGoal(false)} />
       <AddStoryModal show={showAddStory} onClose={() => setShowAddStory(false)} />
 
