@@ -1272,6 +1272,64 @@ exports.listDriveFolder = httpsV2.onCall(
   }),
 );
 
+// ===== AI delegation =====
+// Ported from ~/.hermes/scripts/run_delegation_cycle.py, which only ran when Jim's Mac was
+// awake and idle. See functions/aiDelegation.js for the model-routing rationale.
+const aiDelegation = require('./aiDelegation');
+
+exports.runAiDelegationNow = httpsV2.onCall(
+  { secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, OPENROUTER_API_KEY_SECRET], timeoutSeconds: 540, memory: '512MiB' },
+  secureFunction(async (req) => {
+    const uid = req?.auth?.uid;
+    if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+    try {
+      return await aiDelegation.runDelegationCycle(uid, {
+        limit: Math.min(20, Number(req.data?.limit) || aiDelegation.MAX_ITEMS_PER_RUN),
+        // dryRun classifies and reports without calling a model or writing anything — the
+        // safe way to see what the queue would do before letting it loose.
+        dryRun: req.data?.dryRun === true,
+      });
+    } catch (err) {
+      throw new httpsV2.HttpsError('internal', err?.message || 'Delegation cycle failed');
+    }
+  }),
+);
+
+/**
+ * Nightly, after the orchestration chain. Runs for every user with something flagged, rather
+ * than only whoever happens to be signed in — the whole point of moving this off the Mac.
+ */
+exports.runAiDelegationNightly = require('firebase-functions/v2/scheduler').onSchedule(
+  {
+    schedule: '30 2 * * *',
+    timeZone: 'Europe/London',
+    region: 'europe-west2',
+    secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, OPENROUTER_API_KEY_SECRET],
+    timeoutSeconds: 540,
+    memory: '512MiB',
+  },
+  async () => {
+    const db = admin.firestore();
+    // Both are top-level collections, so a single-field query on flaggedToAi is all this
+    // needs — Firestore indexes single fields automatically, no composite required.
+    const uids = new Set();
+    for (const collection of ['stories', 'tasks']) {
+      const snap = await db.collection(collection)
+        .where('flaggedToAi', '==', true).limit(200).get();
+      snap.docs.forEach((d) => { const u = d.data()?.ownerUid; if (u) uids.add(u); });
+    }
+    for (const uid of uids) {
+      try {
+        const out = await aiDelegation.runDelegationCycle(uid, { limit: aiDelegation.MAX_ITEMS_PER_RUN });
+        console.log(`[aiDelegation] ${uid}: processed ${out.processed}`);
+      } catch (err) {
+        // One user's failure must not stop the others.
+        console.error(`[aiDelegation] ${uid} failed:`, err?.message);
+      }
+    }
+  },
+);
+
 // ===== Spec wrappers: syncCalendarAndTasks, autoEnrichTasks, taskStoryConversion, plannerLLM
 exports.syncCalendarAndTasks = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] },
   secureFunction(async (req) => {

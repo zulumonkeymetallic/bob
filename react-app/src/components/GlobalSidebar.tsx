@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Card, Button, Badge, Form, Row, Col, Modal, ListGroup } from 'react-bootstrap';
-import { X, Edit3, Save, Calendar, Target, BookOpen, Clock, Hash, ChevronLeft, ChevronRight, Trash2, Plus, MessageCircle, Link as LinkIcon, Copy, MessageSquare, Wand2, ExternalLink } from 'lucide-react';
+import { X, Edit3, Save, Calendar, Target, BookOpen, Clock, Hash, ChevronLeft, ChevronRight, Trash2, Plus, MessageCircle, Link as LinkIcon, Copy, MessageSquare, Wand2, ExternalLink, FolderOpen } from 'lucide-react';
 import { httpsCallable } from 'firebase/functions';
 import { functions } from '../firebase';
 import { useGlobalThemes } from '../hooks/useGlobalThemes';
@@ -16,6 +16,7 @@ import { DETAIL_PANE_ID } from './layout/TabletPanes';
 import GoalChatModal from './GoalChatModal';
 import ResearchDocModal from './ResearchDocModal';
 import EditStoryModal from './EditStoryModal';
+import DriveFilesModal from './shared/DriveFilesModal';
 import EditGoalModal from './EditGoalModal';
 import EditTaskModal from './EditTaskModal';
 import TagInput from './common/TagInput';
@@ -249,6 +250,7 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
   const [newNote, setNewNote] = useState('');
   const [showChat, setShowChat] = useState(false);
   const [showResearch, setShowResearch] = useState(false);
+  const [showDriveFiles, setShowDriveFiles] = useState(false);
   const [orchestrating, setOrchestrating] = useState(false);
   // Quick edit state for inline updates
   const [quickEdit, setQuickEdit] = useState<any>({});
@@ -1014,6 +1016,17 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                       <MessageSquare size={16} />
                     </Button>
                   )}
+                  {/* The entity's Drive folder. Opening this CREATES the folder chain if it
+                      does not exist yet — that is the server's job, not an error state. */}
+                  <Button
+                    variant="link"
+                    size="sm"
+                    style={{ color: actionIconColor, padding: '4px' }}
+                    onClick={() => setShowDriveFiles(true)}
+                    title="Files in Google Drive"
+                  >
+                    <FolderOpen size={16} />
+                  </Button>
                   <Button
                     variant="link"
                     size="sm"
@@ -1611,6 +1624,16 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
           </Button>
         </Modal.Footer>
       </Modal>
+
+      {selectedItem && selectedType && (
+        <DriveFilesModal
+          show={showDriveFiles}
+          onClose={() => setShowDriveFiles(false)}
+          entityType={selectedType}
+          entityId={selectedItem.id}
+          entityLabel={(selectedItem as any).ref || selectedItem.title || 'Files'}
+        />
+      )}
 
       {/* Full Edit Modals */}
       {showFullEditor && selectedType === 'story' && (
