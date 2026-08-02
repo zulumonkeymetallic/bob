@@ -4,7 +4,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
 import { useSprint } from '../../contexts/SprintContext';
 import { db } from '../../firebase';
-import { collection, query, where, onSnapshot, doc, updateDoc, addDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, updateDoc, addDoc, getDocs } from 'firebase/firestore';
 import { Story, Task, Goal, Sprint } from '../../types';
 import { CheckCircle, RotateCcw, TrendingUp, Target, Calendar, ArrowRight, AlertCircle } from 'lucide-react';
 import { isStatus } from '../../utils/statusHelpers';
@@ -69,10 +69,17 @@ const SprintCloseDialog: React.FC<SprintCloseDialogProps> = ({ show, onHide, spr
   const [goals, setGoals] = useState<Goal[]>([]);
   const [sprints, setSprints] = useState<Sprint[]>([]);
   const [calendarBlocks, setCalendarBlocks] = useState<any[]>([]);
+  /**
+   * Blocks in the MIGRATION TARGET's window, fetched on demand once a target is picked.
+   * Separate from `calendarBlocks` (the closing sprint's window) because the two windows do
+   * not overlap, and loading one query wide enough to cover both means loading everything.
+   */
+  const [targetBlocks, setTargetBlocks] = useState<any[]>([]);
   const [weeklyPlannerMinutes, setWeeklyPlannerMinutes] = useState(0);
 
   // UI states
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [closing, setClosing] = useState(false);
   const [step, setStep] = useState<'metrics' | 'retrospective' | 'migration' | 'complete'>('metrics');
 
@@ -104,6 +111,43 @@ const SprintCloseDialog: React.FC<SprintCloseDialogProps> = ({ show, onHide, spr
     recommendation?: string;
   } | null>(null);
 
+  /**
+   * The closing sprint's window as plain millisecond bounds. Every date on a sprint can arrive
+   * as a number, an ISO string or a Firestore Timestamp depending on who wrote it, so it goes
+   * through getTimestamp before being used as a query bound.
+   */
+  const sprintWindow = React.useMemo(() => ({
+    start: getTimestamp(sprint?.startDate) ?? 0,
+    end: getTimestamp(sprint?.endDate) ?? Date.now(),
+  }), [sprint?.startDate, sprint?.endDate]);
+
+  /**
+   * Blocks in the chosen migration target's window. A one-off read rather than a listener:
+   * it feeds a capacity number the user looks at once before confirming, and a live
+   * subscription per target selection would be another few thousand documents for nothing.
+   */
+  useEffect(() => {
+    if (!currentUser || !targetSprintId) { setTargetBlocks([]); return; }
+    const target = sprints.find(s => s.id === targetSprintId);
+    const start = getTimestamp(target?.startDate);
+    const end = getTimestamp(target?.endDate);
+    if (start == null || end == null) { setTargetBlocks([]); return; }
+
+    let cancelled = false;
+    getDocs(query(
+      collection(db, 'calendar_blocks'),
+      where('ownerUid', '==', currentUser.uid),
+      where('start', '>=', start),
+      where('start', '<=', end),
+    ))
+      .then((snap) => { if (!cancelled) setTargetBlocks(snap.docs.map(d => ({ id: d.id, ...d.data() }))); })
+      .catch((err) => {
+        console.error('[SprintCloseDialog] target sprint blocks query failed', err);
+        if (!cancelled) setTargetBlocks([]);
+      });
+    return () => { cancelled = true; };
+  }, [currentUser, targetSprintId, sprints]);
+
   // Validate capacity when target sprint changes
   useEffect(() => {
     const validateAndUpdate = async () => {
@@ -116,7 +160,7 @@ const SprintCloseDialog: React.FC<SprintCloseDialogProps> = ({ show, onHide, spr
     };
     
     validateAndUpdate();
-  }, [step, targetSprintId, stories, calendarBlocks, sprints]);
+  }, [step, targetSprintId, stories, targetBlocks, sprints]);
 
   // Metrics state
   const [metricsSnapshot, setMetricsSnapshot] = useState<SprintMetricsSnapshot | null>(null);
@@ -126,7 +170,27 @@ const SprintCloseDialog: React.FC<SprintCloseDialogProps> = ({ show, onHide, spr
     if (!show || !currentUser || !sprint) return;
 
     setLoading(true);
+    setLoadError(null);
     const unsubscribes: (() => void)[] = [];
+
+    /**
+     * The spinner clears once EVERY listener has reported — success or failure — not when one
+     * particular listener happens to fire.
+     *
+     * It used to clear only inside the calendar_blocks callback, with no error handler on any
+     * of the six listeners. So a single failing query left `loading` true forever and the
+     * dialog sat on "Loading sprint data..." with nothing anywhere saying why.
+     */
+    const reported = new Set<string>();
+    const markReported = (key: string) => {
+      reported.add(key);
+      if (reported.size >= 6) setLoading(false);
+    };
+    const onFailure = (key: string) => (err: any) => {
+      console.error(`[SprintCloseDialog] ${key} query failed`, err);
+      setLoadError(`Could not load ${key}: ${err?.message || err?.code || 'unknown error'}`);
+      markReported(key);
+    };
 
     // Load stories for this sprint
     const storiesQuery = query(
@@ -138,7 +202,8 @@ const SprintCloseDialog: React.FC<SprintCloseDialogProps> = ({ show, onHide, spr
 
     unsubscribes.push(onSnapshot(storiesQuery, (snap) => {
       setStories(snap.docs.map(d => ({ id: d.id, ...d.data() } as Story)));
-    }));
+      markReported('stories');
+    }, onFailure('stories')));
 
     // Load tasks for this sprint
     const tasksQuery = query(
@@ -151,7 +216,8 @@ const SprintCloseDialog: React.FC<SprintCloseDialogProps> = ({ show, onHide, spr
     unsubscribes.push(onSnapshot(tasksQuery, (snap) => {
       const taskDocs = snap.docs.map(d => d.data());
       setTasks(taskDocs as Task[]);
-    }));
+      markReported('tasks');
+    }, onFailure('tasks')));
 
     // Load all goals
     const goalsQuery = query(
@@ -162,7 +228,8 @@ const SprintCloseDialog: React.FC<SprintCloseDialogProps> = ({ show, onHide, spr
 
     unsubscribes.push(onSnapshot(goalsQuery, (snap) => {
       setGoals(snap.docs.map(d => ({ id: d.id, ...d.data() } as Goal)));
-    }));
+      markReported('goals');
+    }, onFailure('goals')));
 
     // Load other sprints for migration target
     const sprintsQuery = query(
@@ -174,18 +241,31 @@ const SprintCloseDialog: React.FC<SprintCloseDialogProps> = ({ show, onHide, spr
     unsubscribes.push(onSnapshot(sprintsQuery, (snap) => {
       const allSprints = snap.docs.map(d => ({ id: d.id, ...d.data() } as Sprint));
       setSprints(allSprints.filter(s => s.id !== sprint.id));
-    }));
+      markReported('sprints');
+    }, onFailure('sprints')));
 
-    // Load calendar blocks for capacity calculation
+    /**
+     * Calendar blocks for the capacity metrics — CONSTRAINED TO THE CLOSING SPRINT'S WINDOW.
+     *
+     * This query used to fetch every block the user owns. On a real account that is ~4,800
+     * documents streamed into a modal before it will render anything, which is the "spinning
+     * circle" — the dialog was not hung so much as downloading a year of calendar history to
+     * work out one sprint's capacity. calculateMetrics discards everything outside this window
+     * anyway. Served by the existing (ownerUid, start) composite index.
+     *
+     * The migration step's target window is fetched separately, on demand — see targetBlocks.
+     */
     const blocksQuery = query(
       collection(db, 'calendar_blocks'),
-      where('ownerUid', '==', currentUser.uid)
+      where('ownerUid', '==', currentUser.uid),
+      where('start', '>=', sprintWindow.start),
+      where('start', '<=', sprintWindow.end)
     );
 
     unsubscribes.push(onSnapshot(blocksQuery, (snap) => {
       setCalendarBlocks(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-      setLoading(false);
-    }));
+      markReported('calendar blocks');
+    }, onFailure('calendar blocks')));
 
     const allocationsRef = doc(db, 'theme_allocations', currentUser.uid);
     unsubscribes.push(onSnapshot(allocationsRef, (allocSnap) => {
@@ -197,14 +277,21 @@ const SprintCloseDialog: React.FC<SprintCloseDialogProps> = ({ show, onHide, spr
         return sum + Math.max(0, end - start);
       }, 0);
       setWeeklyPlannerMinutes(totalMinutes);
+      markReported('theme allocations');
     }, () => {
       setWeeklyPlannerMinutes(0);
+      // Not surfaced as a load error: an absent allocations doc is normal, and
+      // validateCapacity already falls back to calendar availability.
+      markReported('theme allocations');
     }));
 
     return () => {
       unsubscribes.forEach(unsub => unsub());
     };
-  }, [show, currentUser, currentPersona, sprint]);
+    // sprintWindow rather than `sprint`: SprintContext rebuilds its sprint objects on every
+    // snapshot, so depending on the object identity re-subscribed all six listeners (and reset
+    // the spinner) each time. The window is what this effect actually reads.
+  }, [show, currentUser, currentPersona, sprint.id, sprintWindow.start, sprintWindow.end]);
 
   // Calculate metrics when data loads
   useEffect(() => {
@@ -325,7 +412,9 @@ const SprintCloseDialog: React.FC<SprintCloseDialogProps> = ({ show, onHide, spr
     const sprintWeeks = Math.max(1, Math.ceil((targetEnd.getTime() - targetStart.getTime()) / (1000 * 60 * 60 * 24 * 7)));
     const plannerCapacityHours = weeklyPlannerMinutes > 0 ? (weeklyPlannerMinutes / 60) * sprintWeeks : null;
 
-    const targetBlocks = calendarBlocks.filter(block => {
+    // targetBlocks is already scoped to the target window by its query; the date test stays so
+    // the maths is correct whatever the caller passes in.
+    const capacityBlocks = targetBlocks.filter(block => {
       const blockStart = getTimestamp(block.start || block.startTime);
       return blockStart && blockStart >= targetStart.getTime() && blockStart <= targetEnd.getTime()
         && !block.allDay
@@ -333,7 +422,7 @@ const SprintCloseDialog: React.FC<SprintCloseDialogProps> = ({ show, onHide, spr
         && (block.theme === 'Growth' || block.theme === 'Work' || !block.theme);
     });
 
-    const fallbackCapacityHours = targetBlocks.reduce((sum, block) => {
+    const fallbackCapacityHours = capacityBlocks.reduce((sum, block) => {
       const startMs = getTimestamp(block.start || block.startTime);
       const endMs = getTimestamp(block.end || block.endTime);
       if (!startMs || !endMs || endMs <= startMs) return sum;
@@ -357,7 +446,7 @@ const SprintCloseDialog: React.FC<SprintCloseDialogProps> = ({ show, onHide, spr
 
     const openStoryIds = new Set(openStories.map(s => s.id));
     const openTaskIds = new Set(openTasks.map(t => t.id));
-    const relevantBlocks = calendarBlocks.filter(block => {
+    const relevantBlocks = targetBlocks.filter(block => {
       const startMs = getTimestamp(block.start || block.startTime);
       const endMs = getTimestamp(block.end || block.endTime);
       if (!startMs || !endMs || endMs <= startMs) return false;
@@ -447,6 +536,10 @@ const SprintCloseDialog: React.FC<SprintCloseDialogProps> = ({ show, onHide, spr
         <Modal.Body className="text-center p-5">
           <Spinner animation="border" />
           <p className="mt-3">Loading sprint data...</p>
+          {/* Dismissable even while loading. Without this the only way out of a slow or stuck
+              load was reloading the page — the modal had no close control at all in this
+              branch. */}
+          <Button variant="outline-secondary" size="sm" onClick={onHide}>Cancel</Button>
         </Modal.Body>
       </Modal>
     );
@@ -462,6 +555,24 @@ const SprintCloseDialog: React.FC<SprintCloseDialogProps> = ({ show, onHide, spr
       </Modal.Header>
 
       <Modal.Body>
+        {/* A query that failed used to be invisible: the listeners had no error handlers, so
+            the dialog either span forever or rendered a body with missing numbers and no hint
+            that anything had gone wrong. */}
+        {loadError && (
+          <Alert variant="warning" className="d-flex align-items-start gap-2">
+            <AlertCircle size={18} className="flex-shrink-0 mt-1" />
+            <div>
+              <strong>Some sprint data could not be loaded.</strong>
+              <div className="small">{loadError}</div>
+              <div className="small text-muted">The figures below may be incomplete.</div>
+            </div>
+          </Alert>
+        )}
+        {step === 'metrics' && !metricsSnapshot && (
+          <Alert variant="danger">
+            Sprint metrics could not be calculated. Check the sprint&apos;s start and end dates.
+          </Alert>
+        )}
         {step === 'metrics' && metricsSnapshot && (
           <div>
             <h5 className="mb-4">📊 Sprint Metrics Snapshot</h5>

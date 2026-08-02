@@ -108,6 +108,19 @@ export const Z = {
    * container's stacking context regardless, so this only decides order among siblings.
    */
   menu: 1075,
+
+  /**
+   * A portalled popover anchored to a control INSIDE a modal — a combobox list, a date picker.
+   *
+   * It has to clear 9999, not Bootstrap's 1055, because `styles/KanbanFixes.css` raises every
+   * `.modal` to `z-index: 9999 !important` app-wide (and the backdrop to 9998). That override
+   * squats far above the range this file documents, so a popover at `menu` renders behind the
+   * dialog it belongs to and reads as simply not opening.
+   *
+   * The right fix is to delete that override and let modals sit at 1055; until then this is the
+   * number that works. Nothing else should go above it.
+   */
+  menuInModal: 10000,
 } as const;
 
 /**

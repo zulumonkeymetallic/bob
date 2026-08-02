@@ -21,6 +21,8 @@ import { withTimeout } from '../utils/withTimeout';
 import { evaluateStorySprintAlignment } from '../utils/sprintAlignment';
 import { errorMessage } from '../utils/errorMessage';
 import { buildQuarterOptions, currentQuarterKey, quarterKeyLabel, quarterKeyToMidpointMs } from '../utils/quarters';
+import GoalSearchSelect from './shared/GoalSearchSelect';
+import { fetchGoalsForPicker, loadCachedGoals, type GoalOption } from '../utils/goalPickerCache';
 
 const CREATE_TIMEOUT_MS = 15000;
 
@@ -77,15 +79,14 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
     dueDate: getTomorrowStr(),
     startQuarter: currentQuarterKey(),
   });
-  // Free-text search boxes for the "searchable by title" Goal/Story pickers
-  // (Story's Linked Goal, Task's Parent Story). Mirrors the pattern in
-  // EditTaskModal: typed text resolves to a real id on blur via exact title match.
-  const [goalInput, setGoalInput] = useState('');
-  const [parentGoalInput, setParentGoalInput] = useState('');
+  // Free-text search box for Task's "Parent Story" picker. Typed text resolves to a real id
+  // on blur via exact title match — the goal pickers no longer work this way, see
+  // GoalSearchSelect for why.
   const [storyInput, setStoryInput] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
-  const [goals, setGoals] = useState<Goal[]>([]);
+  const [goalsLoading, setGoalsLoading] = useState(false);
+  const [goals, setGoals] = useState<GoalOption[]>([]);
   const [stories, setStories] = useState<StoryOption[]>([]);
   const [showIntake, setShowIntake] = useState(false);
   const [showIntentBroker, setShowIntentBroker] = useState(false);
@@ -179,83 +180,61 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
     loadActiveFocusGoals();
   }, [currentUser, currentPersona]);
 
-  // Load goals and stories whenever the quick-add modal is open — the simplified
-  // flow needs goals for Story's "Linked Goal" picker and stories for Task's
-  // "Parent Story" picker, regardless of which type is currently selected.
+  /**
+   * Goals and stories for the quick-add pickers.
+   *
+   * Two independent loads, not one `Promise.all`. They used to be awaited together, so the
+   * Linked Goal box stayed empty until every STORY had also downloaded — ~920 of them on a
+   * real account. The goal picker does not need stories and must not wait for them.
+   *
+   * Goals additionally hydrate from cache synchronously, so on the second open the list is
+   * there before the modal has finished animating and the network round-trip only ever
+   * corrects it. See goalPickerCache.
+   */
   useEffect(() => {
-    const loadGoalsAndStories = async () => {
-      if (!currentUser || !showQuickAdd) return;
+    if (!currentUser || !showQuickAdd) return;
+    let cancelled = false;
 
-      try {
-        console.log('📊 FloatingActionButton: Loading goals and stories for quick add', {
-          action: 'load_goals_stories_start',
-          user: currentUser.uid,
-          persona: currentPersona
+    const cached = loadCachedGoals(currentUser.uid);
+    if (cached?.length) {
+      setGoals(cached);
+      setGoalsLoading(false);
+    } else {
+      setGoalsLoading(true);
+    }
+
+    fetchGoalsForPicker(currentUser.uid)
+      .then((fresh) => { if (!cancelled) setGoals(fresh); })
+      .catch((error) => {
+        console.error('❌ FloatingActionButton: Failed to load goals', {
+          action: 'load_goals_error',
+          error: errorMessage(error),
         });
+      })
+      .finally(() => { if (!cancelled) setGoalsLoading(false); });
 
-        // Do NOT orderBy('priority')/('createdAt') — Firestore omits documents missing
-        // that field, which hid priority-less goals from the picker. Sort client-side if needed.
-        const goalsQuery = query(
-          collection(db, 'goals'),
-          where('ownerUid', '==', currentUser.uid)
-        );
-        const storiesQuery = query(
-          collection(db, 'stories'),
-          where('ownerUid', '==', currentUser.uid)
-        );
-        const [goalsSnapshot, storiesSnapshot] = await Promise.all([
-          getDocs(goalsQuery),
-          getDocs(storiesQuery),
-        ]);
-        const goalsData = goalsSnapshot.docs.map(doc => ({
+    // Stories back Task's "Parent Story" picker only.
+    getDocs(query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid)))
+      .then((snap) => {
+        if (cancelled) return;
+        setStories(snap.docs.map(doc => ({
           id: doc.id,
           title: doc.data().title,
-          theme: doc.data().theme,
-          parentGoalId: doc.data().parentGoalId || null,
-        }));
-        const storiesData = storiesSnapshot.docs.map(doc => ({
-          id: doc.id,
-          title: doc.data().title,
-          goalId: doc.data().goalId || ''
-        }));
-
-        setGoals(goalsData);
-        setStories(storiesData);
-
-        console.log('✅ FloatingActionButton: Goals and stories loaded successfully', {
-          action: 'load_goals_stories_success',
-          goalsCount: goalsData.length,
-          storiesCount: storiesData.length,
+          goalId: doc.data().goalId || '',
+        })));
+      })
+      .catch((error) => {
+        console.error('❌ FloatingActionButton: Failed to load stories', {
+          action: 'load_stories_error',
+          error: errorMessage(error),
         });
+      });
 
-      } catch (error) {
-        console.error('❌ FloatingActionButton: Failed to load goals/stories', {
-          action: 'load_goals_stories_error',
-          error: errorMessage(error)
-        });
-      }
-    };
-
-    loadGoalsAndStories();
+    return () => { cancelled = true; };
   }, [currentUser, currentPersona, showQuickAdd]);
 
-  // Resolve free-text "search by title" inputs to real ids — matches the pattern in
-  // EditTaskModal's resolveGoalSelection/resolveStorySelection: exact title match on
-  // blur, clearing the underlying id if the typed text doesn't match anything.
-  const resolveGoalSelection = (value: string) => {
-    const val = value.trim();
-    const match = goals.find((g) => g.title === val);
-    setQuickAddData((prev) => ({ ...prev, goalId: match ? match.id : '' }));
-    setGoalInput(match ? match.title : val);
-  };
-
-  const resolveParentGoalSelection = (value: string) => {
-    const val = value.trim();
-    const match = goals.find((g) => g.title === val);
-    setQuickAddData((prev) => ({ ...prev, parentGoalId: match ? match.id : '' }));
-    setParentGoalInput(match ? match.title : val);
-  };
-
+  // Resolve free-text "search by title" input to a real id — exact title match on blur,
+  // clearing the underlying id if the typed text doesn't match anything.
   const resolveStorySelection = (value: string) => {
     const val = value.trim();
     const match = stories.find((s) => s.title === val);
@@ -500,8 +479,6 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
         dueDate: getTomorrowStr(),
         startQuarter: currentQuarterKey(),
       });
-      setGoalInput('');
-      setParentGoalInput('');
       setStoryInput('');
 
       // Auto-close after success
@@ -533,9 +510,11 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
       ...prev,
       persona: (currentPersona || 'personal') as 'personal' | 'work',
       dueDate: getTomorrowStr(),
+      // Cleared explicitly: the goal pickers now render from these ids rather than from a
+      // separate text box, so a stale id would reopen the modal showing last time's goal.
+      goalId: '',
+      parentGoalId: '',
     }));
-    setGoalInput('');
-    setParentGoalInput('');
     setStoryInput('');
     setSubmitResult(null);
     setShowQuickAdd(true);
@@ -803,27 +782,17 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
                     pickers below. */}
                 <Form.Group className="mb-3">
                   <Form.Label>Parent Goal</Form.Label>
-                  <Form.Control
-                    list="fab-parent-goal-options"
-                    value={parentGoalInput}
-                    onChange={(e) => setParentGoalInput(e.target.value)}
-                    onBlur={(e) => resolveParentGoalSelection(e.target.value)}
-                    placeholder="Search goals by title... (optional)"
+                  <GoalSearchSelect
+                    id="fab-parent-goal"
+                    goals={goals}
+                    value={quickAddData.parentGoalId}
+                    loading={goalsLoading}
+                    placeholder="Search goals by title or ref... (optional)"
+                    onChange={(goalId) => setQuickAddData((prev) => ({ ...prev, parentGoalId: goalId }))}
                   />
-                  <datalist id="fab-parent-goal-options">
-                    {goals.map(g => (
-                      <option key={g.id} value={g.title} />
-                    ))}
-                  </datalist>
-                  {parentGoalInput.trim() && !quickAddData.parentGoalId ? (
-                    <Form.Text className="text-warning">
-                      No goal matches "{parentGoalInput.trim()}" — pick one from the list or leave blank.
-                    </Form.Text>
-                  ) : (
-                    <Form.Text className="text-muted">
-                      Leave blank for a top-level goal.
-                    </Form.Text>
-                  )}
+                  <Form.Text className="text-muted">
+                    Leave blank for a top-level goal.
+                  </Form.Text>
                 </Form.Group>
 
                 <Form.Group className="mb-3">
@@ -859,27 +828,16 @@ const FloatingActionButton: React.FC<FloatingActionButtonProps> = ({ onImportCli
               <>
                 <Form.Group className="mb-3">
                   <Form.Label>Linked Goal *</Form.Label>
-                  <Form.Control
-                    list="fab-goal-options"
-                    value={goalInput}
-                    onChange={(e) => setGoalInput(e.target.value)}
-                    onBlur={(e) => resolveGoalSelection(e.target.value)}
-                    placeholder="Search goals by title..."
+                  <GoalSearchSelect
+                    id="fab-goal"
+                    goals={goals}
+                    value={quickAddData.goalId}
+                    loading={goalsLoading}
+                    onChange={(goalId) => setQuickAddData((prev) => ({ ...prev, goalId }))}
                   />
-                  <datalist id="fab-goal-options">
-                    {goals.map(g => (
-                      <option key={g.id} value={g.title} />
-                    ))}
-                  </datalist>
-                  {goalInput.trim() && !quickAddData.goalId ? (
-                    <Form.Text className="text-warning">
-                      No goal matches "{goalInput.trim()}" — pick one from the list.
-                    </Form.Text>
-                  ) : (
-                    <Form.Text className="text-muted">
-                      Stories must link to a goal.
-                    </Form.Text>
-                  )}
+                  <Form.Text className="text-muted">
+                    Stories must link to a goal. Type any part of the title or a GR- ref.
+                  </Form.Text>
                 </Form.Group>
 
                 {(_availableSprints as any[])?.length > 0 && (
