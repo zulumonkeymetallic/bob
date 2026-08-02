@@ -1277,8 +1277,12 @@ exports.listDriveFolder = httpsV2.onCall(
 // awake and idle. See functions/aiDelegation.js for the model-routing rationale.
 const aiDelegation = require('./aiDelegation');
 
+// 256MiB and a low instance cap, not the 512MiB these first asked for: the project is at its
+// Cloud Run CPU quota for europe-west2 (274 functions), and the larger allocation was refused
+// outright at deploy — "Quota exceeded for total allowable CPU per project per region". This
+// work is I/O bound anyway; it waits on an LLM and the Drive API, it does not hold much.
 exports.runAiDelegationNow = httpsV2.onCall(
-  { secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, OPENROUTER_API_KEY_SECRET], timeoutSeconds: 540, memory: '512MiB' },
+  { secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, OPENROUTER_API_KEY_SECRET], timeoutSeconds: 540, memory: '256MiB', maxInstances: 2 },
   secureFunction(async (req) => {
     const uid = req?.auth?.uid;
     if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
@@ -1306,7 +1310,8 @@ exports.runAiDelegationNightly = require('firebase-functions/v2/scheduler').onSc
     region: 'europe-west2',
     secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, OPENROUTER_API_KEY_SECRET],
     timeoutSeconds: 540,
-    memory: '512MiB',
+    memory: '256MiB',
+    maxInstances: 1,
   },
   async () => {
     const db = admin.firestore();
