@@ -68,6 +68,7 @@ const EDGE_PAD = 16;
 
 const THEME_OVERLAY_STORAGE_KEY = 'bob-roadmap-week-show-theme-allocations';
 const BACKLOG_SCOPE_STORAGE_KEY = 'bob-roadmap-week-backlog-scope';
+const SHOW_DONE_STORAGE_KEY = 'bob-roadmap-week-show-done';
 
 type ThemeAllocationRow = {
   dayOfWeek: number;
@@ -228,6 +229,9 @@ const WeekPlanGrid: React.FC<WeekPlanGridProps> = ({ weekStart, planningMode = '
   const [feedback, setFeedback] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
   /** Theme allocations are context, not content — off is a legitimate way to work. */
   const [showAllocations, setShowAllocations] = useState<boolean>(() => readFlag(THEME_OVERLAY_STORAGE_KEY, true));
+  /** Completed work is hidden by default — a plan is about what is left. Persisted like the
+   *  allocations toggle, so the choice survives a reload. */
+  const [showDone, setShowDone] = useState<boolean>(() => readFlag(SHOW_DONE_STORAGE_KEY, false));
   /**
    * 'sprint' is the focused pile; 'all' is every open story and task with nothing on the
    * calendar this week — the answer to "did the orchestrator miss anything".
@@ -242,6 +246,9 @@ const WeekPlanGrid: React.FC<WeekPlanGridProps> = ({ weekStart, planningMode = '
   useEffect(() => {
     try { window.localStorage.setItem(BACKLOG_SCOPE_STORAGE_KEY, backlogScope); } catch { /* private mode */ }
   }, [backlogScope]);
+  useEffect(() => {
+    try { window.localStorage.setItem(SHOW_DONE_STORAGE_KEY, showDone ? '1' : '0'); } catch { /* private mode */ }
+  }, [showDone]);
 
   const days = useMemo(
     () => Array.from({ length: VISIBLE_DAYS }, (_, i) => new Date(startOfDayMs(weekStart) + i * DAY_MS)),
@@ -497,6 +504,10 @@ const WeekPlanGrid: React.FC<WeekPlanGridProps> = ({ weekStart, planningMode = '
           {showAllocations ? <Eye size={14} /> : <EyeOff size={14} />}
           Theme allocations
         </label>
+        <label className="small d-flex align-items-center gap-1" style={{ marginBottom: 0, cursor: 'pointer' }}>
+          <input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} />
+          Show done
+        </label>
         <div className="btn-group btn-group-sm" role="group" aria-label="Backlog scope">
           {/* "This sprint", not "Sprint" — the detail-level group directly above has its own
               Sprint button, and two adjacent buttons with the same word mean two different
@@ -704,7 +715,12 @@ const WeekPlanGrid: React.FC<WeekPlanGridProps> = ({ weekStart, planningMode = '
                   {/* Scheduled work, spanning the hours it occupies. Clicking opens the global
                       sidebar — the app's detail-and-activity-stream surface for an entity — so
                       you can edit it or read its history without leaving the week. */}
-                  {scheduled.map(({ block, entity, type, startMs, endMs, lane, laneCount }) => {
+                  {scheduled
+                    // Finished work is hidden by default here too, matching the roadmap's other
+                    // levels. It used to render at 55% opacity, which still occupies the slot
+                    // it occupied — so a fully completed day looked as busy as an unstarted one.
+                    .filter(({ entity, type }) => showDone || !isDoneStatus((entity as any).status, type))
+                    .map(({ block, entity, type, startMs, endMs, lane, laneCount }) => {
                     const top = offsetFor(startMs, dayKey);
                     const height = Math.max(MIN_CARD_PX, offsetFor(endMs, dayKey) - top);
                     const accent = entityAccent(entity);

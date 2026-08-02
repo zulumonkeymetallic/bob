@@ -57,6 +57,7 @@ import { useSidebar } from '../../contexts/SidebarContext';
 import {
   goalMatchesRoadmapFilters,
   hasActiveRoadmapFilters,
+  lanePassesFilter,
   EMPTY_ROADMAP_FILTERS,
   type RoadmapFilterState,
 } from '../../utils/roadmapFilters';
@@ -64,7 +65,7 @@ import '../visualization/GoalRoadmapV5.css';
 import { Z } from '../../utils/layoutTokens';
 import { accentTint, themeVars } from '../../utils/themeVars';
 import { useDeviceInfo } from '../../utils/deviceDetection';
-import { isDoneStatus } from '../../utils/workStatus';
+import { goalLane, isDoneStatus, laneFor } from '../../utils/workStatus';
 import { proposeRealignments, type RealignProposal } from '../../utils/goalStoryRealignment';
 import GoalMoveDeferralModal from './GoalMoveDeferralModal';
 
@@ -174,8 +175,12 @@ const RoadmapChip: React.FC<{
   // populated (104 of 119 goals), so anchoring this on plannedStartDate meant the "Start Qx"
   // annotation never rendered for anyone.
   const plannedStartKey = computeQuarterKey(typeof g.startDate === 'number' ? g.startDate : null);
-  const isDone = Number(g.status) === 4;
-  const isActive = Number(g.status) === 1;
+  // goalLane, not `=== 4`: on a GOAL 4 means Deferred and 2 means Complete — the reverse of a
+  // story. This chip dimmed all 80 of the live account's deferred goals as though finished.
+  const lane = goalLane(g.status);
+  const isDone = lane === 'done';
+  const isDeferred = lane === 'deferred';
+  const isActive = lane === 'in-progress';
 
   return (
     <div
@@ -198,7 +203,9 @@ const RoadmapChip: React.FC<{
         cursor: readOnly ? 'default' : 'grab',
         boxShadow: '0 1px 2px rgba(0,0,0,0.07)',
         fontSize: 11,
-        opacity: isDone ? 0.55 : 1,
+        opacity: isDone ? 0.55 : isDeferred ? 0.75 : 1,
+        // A dashed edge marks parked work without making it look finished.
+        borderTop: isDeferred ? '1px dashed var(--muted, #9ca3af)' : undefined,
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -503,8 +510,11 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
   }, [stories, focusGoalIds, sprints, selectedSprintId, sourceGoals]);
 
   const goals = useMemo(() => {
-    if (!selfLoading) return sourceGoals;   // host has already filtered
-    return sourceGoals.filter((g) => goalMatchesRoadmapFilters(g, filters, filterContext));
+    // The lane test applies even when a host supplied the goals: the public share view passes
+    // its own list and should not be showing completed goals to whoever opens the link.
+    const byLane = (g: Goal) => lanePassesFilter(goalLane((g as any).status), filters);
+    if (!selfLoading) return sourceGoals.filter(byLane);
+    return sourceGoals.filter((g) => byLane(g) && goalMatchesRoadmapFilters(g, filters, filterContext));
   }, [sourceGoals, selfLoading, filters, filterContext]);
 
   /**
@@ -603,6 +613,7 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
     if (granularity !== 'sprint') return m;
     for (const st of stories) {
       if (!st.goalId) continue;
+      if (!lanePassesFilter(laneFor(st.status, 'story'), filters)) continue;
       // No sprintId — including one just cleared by a drag to this column — lands in
       // UNSCHEDULED_COLUMN rather than being dropped. It used to be skipped outright, which
       // made a story vanish the moment you dragged it out of a sprint: writing sprintId=null
@@ -612,7 +623,7 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
       m.get(key)!.push(st);
     }
     return m;
-  }, [stories, granularity]);
+  }, [stories, granularity, filters]);
 
   /**
    * Committed hours and available hours per column, keyed by theme.
@@ -911,6 +922,18 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
                 <input type="checkbox" checked={filters.focusOnly}
                   onChange={(e) => setFilter('focusOnly', e.target.checked)} />
                 Focus goals only
+              </label>
+              {/* Status. Two switches rather than a multi-select: there are only two lanes you
+                  ever want to suppress, and a dropdown for that is more clicks for less. */}
+              <label className="small text-nowrap d-flex align-items-center gap-1" style={{ marginBottom: 0 }}>
+                <input type="checkbox" checked={filters.hideDone}
+                  onChange={(e) => setFilter('hideDone', e.target.checked)} />
+                Hide done
+              </label>
+              <label className="small text-nowrap d-flex align-items-center gap-1" style={{ marginBottom: 0 }}>
+                <input type="checkbox" checked={filters.hideDeferred}
+                  onChange={(e) => setFilter('hideDeferred', e.target.checked)} />
+                Hide deferred
               </label>
             </div>
             {hasActiveRoadmapFilters(filters) && (

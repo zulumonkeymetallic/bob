@@ -22,6 +22,16 @@ export interface RoadmapFilterState {
   withStoriesOnly: boolean;
   focusOnly: boolean;
   limitToSprint: boolean;
+  /**
+   * Which lanes to show. Defaults to hiding DONE, because a roadmap is about what is still
+   * ahead of you — finished goals are history and, on a real account, most of the rows.
+   * Deferred is NOT hidden by default: parked on purpose is a different answer from finished,
+   * and 80 of the live account's 122 goals are deferred, so folding the two together would
+   * empty the board.
+   */
+  hideDone: boolean;
+  /** Separate from hideDone so "show me what I have parked" is one click, not a mode. */
+  hideDeferred: boolean;
 }
 
 export const EMPTY_ROADMAP_FILTERS: RoadmapFilterState = {
@@ -31,6 +41,8 @@ export const EMPTY_ROADMAP_FILTERS: RoadmapFilterState = {
   withStoriesOnly: false,
   focusOnly: false,
   limitToSprint: false,
+  hideDone: true,
+  hideDeferred: false,
 };
 
 export interface RoadmapFilterContext {
@@ -128,6 +140,27 @@ export function goalMatchesRoadmapFilters(
 export function hasActiveRoadmapFilters(f: RoadmapFilterState): boolean {
   return Boolean(
     f.search.trim() || f.themeIds.length || f.years.length
-    || f.withStoriesOnly || f.focusOnly || f.limitToSprint,
+    || f.withStoriesOnly || f.focusOnly || f.limitToSprint
+    // Compared against the DEFAULT, not against false: hideDone is on out of the box, so
+    // treating it as "a filter is active" would light up Clear filters on a virgin board and
+    // clearing it would turn done goals back on, which nobody asked for.
+    || f.hideDone !== EMPTY_ROADMAP_FILTERS.hideDone
+    || f.hideDeferred !== EMPTY_ROADMAP_FILTERS.hideDeferred,
   );
+}
+
+/**
+ * Lane test shared by the roadmap's goals, its story cells and the week grid.
+ *
+ * Takes the lane rather than the raw status because the three entity kinds use three different
+ * numeric scales — a goal's 4 is deferred, a story's 4 is done — and resolving that at the call
+ * site is exactly how the roadmap chip came to render 80 deferred goals as finished.
+ */
+export function lanePassesFilter(
+  lane: 'backlog' | 'in-progress' | 'done' | 'deferred',
+  f: Pick<RoadmapFilterState, 'hideDone' | 'hideDeferred'>,
+): boolean {
+  if (lane === 'done') return !f.hideDone;
+  if (lane === 'deferred') return !f.hideDeferred;
+  return true;
 }

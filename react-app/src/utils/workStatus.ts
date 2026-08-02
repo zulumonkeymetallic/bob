@@ -86,6 +86,38 @@ export const taskLane = (status: unknown): WorkLane => {
     return 'backlog';
 };
 
+/**
+ * GOALS ARE A THIRD SCALE, and not the one you would guess.
+ *
+ * The app's own goal status dropdown (GlobalSidebar) and the goals list page
+ * (`done: goals.filter(g => g.status === 2)`) both say:
+ *   0 New · 1 Work in Progress · 2 COMPLETE · 3 Blocked · 4 DEFERRED
+ *
+ * So 4 means deferred on a goal and done on a story — the opposite way round from the pair
+ * that share a number. The roadmap chip had `isDone = status === 4`, which rendered all 80 of
+ * the live account's DEFERRED goals as finished. Deferred is its own lane here rather than
+ * being folded into done or backlog, because "parked on purpose" is a different answer from
+ * both, and hiding 80 goals as though they were complete is how that bug stayed invisible.
+ */
+export type GoalLane = 'backlog' | 'in-progress' | 'done' | 'deferred';
+
+export const goalLane = (status: unknown): GoalLane => {
+    const numeric = typeof status === 'string' && /^\d+$/.test(status) ? Number(status) : status;
+    if (typeof numeric === 'number' && Number.isFinite(numeric)) {
+        if (numeric === 2) return 'done';
+        if (numeric === 4) return 'deferred';
+        if (numeric === 1 || numeric === 3) return 'in-progress';
+        return 'backlog';
+    }
+    const s = String(status || '').trim().toLowerCase().replace(/_/g, '-');
+    if (s === 'deferred') return 'deferred';
+    if (DONE_WORDS.includes(s)) return 'done';
+    if (IN_PROGRESS_WORDS.includes(s) || s === 'blocked' || s === 'active') return 'in-progress';
+    return 'backlog';
+};
+
+export const isDoneGoal = (status: unknown): boolean => goalLane(status) === 'done';
+
 export const laneFor = (status: unknown, kind: 'story' | 'task'): WorkLane =>
     kind === 'story' ? storyLane(status) : taskLane(status);
 

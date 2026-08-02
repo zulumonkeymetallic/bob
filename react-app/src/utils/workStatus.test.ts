@@ -2,6 +2,8 @@ import {
     STORY_STATUS,
     TASK_STATUS,
     canonicalStatusValue,
+    goalLane,
+    isDoneGoal,
     isDoneStatus,
     laneFor,
     statusLabel,
@@ -192,5 +194,42 @@ describe('isStatus with an entity kind', () => {
         // laneFor answers 'backlog' for anything it does not recognise, so the fast path is
         // gated on a known lane word — otherwise a bogus filter would match every backlog row.
         expect(isStatus(0, 'bogus-status', 'story')).toBe(false);
+    });
+});
+
+
+describe('goalLane', () => {
+    it('reads 2 as Complete and 4 as Deferred — the opposite of a story', () => {
+        // The number that means DONE on a story means DEFERRED on a goal. The roadmap chip had
+        // `isDone = status === 4` and so rendered all 80 deferred goals on the live account as
+        // finished. Both the goal status dropdown and the goals list page agree on this mapping.
+        expect(goalLane(2)).toBe('done');
+        expect(goalLane(4)).toBe('deferred');
+        expect(isDoneGoal(2)).toBe(true);
+        expect(isDoneGoal(4)).toBe(false);
+    });
+
+    it('treats New as backlog, and both Work in Progress and Blocked as in progress', () => {
+        expect(goalLane(0)).toBe('backlog');
+        expect(goalLane(1)).toBe('in-progress');
+        expect(goalLane(3)).toBe('in-progress');
+    });
+
+    it('accepts numeric strings, which the live data contains', () => {
+        expect(goalLane('2')).toBe('done');
+        expect(goalLane('4')).toBe('deferred');
+    });
+
+    it('understands the word forms too, including the live "active"', () => {
+        // 8 of the live goals carry the string 'active' rather than a number.
+        expect(goalLane('active')).toBe('in-progress');
+        expect(goalLane('deferred')).toBe('deferred');
+        expect(goalLane('complete')).toBe('done');
+    });
+
+    it('falls back to backlog rather than throwing on junk', () => {
+        [null, undefined, '', 'nonsense', {}].forEach((v) => {
+            expect(goalLane(v as any)).toBe('backlog');
+        });
     });
 });
