@@ -362,12 +362,19 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
   }, [location.search, navigate]);
   const granularity: RoadmapGranularity = detail === 'week' ? 'sprint' : detail;
 
-  /** Monday of the current week — the window WeekPlanGrid plans over. */
+  /**
+   * The window WeekPlanGrid plans over: a ROLLING seven days starting two days ago, so today
+   * is always the third column with four days of runway to its right.
+   *
+   * Not the calendar week. Anchoring on Monday meant that by Sunday the entire view was
+   * history — today sat in the last column with nothing ahead of it, which is precisely when
+   * you most want to see the week coming. Planning looks forwards; the calendar week boundary
+   * is an accident of the calendar, not of how the days are used.
+   */
   const weekStart = useMemo(() => {
     const d = new Date();
     d.setHours(0, 0, 0, 0);
-    // getDay(): 0 = Sunday. Shift so Monday starts the week.
-    d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    d.setDate(d.getDate() - 2);
     return d;
   }, []);
   const rowAxis = ROADMAP_ROW_AXIS[granularity];

@@ -24,7 +24,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { collection, doc, onSnapshot, query, where } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
-import { Eye, EyeOff } from 'lucide-react';
+import { Eye, EyeOff, Flame, Pin, Star } from 'lucide-react';
 import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import { usePersona } from '../../contexts/PersonaContext';
@@ -34,7 +34,9 @@ import { useThemeAppearance } from '../../hooks/useThemeAppearance';
 import { schedulePlannerItem, normalizePlannerSchedulingError } from '../../utils/plannerScheduling';
 import { inferPlannerDurationMinutes } from '../../utils/plannerDeferral';
 import { isDoneStatus } from '../../utils/workStatus';
-import { compareTop3Stories, compareTop3Tasks, getEntityAiScore } from '../../utils/top3';
+import {
+  compareTop3Stories, compareTop3Tasks, getEntityAiScore, isTop3Story, isTop3Task,
+} from '../../utils/top3';
 import { getManualPriorityRank } from '../../utils/manualPriority';
 import { accentTint, themeVars } from '../../utils/themeVars';
 import type { Story, Task } from '../../types';
@@ -82,7 +84,11 @@ interface Spanning {
 }
 
 interface WeekPlanGridProps {
-  /** Start of the displayed week (local midnight). */
+  /**
+   * First day of the displayed window (local midnight). The caller passes today minus two, so
+   * today lands in the third column with four days of runway to its right — see the comment
+   * on `weekStart` in RoadmapGrid for why this is not the calendar week.
+   */
   weekStart: Date;
   /** Matches the calendar surface's Smart/Strict control — passed through to the scheduler. */
   planningMode?: 'smart' | 'strict';
@@ -151,6 +157,54 @@ function packLanes<T extends Spanning>(items: T[]): Array<T & { lane: number; la
   return out;
 }
 
+/**
+ * The four things that make an item matter, as icons rather than words.
+ *
+ * A card in a time grid has room for a title and one short line, so the signals that decide
+ * whether you work on something have to be glanceable: pin = you ranked it by hand, flame = the
+ * AI made it a Top 3 for today, star = its goal is a focus goal, and the bare number is the AI
+ * criticality score. Every one carries a title so the meaning is one hover away.
+ *
+ * Order is deliberate: human judgement first, then the AI's, then context. Manual priority
+ * outranks everything else in the app's sort comparators, so it reads first here too.
+ */
+const CardSignals: React.FC<{
+  entity: Story | Task;
+  type: 'story' | 'task';
+  isFocusGoal: boolean;
+  /** Hide the AI score on very short cards, where the row would not fit. */
+  compact?: boolean;
+}> = ({ entity, type, isFocusGoal, compact = false }) => {
+  const manualRank = getManualPriorityRank(entity as any);
+  const isTop3 = type === 'story'
+    ? isTop3Story(entity as Story)
+    : isTop3Task(entity as Task);
+  const score = getEntityAiScore(entity);
+  const hasScore = Number.isFinite(score) && score > 0;
+
+  return (
+    <>
+      {manualRank && (
+        <span title={`You ranked this P${manualRank}`}
+          style={{ color: 'var(--bs-danger, #ef4444)', display: 'inline-flex', alignItems: 'center', gap: 1 }}>
+          <Pin size={9} />P{manualRank}
+        </span>
+      )}
+      {isTop3 && (
+        <span title="AI Top 3 for today" style={{ color: 'var(--bs-warning, #f59e0b)', display: 'inline-flex' }}>
+          <Flame size={9} />
+        </span>
+      )}
+      {isFocusGoal && (
+        <span title="Its goal is a focus goal" style={{ color: 'var(--brand, #5f77dc)', display: 'inline-flex' }}>
+          <Star size={9} />
+        </span>
+      )}
+      {!compact && hasScore && <span title="AI criticality score">AI {Math.round(score)}</span>}
+    </>
+  );
+};
+
 const WeekPlanGrid: React.FC<WeekPlanGridProps> = ({ weekStart, planningMode = 'smart' }) => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
@@ -162,6 +216,8 @@ const WeekPlanGrid: React.FC<WeekPlanGridProps> = ({ weekStart, planningMode = '
   const [stories, setStories] = useState<Story[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [blocks, setBlocks] = useState<any[]>([]);
+  /** Goal ids on the focus list — the star on a card means "its goal is a focus goal". */
+  const [focusGoalIds, setFocusGoalIds] = useState<Set<string>>(new Set());
   const [allocations, setAllocations] = useState<{
     allocations: ThemeAllocationRow[];
     weeklyOverrides: Record<string, ThemeAllocationRow[]>;
@@ -208,6 +264,13 @@ const WeekPlanGrid: React.FC<WeekPlanGridProps> = ({ weekStart, planningMode = '
       onSnapshot(query(collection(db, 'calendar_blocks'), where('ownerUid', '==', currentUser.uid)),
         (s) => setBlocks(s.docs.map((d) => ({ id: d.id, ...d.data() }))),
         () => setBlocks([])),
+      onSnapshot(query(collection(db, 'focusGoals'), where('ownerUid', '==', currentUser.uid)),
+        (s) => {
+          const ids = new Set<string>();
+          s.docs.forEach((d) => ((d.data()?.goalIds || []) as string[]).forEach((gid) => ids.add(gid)));
+          setFocusGoalIds(ids);
+        },
+        () => setFocusGoalIds(new Set())),
       onSnapshot(doc(db, 'theme_allocations', currentUser.uid),
         (snap) => {
           const data = snap.exists() ? (snap.data() as any) : null;
@@ -252,14 +315,33 @@ const WeekPlanGrid: React.FC<WeekPlanGridProps> = ({ weekStart, planningMode = '
     return ids;
   }, [scheduledByDay]);
 
-  /** Theme bands for a given weekday, from the plan doc (this week's override wins). */
+  /**
+   * Theme bands for a given day, from the plan doc, with that day's own weekly override
+   * winning if one exists.
+   *
+   * The override key is derived from EACH DAY's Monday, not from the start of the displayed
+   * window. The window is a rolling seven days from two days ago, so it straddles a week
+   * boundary most of the time — keying every day off the window's first day would apply last
+   * week's overrides to days that belong to this week, and vice versa.
+   */
   const allocationsForDay = useCallback((day: Date): ThemeAllocationRow[] => {
-    const weekKey = new Date(rangeStart).toISOString().slice(0, 10);
+    const monday = new Date(day);
+    monday.setHours(0, 0, 0, 0);
+    // getDay(): 0 = Sunday. Shift back so Monday starts the week.
+    monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+    // Local date parts, not toISOString(): that converts to UTC first, so anywhere east of
+    // Greenwich in summer the Monday becomes the previous Sunday and every override misses.
+    const weekKey = [
+      monday.getFullYear(),
+      String(monday.getMonth() + 1).padStart(2, '0'),
+      String(monday.getDate()).padStart(2, '0'),
+    ].join('-');
+
     const rows = Array.isArray(allocations.weeklyOverrides[weekKey])
       ? allocations.weeklyOverrides[weekKey]
       : allocations.allocations;
     return rows.filter((r) => Number(r.dayOfWeek) === day.getDay());
-  }, [allocations, rangeStart]);
+  }, [allocations]);
 
   /**
    * The visible hours. Fixed 06:00–22:00 unless the week actually contains something outside
@@ -473,15 +555,17 @@ const WeekPlanGrid: React.FC<WeekPlanGridProps> = ({ weekStart, planningMode = '
                 style={{ ...backlogCardStyle(entityAccent(entity)), opacity: busyId === entity.id ? 0.5 : 1 }}
               >
                 <div style={{ fontWeight: 600, wordBreak: 'break-word' }}>{entity.title}</div>
-                <div style={{ color: themeVars.muted as string, fontSize: 9, marginTop: 2, display: 'flex', gap: 6 }}>
+                <div style={{
+                  color: themeVars.muted as string, fontSize: 9, marginTop: 2,
+                  display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap',
+                }}>
                   <span>{(entity as any).ref}</span>
                   {type === 'task' && <span style={{ textTransform: 'uppercase' }}>task</span>}
-                  {getManualPriorityRank(entity as any) && (
-                    <span style={{ color: 'var(--bs-danger)', fontWeight: 700 }}>P{getManualPriorityRank(entity as any)}</span>
-                  )}
-                  {Number.isFinite(getEntityAiScore(entity)) && getEntityAiScore(entity) > 0 && (
-                    <span>AI {Math.round(getEntityAiScore(entity))}</span>
-                  )}
+                  <CardSignals
+                    entity={entity}
+                    type={type}
+                    isFocusGoal={focusGoalIds.has(String((entity as any).goalId || ''))}
+                  />
                 </div>
               </div>
             ))}
@@ -640,11 +724,22 @@ const WeekPlanGrid: React.FC<WeekPlanGridProps> = ({ weekStart, planningMode = '
                           {entity.title}
                         </div>
                         {height > 34 && (
-                          <div style={{ color: themeVars.muted as string, fontSize: 9, display: 'flex', gap: 6 }}>
+                          <div style={{
+                            color: themeVars.muted as string, fontSize: 9,
+                            display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap',
+                          }}>
                             <span>{(entity as any).ref}</span>
                             <span>
                               {new Date(startMs).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
                             </span>
+                            {/* Compact below ~3 lines of room: the icons still fit where the
+                                AI score's extra characters would push the row to wrap. */}
+                            <CardSignals
+                              entity={entity}
+                              type={type}
+                              isFocusGoal={focusGoalIds.has(String((entity as any).goalId || ''))}
+                              compact={height < 56}
+                            />
                           </div>
                         )}
                       </div>
