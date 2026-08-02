@@ -452,7 +452,22 @@ exports.syncFocusGoalCountdownsNightly = schedulerV2.onSchedule(
 // Calendar diagnostics
 // (already exported above with calendarSync bundle)
 
-functionsV2.setGlobalOptions({ region: "europe-west2", maxInstances: 10 });
+/**
+ * maxInstances 3, not 10.
+ *
+ * Cloud Run reserves CPU against the CEILING, not against usage: the regional "total CPU
+ * allocation" quota counts maxInstances × CPU-per-instance for every service. With ~256
+ * functions in europe-west2 at 10 instances each, this one line was reserving on the order of
+ * 400 vCPU against a 100 vCPU quota — which is why new functions began failing to deploy with
+ * "Quota exceeded for total allowable CPU per project per region" rather than for any reason
+ * to do with the function being deployed.
+ *
+ * 3 is not a guess about traffic: this is a single-user application, and nothing here has ever
+ * needed ten concurrent instances of anything. Event-triggered functions queue rather than drop
+ * when they hit the cap, so a burst during a bulk import is slower, not lossy. Functions that
+ * genuinely need more declare their own maxInstances, which overrides this.
+ */
+functionsV2.setGlobalOptions({ region: "europe-west2", maxInstances: 3 });
 if (!admin.apps.length) {
   admin.initializeApp();
 }
@@ -21601,3 +21616,40 @@ exports.debugCalendarDeleteEvent = httpsV2.onCall({
   return r;
 });
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RETIRED FUNCTIONS
+//
+// Withdrawn from deployment on 2026-08-02 after an audit (build-logs/functions-audit.md)
+// found no reference to any of them in the web app, the iOS app, bob-mac-sync or the Hermes
+// scripts — and no internal caller inside functions/ either.
+//
+// Why the exports are deleted here rather than the definitions being cut out: index.js is
+// 21,600 lines and these twelve are scattered through it. Excising bodies from a file that
+// size to reclaim CPU quota is a large diff with real risk of taking something live with it.
+// Deleting the export is what actually stops the deploy creating the function, which is the
+// whole objective; the dead bodies cost bytes and nothing else.
+//
+// The point is CPU quota. Cloud Run reserves against maxInstances × CPU for every deployed
+// service, and europe-west2 was over its limit — see setGlobalOptions above.
+//
+// FOLLOW-UP: physically remove these definitions. Restoring one meanwhile is a matter of
+// taking its name off this list.
+//
+// Two categories, both genuinely finished:
+//   - debug/diagnostic endpoints, never part of the product
+//   - one-off migration and import tools that have already run
+[
+  'debugBulkDeleteBobEvents',
+  'debugCalendarCleanupDiag',
+  'debugCalendarDeleteEvent',
+  'diagnosticsStatus',
+  'backfillReferenceNumbers',
+  'cleanupOrphanedCalendarEventsNow',
+  'importDevelopmentFeatures',
+  'importItems',
+  'importMerchantMappingsCsv',
+  'reconcileParkrunStrava',
+  'reconcilePlanFromGoogleCalendar',
+  'repairDuplicateCalendarEvents',
+].forEach((name) => { delete exports[name]; });
