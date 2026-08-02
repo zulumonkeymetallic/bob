@@ -17,7 +17,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { collection, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
-import { Filter, Maximize2, Minimize2, Search } from 'lucide-react';
+import { Filter, Maximize2, Minimize2, Plus, Search } from 'lucide-react';
 import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import type { Goal } from '../../types';
@@ -43,6 +43,8 @@ import {
   type CapacitySlice, type CapacityTone, type ColumnCapacity, type ThemeAllocationRow,
 } from '../../utils/roadmapCapacity';
 import EditGoalModal from '../EditGoalModal';
+import AddGoalModal from '../AddGoalModal';
+import AddStoryModal from '../AddStoryModal';
 import GoalRoadmapV6 from '../visualization/GoalRoadmapV6';
 import WeekPlanGrid from './WeekPlanGrid';
 import ThemeMultiSelect from '../shared/ThemeMultiSelect';
@@ -370,6 +372,15 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
   }, []);
   const rowAxis = ROADMAP_ROW_AXIS[granularity];
   const [editingGoal, setEditingGoal] = useState<Goal | null>(null);
+  /**
+   * Create straight from the planning surface, matching the goal list view's own Add button.
+   * WHICH entity depends on the detail level, because that is what the level is made of:
+   * year and quarter are grids of goals, sprint and week are grids of stories. Offering "Add
+   * goal" on the week grid would create something that cannot appear on it.
+   */
+  const [showAddGoal, setShowAddGoal] = useState(false);
+  const [showAddStory, setShowAddStory] = useState(false);
+  const addsGoal = detail === 'year' || detail === 'quarter';
   const [drag, setDrag] = useState<{ kind: 'goal' | 'story'; id: string } | null>(null);
   const [dragOverCell, setDragOverCell] = useState<string | null>(null);
 
@@ -765,6 +776,24 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
               ))}
             </div>
           )}
+          {view === 'grid' && (
+            <button
+              type="button"
+              className="grv5-select"
+              style={{
+                cursor: 'pointer', padding: '0 10px', whiteSpace: 'nowrap',
+                background: 'var(--brand, #5f77dc)', color: '#fff',
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+              }}
+              onClick={() => (addsGoal ? setShowAddGoal(true) : setShowAddStory(true))}
+              title={addsGoal
+                ? 'Create a goal — it lands on this grid straight away'
+                : 'Create a story — it lands in the backlog, ready to schedule'}
+            >
+              <Plus size={14} />
+              {addsGoal ? 'Add goal' : 'Add story'}
+            </button>
+          )}
           {view === 'grid' && detail !== 'week' && (
             <span className="text-muted small text-nowrap">{goals.length} goals</span>
           )}
@@ -1038,6 +1067,11 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
       </div>
       </>
       )}
+
+      {/* The same two modals the goal list and card views use, so a goal or story created here
+          is identical to one created anywhere else — no second creation path to drift. */}
+      <AddGoalModal show={showAddGoal} onClose={() => setShowAddGoal(false)} />
+      <AddStoryModal show={showAddStory} onClose={() => setShowAddStory(false)} />
 
       {editingGoal && (
         <EditGoalModal

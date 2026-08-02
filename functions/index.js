@@ -1219,6 +1219,59 @@ exports.buildPlan = httpsV2.onCall(
   })
 );
 
+// ===== Google Drive hierarchy =====
+// driveHierarchy.js has existed since the Drive work but was never exported, so nothing could
+// call it. These two are the whole surface the app needs: resolve (creating on demand) the
+// folder for an entity, and list what is in a folder.
+const driveHierarchy = require('./driveHierarchy');
+
+exports.ensureDriveFolder = httpsV2.onCall(
+  { secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] },
+  secureFunction(async (req) => {
+    const uid = req?.auth?.uid;
+    if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+    const entityType = String(req.data?.entityType || '').trim();
+    const entityId = String(req.data?.entityId || '').trim();
+    if (!entityId || !['goal', 'story', 'task'].includes(entityType)) {
+      throw new httpsV2.HttpsError('invalid-argument', 'entityType (goal|story|task) and entityId are required');
+    }
+    try {
+      const folderId = await driveHierarchy.ensureEntityFolder(uid, entityType, entityId);
+      return { ok: true, folderId, webViewLink: `https://drive.google.com/drive/folders/${folderId}` };
+    } catch (err) {
+      // "Google not connected" is a precondition the user can fix, not a server fault — the
+      // UI needs to tell them to reconnect rather than showing a generic failure.
+      const message = err?.message || 'Failed to resolve Drive folder';
+      throw new httpsV2.HttpsError(
+        /not connected|not configured/i.test(message) ? 'failed-precondition' : 'internal',
+        message,
+      );
+    }
+  }),
+);
+
+exports.listDriveFolder = httpsV2.onCall(
+  { secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] },
+  secureFunction(async (req) => {
+    const uid = req?.auth?.uid;
+    if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+    const folderId = String(req.data?.folderId || '').trim();
+    if (!folderId) throw new httpsV2.HttpsError('invalid-argument', 'folderId is required');
+    try {
+      return { ok: true, ...(await driveHierarchy.listFolder(uid, folderId, {
+        pageSize: Math.min(200, Number(req.data?.pageSize) || 100),
+        pageToken: req.data?.pageToken || null,
+      })) };
+    } catch (err) {
+      const message = err?.message || 'Failed to list Drive folder';
+      throw new httpsV2.HttpsError(
+        /not connected|not configured/i.test(message) ? 'failed-precondition' : 'internal',
+        message,
+      );
+    }
+  }),
+);
+
 // ===== Spec wrappers: syncCalendarAndTasks, autoEnrichTasks, taskStoryConversion, plannerLLM
 exports.syncCalendarAndTasks = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] },
   secureFunction(async (req) => {
