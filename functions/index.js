@@ -20522,10 +20522,62 @@ function dedupeTitleKeyFor(title) {
     .trim();
 }
 
+// A claim that outlives a crashed conversion would block that task forever, so it expires.
+// Ten minutes is far longer than a conversion takes (the LLM call dominates, ~2-5s) and far
+// shorter than the daily sweep, so a task orphaned by a crash is retried on the next run.
+const CONVERSION_CLAIM_TTL_MS = 10 * 60 * 1000;
+
 async function autoConvertTask({ db, taskDoc, profile, runId }) {
-  const task = taskDoc.data() || {};
+  let task = taskDoc.data() || {};
   const userId = task.ownerUid;
   if (!userId) return null;
+
+  // Claim the task transactionally BEFORE any slow work, because the guards below cannot
+  // stop concurrent invocations — they only stop sequential ones.
+  //
+  // Two triggers watch tasks/{id} (onTaskWriteNormalize, onTaskWritten) and each one's
+  // writes re-fire the other; onTaskWritten also patches the doc before reaching this
+  // point, re-firing itself. So one Reminders-sourced task fans out into several
+  // overlapping invocations. Every one of them read `autoConverted` off its own event
+  // snapshot, found it false — it stays false until the batch at the end of this function
+  // commits — and minted a story. Worse, generateAcceptanceCriteria sits between the
+  // dedupe lookup and that commit, so the window is a whole LLM call wide: 111 duplicate
+  // stories, median 230ms apart, 107 of them inside five seconds.
+  //
+  // The transaction is the only thing here that actually serialises: the loser sees the
+  // winner's claim and returns before spending an LLM call on a story it would discard.
+  const claim = await db.runTransaction(async (tx) => {
+    const fresh = await tx.get(taskDoc.ref);
+    if (!fresh.exists) return { skip: 'missing' };
+    const data = fresh.data() || {};
+    if (data.convertedToStoryId) return { skip: 'converted', storyId: data.convertedToStoryId };
+    if (data.autoConverted === true) return { skip: 'converted' };
+
+    const claimedAt = Number(data.autoConversionClaimedAt || 0);
+    if (claimedAt
+      && (Date.now() - claimedAt) < CONVERSION_CLAIM_TTL_MS
+      && data.autoConversionClaimRunId !== runId) {
+      return { skip: 'claimed' };
+    }
+
+    tx.set(fresh.ref, {
+      autoConversionClaimedAt: Date.now(),
+      autoConversionClaimRunId: runId,
+    }, { merge: true });
+    return { data };
+  }).catch((error) => {
+    // A contended transaction that exhausts its retries must not fall through to the
+    // unguarded path — that is the race this exists to close.
+    console.warn('[autoConvertTask] claim failed', taskDoc.id, error?.message || error);
+    return { skip: 'claim_error' };
+  });
+
+  if (claim.skip) {
+    console.log(`[autoConvertTask] ${taskDoc.id} skipped (${claim.skip})`);
+    return claim.storyId ? { storyId: claim.storyId, deduped: true } : null;
+  }
+  // Prefer the transaction's read over the event snapshot, which may be several writes stale.
+  task = claim.data;
 
   // shouldAutoConvert() guards `autoConverted`/`convertedToStoryId` on the TASK, which
   // only stops one task converting twice. It cannot see that a different task carries the
@@ -20566,6 +20618,71 @@ async function autoConvertTask({ db, taskDoc, profile, runId }) {
       }).catch(() => { });
       console.log(`[autoConvertTask] ${taskDoc.id} deduped onto existing story ${match.id}`);
       return { storyId: match.id, deduped: true };
+    }
+  }
+
+  // The lookup above answers "does a story with this title exist yet", which is the wrong
+  // question when a sibling task carrying the same title is mid-conversion: neither has
+  // committed, so both queries come back empty and both create. 25 of the duplicates were
+  // made this way, within 15s of each other. A query cannot fix it — Firestore locks the
+  // documents a transaction reads, and an empty result set has none to lock, so two
+  // transactions can both read nothing and both write.
+  //
+  // A claim keyed by the title turns that unanswerable question into a single-document
+  // one, which Firestore *can* serialise. Expires like the task claim, so a crashed
+  // conversion frees the title rather than blocking it forever.
+  let titleClaimRef = null;
+  if (dedupeTitleKey) {
+    titleClaimRef = db.collection('story_title_claims')
+      .doc(`${userId}__${crypto.createHash('sha1').update(dedupeTitleKey).digest('hex')}`);
+
+    const titleClaim = await db.runTransaction(async (tx) => {
+      const snap = await tx.get(titleClaimRef);
+      const held = snap.exists ? (snap.data() || {}) : null;
+
+      if (held?.storyId) {
+        // Verify before adopting: the story may have been deleted since it was claimed,
+        // which would otherwise strand every future task on a dead id.
+        const story = await tx.get(db.collection('stories').doc(held.storyId));
+        if (story.exists && !story.data()?.deleted) return { storyId: held.storyId };
+      } else if (Number(held?.claimedAt || 0) > Date.now() - CONVERSION_CLAIM_TTL_MS) {
+        return { busy: true };
+      }
+
+      tx.set(titleClaimRef, {
+        ownerUid: userId,
+        dedupeTitleKey,
+        claimedAt: Date.now(),
+        runId,
+        storyId: null,
+      });
+      return {};
+    }).catch((error) => {
+      console.warn('[autoConvertTask] title claim failed', taskDoc.id, error?.message || error);
+      return { busy: true };
+    });
+
+    if (titleClaim.storyId) {
+      await taskDoc.ref.update({
+        status: 2,
+        convertedToStoryId: titleClaim.storyId,
+        autoConvertedAt: admin.firestore.FieldValue.serverTimestamp(),
+        autoConvertedRunId: runId,
+        autoConverted: true,
+        autoConversionDedupedTo: titleClaim.storyId,
+        reminderSyncDirective: 'complete',
+        syncState: 'dirty',
+      }).catch(() => { });
+      console.log(`[autoConvertTask] ${taskDoc.id} deduped onto claimed story ${titleClaim.storyId}`);
+      return { storyId: titleClaim.storyId, deduped: true };
+    }
+
+    if (titleClaim.busy) {
+      // A sibling is converting this title right now. Leave the task unconverted rather
+      // than racing it: the task claim lapses in ten minutes and autoConvertOversizedTasks
+      // picks it up at 02:00, by which point the story exists and the lookup adopts it.
+      console.log(`[autoConvertTask] ${taskDoc.id} yielded, title claim held by another run`);
+      return null;
     }
   }
 
@@ -20635,6 +20752,14 @@ async function autoConvertTask({ db, taskDoc, profile, runId }) {
   batch.set(taskDoc.ref, taskUpdate, { merge: true });
 
   await batch.commit();
+
+  // Resolve the claim so later tasks with this title adopt the story instead of waiting
+  // out the TTL. Best-effort: an unresolved claim expires and the title-lookup above
+  // catches the duplicate anyway, now that the story is committed and visible.
+  if (titleClaimRef) {
+    await titleClaimRef.set({ storyId: storyRef.id, resolvedAt: Date.now() }, { merge: true })
+      .catch((error) => console.warn('[autoConvertTask] title claim resolve failed', error?.message || error));
+  }
 
   // Reminders: close and annotate
   try {
