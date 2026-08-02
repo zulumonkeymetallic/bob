@@ -21,7 +21,7 @@ import { Filter, Maximize2, Minimize2, Search } from 'lucide-react';
 import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import type { Goal } from '../../types';
-import { GLOBAL_THEMES } from '../../constants/globalThemes';
+import { GLOBAL_THEMES, LEGACY_THEME_MAP } from '../../constants/globalThemes';
 import { goalThemeColor as resolveGoalThemeColor } from '../../utils/storyCardFormatting';
 import {
   rescheduleGoalToPeriod,
@@ -38,6 +38,10 @@ import {
   buildPlannerPath, normalizePlannerLevel, parsePlannerSearch,
   DEFAULT_ROADMAP_DETAIL, ROADMAP_DETAIL_PARAM, type RoadmapDetail,
 } from '../../utils/plannerRoutes';
+import {
+  columnWindow, computeColumnCapacity, formatCapacity, pointsToHours, weeklyHoursByTheme,
+  type CapacitySlice, type CapacityTone, type ColumnCapacity, type ThemeAllocationRow,
+} from '../../utils/roadmapCapacity';
 import EditGoalModal from '../EditGoalModal';
 import GoalRoadmapV6 from '../visualization/GoalRoadmapV6';
 import WeekPlanGrid from './WeekPlanGrid';
@@ -61,6 +65,91 @@ const GOAL_KIND_ICON: Record<string, string> = {
 
 const COL_W = 210;
 const THEME_COL_W = 168;
+
+/** Green while it fits, amber before it stops fitting, red once it does not. */
+const CAPACITY_TONE_COLOR: Record<CapacityTone, string> = {
+  empty: 'var(--muted, #9ca3af)',
+  ok: 'var(--bs-success, #22c55e)',
+  tight: 'var(--bs-warning, #f59e0b)',
+  over: 'var(--bs-danger, #ef4444)',
+};
+
+/** Row key for goals whose `theme` matches nothing we know about. */
+const UNTHEMED_ID = -1;
+const UNTHEMED_NAME = 'Unthemed';
+
+/**
+ * Canonical theme id for the several shapes `theme` actually takes in the data: a number (7),
+ * a numeric string ('3'), a canonical name ('Finance & Wealth'), a legacy name ('Growth',
+ * 'Wealth'), free text ('Home and Garden'), or nothing at all.
+ *
+ * This existed nowhere, and the grid used a bare `Number(g.theme ?? 0)` for row placement. That
+ * yields NaN for every name-shaped theme — 21 of the live goals — which matches no theme row,
+ * so those goals were silently dropped from the grid entirely. They now land on their real
+ * theme's row, or on an Unthemed row if the value resolves to nothing.
+ *
+ * Unrecognised text deliberately does NOT collapse into General: General has half an hour a
+ * week allocated to it, so quietly filing strays there would report a permanent, loud capacity
+ * breach that is really a data-quality problem.
+ */
+const themeIdOf = (value: unknown): number => {
+  const raw = value == null ? '' : String(value).trim();
+  if (!raw) return 0;
+  const n = Number(raw);
+  if (Number.isFinite(n)) return GLOBAL_THEMES.some((t) => t.id === n) ? n : 0;
+  const direct = GLOBAL_THEMES.find((t) => t.name === raw || t.label === raw);
+  if (direct) return direct.id;
+  const legacy = (LEGACY_THEME_MAP as Record<string, number>)[raw];
+  return legacy !== undefined ? legacy : UNTHEMED_ID;
+};
+
+/** The GLOBAL_THEMES name the allocation plan is keyed on. */
+const themeNameOf = (value: unknown): string => {
+  const id = themeIdOf(value);
+  return id === UNTHEMED_ID
+    ? UNTHEMED_NAME
+    : GLOBAL_THEMES.find((t) => t.id === id)?.name || 'General';
+};
+
+/**
+ * Committed-versus-available for one column or one theme cell.
+ *
+ * The bar is capped at 100% width but the tone is not — 130% still reads as a full red bar
+ * with "130%" beside it, rather than silently overflowing the column.
+ */
+const CapacityBar: React.FC<{
+  slice: CapacitySlice;
+  /** Themes individually over their own allocation. Only meaningful on a column total. */
+  themesOver?: string[];
+  compact?: boolean;
+}> = ({ slice, themesOver = [], compact = false }) => {
+  const color = CAPACITY_TONE_COLOR[slice.tone];
+  const width = Math.min(100, slice.utilizationPct);
+  return (
+    <div title={themesOver.length
+      ? `Over capacity: ${themesOver.join(', ')}`
+      : `${formatCapacity(slice)} · ${slice.utilizationPct}%`}>
+      <div style={{
+        height: compact ? 3 : 4, background: 'var(--line, #e5e7eb)',
+        borderRadius: 2, overflow: 'hidden', marginBottom: 2,
+      }}>
+        <div style={{ height: '100%', width: `${width}%`, background: color, borderRadius: 2 }} />
+      </div>
+      <div style={{
+        fontSize: compact ? 9 : 10, fontWeight: 400, display: 'flex',
+        gap: 5, alignItems: 'baseline', flexWrap: 'wrap',
+      }}>
+        <span style={{ color: 'var(--muted, #6b7280)' }}>{formatCapacity(slice)}</span>
+        <span style={{ color, fontWeight: 600 }}>{slice.utilizationPct}%</span>
+        {themesOver.length > 0 && (
+          <span style={{ color: CAPACITY_TONE_COLOR.over, fontWeight: 600 }}>
+            ⚠ {themesOver.length} over
+          </span>
+        )}
+      </div>
+    </div>
+  );
+};
 
 const RoadmapChip: React.FC<{
   goal: Goal;
@@ -209,6 +298,7 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
   const [stories, setStories] = useState<any[]>([]);
   const [focusGoalIds, setFocusGoalIds] = useState<Set<string>>(new Set());
   const [pots, setPots] = useState<Record<string, { name: string; balance: number }>>({});
+  const [allocations, setAllocations] = useState<ThemeAllocationRow[]>([]);
   const [fullScreen, setFullScreen] = useState(false);
   const shellRef = React.useRef<HTMLDivElement>(null);
   /**
@@ -311,6 +401,11 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
           snap.docs.forEach((d) => (d.data()?.goalIds || []).forEach((gid: string) => ids.add(gid)));
           setFocusGoalIds(ids);
         }),
+      // The recurring weekly time plan — what makes column capacity knowable rather than
+      // estimated. See roadmapCapacity for how it turns into hours per column.
+      onSnapshot(doc(db, 'theme_allocations', currentUser.uid),
+        (snap) => setAllocations(Array.isArray(snap.data()?.allocations) ? snap.data()!.allocations : []),
+        () => setAllocations([])),
       // Backs the savings-progress line in the sprint-level goal lane — same source
       // GlobalGoalFocusBanner reads for goal.estimatedCost vs pot balance.
       onSnapshot(query(collection(db, 'monzo_pots'), where('ownerUid', '==', currentUser.uid)),
@@ -410,9 +505,17 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
    */
   const rows = useMemo(() => {
     if (rowAxis === 'theme') {
-      return GLOBAL_THEMES
-        .filter((t) => goals.some((g) => Number((g as any).theme ?? 0) === t.id))
+      const known = GLOBAL_THEMES
+        .filter((t) => goals.some((g) => themeIdOf((g as any).theme) === t.id))
         .map((t) => ({ key: `theme-${t.id}`, label: t.name, color: t.color, themeId: t.id, goalId: null as string | null }));
+      // A row for the strays, so a goal with an unrecognised theme is visible and fixable
+      // rather than absent.
+      return goals.some((g) => themeIdOf((g as any).theme) === UNTHEMED_ID)
+        ? [...known, {
+            key: `theme-${UNTHEMED_ID}`, label: UNTHEMED_NAME,
+            color: 'var(--muted, #9ca3af)', themeId: UNTHEMED_ID, goalId: null as string | null,
+          }]
+        : known;
     }
     return goals
       .slice()
@@ -421,7 +524,7 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
         key: `goal-${g.id}`,
         label: g.title || '(untitled)',
         color: resolveGoalThemeColor(g, GLOBAL_THEMES) || 'var(--brand, #6366f1)',
-        themeId: Number((g as any).theme ?? 0),
+        themeId: themeIdOf((g as any).theme),
         goalId: g.id,
       }));
   }, [goals, rowAxis]);
@@ -434,7 +537,8 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
   const grid = useMemo(() => {
     const m = new Map<string, Map<string, Goal[]>>();
     for (const g of goals) {
-      const rowKey = rowAxis === 'theme' ? `theme-${Number((g as any).theme ?? 0)}` : `goal-${g.id}`;
+      // themeIdOf, not Number(): see its comment — the bare cast dropped every name-themed goal.
+      const rowKey = rowAxis === 'theme' ? `theme-${themeIdOf((g as any).theme)}` : `goal-${g.id}`;
       // Falls back to startDate before giving up to Backlog: a goal with a start date but no
       // end/due date does have a planned quarter, even though nothing had been anchoring its
       // placement to it before.
@@ -471,6 +575,93 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
     }
     return m;
   }, [stories, granularity]);
+
+  /**
+   * Committed hours and available hours per column, keyed by theme.
+   *
+   * "Committed" means something different at each detail level, which is why it is assembled
+   * here rather than in roadmapCapacity: at year and quarter the cells hold GOALS, so it is the
+   * goal's stories rolled up (a goal with no stories yet genuinely contributes nothing — see
+   * `goalsWithoutStories` below, which is surfaced so the number is not mistaken for a
+   * verdict); at sprint the cells hold the stories themselves.
+   *
+   * The DRAGGED item is counted against the column it is currently over rather than the one it
+   * came from, so the bars answer "would this fit?" before the drop, not after.
+   */
+  const weeklyHours = useMemo(() => weeklyHoursByTheme(allocations), [allocations]);
+  const hasAllocationPlan = weeklyHours.size > 0;
+
+  /** The column under the cursor mid-drag. Cell ids are `${rowKey}:${columnKey}`. */
+  const dragOverColumn = useMemo(
+    () => (dragOverCell ? dragOverCell.slice(dragOverCell.indexOf(':') + 1) : null),
+    [dragOverCell],
+  );
+
+  const storyHoursByGoal = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const st of stories) {
+      if (!st.goalId) continue;
+      m.set(st.goalId, (m.get(st.goalId) ?? 0) + pointsToHours(st.points));
+    }
+    return m;
+  }, [stories]);
+
+  const { capacityByColumn, goalsWithoutStories, unthemedHours } = useMemo(() => {
+    const committed = new Map<string, Map<string, number>>();
+    /**
+     * Work whose theme resolves to nothing known is held OUT of the capacity maths and
+     * reported separately. Counted, it would show as a permanent breach of a theme that does
+     * not exist; ignored, it would quietly vanish from the totals. Neither is honest.
+     */
+    const unthemed = new Map<string, number>();
+    const addHours = (col: string, theme: string, hours: number) => {
+      if (hours <= 0) return;
+      if (theme === UNTHEMED_NAME) {
+        unthemed.set(col, (unthemed.get(col) ?? 0) + hours);
+        return;
+      }
+      if (!committed.has(col)) committed.set(col, new Map());
+      const row = committed.get(col)!;
+      row.set(theme, (row.get(theme) ?? 0) + hours);
+    };
+    /** Where an entity counts right now — its drop target while dragging, else where it is. */
+    const placement = (id: string, actual: string) =>
+      (drag?.id === id && dragOverColumn ? dragOverColumn : actual);
+
+    const undecomposed = new Map<string, number>();
+
+    if (rowAxis === 'theme') {
+      for (const g of goals) {
+        const actual = computePeriodKey(
+          (g as any).endDate || (g as any).dueDate || (g as any).startDate, granularity, sprints as any,
+        ) ?? UNSCHEDULED_COLUMN;
+        const col = placement(g.id, actual);
+        const hours = storyHoursByGoal.get(g.id) ?? 0;
+        if (hours <= 0) undecomposed.set(col, (undecomposed.get(col) ?? 0) + 1);
+        addHours(col, themeNameOf((g as any).theme), hours);
+      }
+    } else {
+      for (const st of stories) {
+        const goal = st.goalId ? goalsById.get(st.goalId) : null;
+        // Rows are the visible goals, so a story hanging off a filtered-out goal is not in
+        // this grid and must not be counted against its columns either.
+        if (!goal) continue;
+        const col = placement(st.id, st.sprintId || UNSCHEDULED_COLUMN);
+        addHours(col, themeNameOf(st.theme ?? (goal as any).theme), pointsToHours(st.points));
+      }
+    }
+
+    const byColumn = new Map<string, ColumnCapacity>();
+    for (const col of columns) {
+      byColumn.set(col, computeColumnCapacity(
+        columnWindow(col, granularity, sprints as any),
+        weeklyHours,
+        committed.get(col) ?? new Map(),
+      ));
+    }
+    return { capacityByColumn: byColumn, goalsWithoutStories: undecomposed, unthemedHours: unthemed };
+  }, [goals, stories, goalsById, storyHoursByGoal, columns, granularity, sprints, rowAxis,
+      weeklyHours, drag, dragOverColumn]);
 
   /**
    * A drop writes BOTH goal dates. Only endDate used to be written, which left startDate stale
@@ -686,9 +877,12 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
                 width: labelColW, flexShrink: 0, paddingTop: 12, position: 'sticky', left: 0, zIndex: 4,
                 background: 'var(--bg, #f8f9fa)',
               }} />
-              {columns.map((qKey) => (
+              {columns.map((qKey) => {
+                const cap = capacityByColumn.get(qKey);
+                const undecomposed = goalsWithoutStories.get(qKey) ?? 0;
+                return (
                 <div key={qKey} style={{
-                  width: COL_W, flexShrink: 0, padding: '17px 10px 5px',
+                  width: COL_W, flexShrink: 0, padding: '17px 10px 6px',
                   fontSize: 11, fontWeight: 700, color: 'var(--text, #374151)',
                   borderLeft: '1px solid var(--line, #e5e7eb)',
                   background: qKey === currentPeriodKey ? accentTint(themeVars.panel, 20) : 'var(--panel, #f1f5f9)',
@@ -696,8 +890,42 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
                 }}>
                   {periodLabel(qKey, granularity, sprints as any)}
                   {qKey === currentPeriodKey && <span style={{ marginLeft: 5, fontSize: 9, color: 'var(--brand, #3b82f6)' }}>▶ now</span>}
+                  {/* Capacity only means something against a weekly plan. With no
+                      theme_allocations doc there is nothing to be over, so nothing is drawn. */}
+                  {hasAllocationPlan && cap && (
+                    qKey === UNSCHEDULED_COLUMN ? (
+                      // The Backlog has no window and therefore no capacity — but how much work
+                      // is parked in it is exactly the number you want beside the columns that do.
+                      cap.committedHours > 0 && (
+                        <div style={{ fontSize: 10, fontWeight: 400, color: 'var(--muted, #6b7280)', marginTop: 4 }}>
+                          {Math.round(cap.committedHours)}h unscheduled
+                        </div>
+                      )
+                    ) : (
+                      <div style={{ marginTop: 5 }}>
+                        <CapacityBar slice={cap} themesOver={cap.themesOver} />
+                        {/* Named, not hidden: at year and quarter the cells hold goals, and a
+                            goal with no stories written yet contributes zero hours. Without
+                            this the emptiest plans would look like the healthiest. */}
+                        {rowAxis === 'theme' && undecomposed > 0 && (
+                          <div style={{ fontSize: 9, fontWeight: 400, color: 'var(--muted, #9ca3af)' }}>
+                            {undecomposed} goal{undecomposed === 1 ? '' : 's'} not broken down
+                          </div>
+                        )}
+                        {(unthemedHours.get(qKey) ?? 0) > 0 && (
+                          <div
+                            style={{ fontSize: 9, fontWeight: 400, color: 'var(--muted, #9ca3af)' }}
+                            title="These carry a theme the app does not recognise, so they cannot be matched to an allocation. Excluded from the figures above."
+                          >
+                            +{Math.round(unthemedHours.get(qKey)!)}h unthemed
+                          </div>
+                        )}
+                      </div>
+                    )
+                  )}
                 </div>
-              ))}
+                );
+              })}
             </div>
 
             {rows.map((theme) => {
@@ -755,6 +983,14 @@ const RoadmapGrid: React.FC<RoadmapGridProps> = ({
                           display: 'flex', flexDirection: 'column', gap: 4,
                         }}
                       >
+                        {/* Per-theme capacity, which only exists where a row IS a theme. At
+                            sprint level a row is a goal, and several goals share a theme, so a
+                            per-cell figure there would count the same allocation repeatedly —
+                            the column header carries the number instead. */}
+                        {hasAllocationPlan && rowAxis === 'theme' && qKey !== UNSCHEDULED_COLUMN && (() => {
+                          const slice = capacityByColumn.get(qKey)?.byTheme.get(themeNameOf(theme.themeId));
+                          return slice ? <CapacityBar slice={slice} compact /> : null;
+                        })()}
                         {granularity === 'sprint' && rowAxis === 'goal'
                           && (storiesByGoalSprint.get(`${theme.key}:${qKey}`) || []).map((st: any) => (
                           <div

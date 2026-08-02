@@ -17,8 +17,12 @@ import {
 import {
   buildPlannerPath,
   normalizePlannerLevel,
+  normalizePlannerDetail,
   parsePlannerSearch,
   plannerLevelLabel,
+  DEFAULT_ROADMAP_DETAIL,
+  ROADMAP_DETAIL_PARAM,
+  type RoadmapDetail,
   type UnifiedPlannerLevel,
 } from '../../utils/plannerRoutes';
 
@@ -27,14 +31,30 @@ type PlanDestination = {
   label: string;
 };
 
+/**
+ * The roadmap's four time axes, offered directly rather than as separate destinations.
+ *
+ * `Year Planner` and `Quarter Planner` used to sit in the list below as though they were their
+ * own screens. They are not — both are `?level=` aliases that render the same RoadmapGrid, as
+ * does `Gantt chart`. The menu was advertising four surfaces where there is one, and choosing
+ * between them did not even set the axis you had just named. These entries write
+ * `?detailLevel=`, so the menu and the roadmap's own toolbar drive the same state.
+ */
+const ROADMAP_DETAILS: Array<{ detail: RoadmapDetail; label: string }> = [
+  { detail: 'year', label: 'Year' },
+  { detail: 'quarter', label: 'Quarter' },
+  { detail: 'sprint', label: 'Sprint' },
+  { detail: 'week', label: 'Week' },
+];
+
+/** Surfaces that are genuinely their own thing, not a view of the roadmap. */
 const PLAN_LEVELS: PlanDestination[] = [
-  // Roadmap leads: it is the default planning view. It is a real planner level now, so unlike
-  // before it needs no special-casing outside this list.
-  { level: 'roadmap', label: 'Roadmap' },
   { level: 'gantt', label: 'Gantt chart' },
-  { level: 'year', label: 'Year Planner' },
-  { level: 'quarter', label: 'Quarter Planner' },
+  // Story-level sprint capacity — a different altitude from the roadmap's sprint columns.
   { level: 'sprint', label: 'Multi Sprint Planner' },
+  // react-big-calendar with Google sync and drag-resize. Overlaps the roadmap's Week axis and
+  // the two should probably merge, but they are not the same component today and quietly
+  // dropping this one would lose the Google side.
   { level: 'week', label: 'Weekly Plan' },
   { level: 'calendar', label: 'Calendar' },
 ];
@@ -53,6 +73,16 @@ const PlanActionBar: React.FC<PlanActionBarProps> = ({ className }) => {
   );
   const isRoadmapActive = location.pathname === '/canvas'
     && new URLSearchParams(location.search).get('layout') === 'roadmap';
+  // `year` and `quarter` still route to the roadmap, so the menu must show them as such
+  // rather than as unrelated levels that happen to be selected.
+  const isRoadmapLevel = currentPlannerLevel != null
+    && ['roadmap', 'year', 'quarter'].includes(currentPlannerLevel);
+  const currentDetail = useMemo(
+    () => (query.get(ROADMAP_DETAIL_PARAM)
+      ? normalizePlannerDetail(query.get(ROADMAP_DETAIL_PARAM))
+      : currentPlannerLevel === 'year' ? 'year' : DEFAULT_ROADMAP_DETAIL),
+    [query, currentPlannerLevel],
+  );
 
   const activePlanLevel = useMemo(
     () => (currentPlannerLevel ? PLAN_LEVELS.find((entry) => entry.level === currentPlannerLevel) || null : null),
@@ -69,9 +99,16 @@ const PlanActionBar: React.FC<PlanActionBarProps> = ({ className }) => {
   };
 
   const navigateToLevel = (level: UnifiedPlannerLevel) => {
-    const nextParams = new URLSearchParams(location.search);
+    const nextParams = parsePlannerSearch(location.search);
     nextParams.set('level', level);
     navigate(buildPlannerPath(level, nextParams));
+  };
+
+  /** Roadmap at a given time axis. One destination, four axes — see ROADMAP_DETAILS. */
+  const navigateToRoadmapDetail = (detail: RoadmapDetail) => {
+    const nextParams = parsePlannerSearch(location.search);
+    nextParams.set(ROADMAP_DETAIL_PARAM, detail);
+    navigate(buildPlannerPath('roadmap', nextParams));
   };
 
   const iconForLevel = (level: UnifiedPlannerLevel) => {
@@ -119,14 +156,40 @@ const PlanActionBar: React.FC<PlanActionBarProps> = ({ className }) => {
         <Brain size={14} /><span className="d-none d-xl-inline ms-1">Coach</span>
       </Button>
       <Dropdown>
-        <Dropdown.Toggle size="sm" variant={activePlanLevel || isRoadmapActive ? 'primary' : 'outline-secondary'} title="Switch planning level">
-          <Milestone size={14} /><span className="d-none d-xl-inline ms-1">Plan{isRoadmapActive ? ': Roadmap' : activePlanLevel ? `: ${plannerLevelLabel(activePlanLevel.level)}` : ''}</span>
+        {/* The roadmap is no longer one of PLAN_LEVELS, so its label comes from the detail axis
+            — "Plan: Roadmap · Quarter" rather than four indistinguishable "Plan: …" states. */}
+        <Dropdown.Toggle
+          size="sm"
+          variant={activePlanLevel || isRoadmapActive || isRoadmapLevel ? 'primary' : 'outline-secondary'}
+          title="Switch planning level"
+        >
+          <Milestone size={14} />
+          <span className="d-none d-xl-inline ms-1">
+            Plan
+            {isRoadmapLevel
+              ? `: Roadmap · ${ROADMAP_DETAILS.find((d) => d.detail === currentDetail)?.label ?? ''}`
+              : isRoadmapActive
+                ? ': Roadmap'
+                : activePlanLevel ? `: ${plannerLevelLabel(activePlanLevel.level)}` : ''}
+          </span>
         </Dropdown.Toggle>
         {/* strategy: 'fixed' so the menu escapes this bar's overflow-x. The bar scrolls
             horizontally when the icons do not fit, and an absolutely-positioned menu inside an
             overflow container gets clipped — the same defect that hid the notification panel
             and Sprint selector in the top toolbar. */}
         <Dropdown.Menu renderOnMount popperConfig={{ strategy: 'fixed' }}>
+          <Dropdown.Header className="small text-uppercase">Roadmap</Dropdown.Header>
+          {ROADMAP_DETAILS.map(({ detail, label }) => (
+            <Dropdown.Item
+              key={detail}
+              active={isRoadmapLevel && currentDetail === detail}
+              onClick={() => navigateToRoadmapDetail(detail)}
+            >
+              <MapIcon size={14} className="me-1" />
+              {label}
+            </Dropdown.Item>
+          ))}
+          <Dropdown.Divider />
           {PLAN_LEVELS.map((entry) => (
             <Dropdown.Item
               key={entry.level}
