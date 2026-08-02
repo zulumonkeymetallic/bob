@@ -692,20 +692,5 @@ service cloud.firestore {
       allow read: if isSignedIn();
       allow write: if false; // server-only via Admin SDK
     }
-
-    // ── iOS crash reports ──────────────────────────────────────────────────
-    // BOB/Sources/Utils/CrashReporter.swift has written here since it was added, and
-    // there was no rule for the collection. Firestore denies by default and there is no
-    // catch-all, so every report was rejected: the client caught PERMISSION_DENIED,
-    // logged it to a file on the device with no reader, and kept the crash undelivered.
-    // The collection was empty in production the whole time crashes were being reported.
-    //
-    // Create-only from the client. A crash report is evidence; a client that can rewrite
-    // or delete its own is worth less than one that cannot.
-    match /support_email_queue/{id} {
-      allow create: if isOwnerForCreate();
-      allow read: if isOwner();
-      allow update, delete: if false;
-    }
   }
 }
