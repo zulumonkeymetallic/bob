@@ -615,13 +615,19 @@ const FinanceDashboardAdvanced: React.FC = () => {
         [filter, startDate, endDate]
     );
 
-    const handleCardFilter = useCallback((nextFilter: DashboardCardFilter) => {
-        setChartFilter({ type: null, value: null });
-        setCardFilter((prev) => (prev === nextFilter ? 'all' : nextFilter));
+    /** The table sits below the charts, so a filter set by a click is off-screen
+     *  without this — the drill-down looks like it did nothing. */
+    const scrollToTransactions = useCallback(() => {
         setTimeout(() => {
             txSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }, 60);
     }, []);
+
+    const handleCardFilter = useCallback((nextFilter: DashboardCardFilter) => {
+        setChartFilter({ type: null, value: null });
+        setCardFilter((prev) => (prev === nextFilter ? 'all' : nextFilter));
+        scrollToTransactions();
+    }, [scrollToTransactions]);
 
     const transactionsExternalFilters = useMemo(() => {
         const next: {
@@ -629,6 +635,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
             dateEndISO: string;
             bucket?: string;
             category?: string;
+            merchant?: string;
             missingOnly?: boolean;
             anomaly?: 'all' | 'flagged' | 'normal';
             subscriptionOnly?: boolean;
@@ -649,6 +656,12 @@ const FinanceDashboardAdvanced: React.FC = () => {
         }
         if (chartFilter.type === 'category' && chartFilter.value) {
             next.category = chartFilter.value;
+        }
+        // Merchant was filtered in the summary cards but never reached the embedded
+        // transaction list, so clicking a merchant segment narrowed the totals while
+        // the table below carried on showing everything.
+        if (chartFilter.type === 'merchant' && chartFilter.value) {
+            next.merchant = chartFilter.value;
         }
 
         return next;
@@ -871,6 +884,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
             const filterType = viewMode === 'merchant' ? 'merchant' : viewMode === 'bucket' ? 'bucket' : 'category';
             setCardFilter('all');
             setChartFilter({ type: filterType, value: selectedName });
+            scrollToTransactions();
         }
     };
 
@@ -880,6 +894,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
             const filterType = viewMode === 'merchant' ? 'merchant' : viewMode === 'bucket' ? 'bucket' : 'category';
             setCardFilter('all');
             setChartFilter({ type: filterType, value: selectedName });
+            scrollToTransactions();
         }
     };
 
@@ -887,6 +902,66 @@ const FinanceDashboardAdvanced: React.FC = () => {
         setChartFilter({ type: null, value: null });
         setCardFilter('all');
     };
+
+    /** Top categories by spend. Separate from distributionOption, which is shared
+     *  with the merchant/bucket toggle and changes shape with viewMode. */
+    const categoryDonutOption = useMemo(() => {
+        const top = categoryData.slice(0, 9);
+        const rest = categoryData.slice(9);
+        const restTotal = rest.reduce((sum, entry) => sum + Number(entry.value || 0), 0);
+        const slices = restTotal > 0
+            ? [...top, { key: '__other__', name: 'Other', value: restTotal }]
+            : top;
+
+        return {
+            tooltip: {
+                trigger: 'item',
+                formatter: (params: any) => `${params.name}<br/>${formatCurrency(params.value)} (${params.percent}%)`,
+            },
+            legend: { bottom: 0, icon: 'circle', itemWidth: 8, itemHeight: 8, textStyle: { fontSize: 11 } },
+            series: [{
+                type: 'pie',
+                radius: ['55%', '80%'],
+                center: ['50%', '42%'],
+                avoidLabelOverlap: true,
+                label: { show: false },
+                labelLine: { show: false },
+                emphasis: { scale: true, scaleSize: 4 },
+                data: slices.map((entry, index) => ({
+                    name: entry.name,
+                    value: Number(entry.value || 0),
+                    itemStyle: { color: THEME_COLORS[index % THEME_COLORS.length] },
+                })),
+            }],
+        };
+    }, [categoryData, formatCurrency]);
+
+    /**
+     * Spend Analysis charts. Their grouping is user-chosen via analysisDimension,
+     * so the clicked label means bucket / category / merchant accordingly. Series
+     * name wins for the trend lines (one series per group); data name for the pies.
+     */
+    const handleAnalysisChartClick = useCallback((params: any) => {
+        if (params?.componentType !== 'series') return;
+        const selected = params.seriesName || params.name;
+        if (!selected || selected === 'Other') return;
+        setCardFilter('all');
+        setChartFilter({ type: analysisDimension as 'bucket' | 'category' | 'merchant', value: selected });
+        scrollToTransactions();
+    }, [analysisDimension, scrollToTransactions]);
+
+    const handleCategoryDonutClick = useCallback((params: any) => {
+        if (params?.componentType !== 'series') return;
+        // 'Other' is an aggregate of the tail — there is no single category to
+        // filter by, so clear rather than filter on a label that matches nothing.
+        if (params.name === 'Other') {
+            clearChartFilter();
+            return;
+        }
+        setCardFilter('all');
+        setChartFilter({ type: 'category', value: params.name });
+        scrollToTransactions();
+    }, [scrollToTransactions]);
 
     const filteredRecentTransactions = (data?.recentTransactions || [])
         .filter((tx: any) => {
@@ -1813,6 +1888,10 @@ const FinanceDashboardAdvanced: React.FC = () => {
             {/* Mandatory vs discretionary. The two donuts elsewhere on this page are
                 merchant/category distributions — neither answers "how much of my
                 spend is actually optional", which is the question this one exists for. */}
+            {/* Both donuts are always visible rather than behind the merchant/bucket/
+                category toggle — the bucket split and the category split answer
+                different questions and are usually wanted together. Clicking any
+                segment sets chartFilter, which drives the transaction table below. */}
             <Row className="g-3 mb-4">
                 <Col md={6} lg={4}>
                     <PremiumCard title="Mandatory vs Discretionary" icon={Target}>
@@ -1826,7 +1905,18 @@ const FinanceDashboardAdvanced: React.FC = () => {
                             onSliceClick={(bucket) => {
                                 setCardFilter('all');
                                 setChartFilter({ type: 'bucket', value: bucket });
+                                scrollToTransactions();
                             }}
+                        />
+                    </PremiumCard>
+                </Col>
+                <Col md={6} lg={5}>
+                    <PremiumCard title="Spend by Category" icon={PieIcon}>
+                        <ReactECharts
+                            option={categoryDonutOption}
+                            style={{ height: 240 }}
+                            opts={{ renderer: 'svg' }}
+                            onEvents={{ click: handleCategoryDonutClick }}
                         />
                     </PremiumCard>
                 </Col>
@@ -2007,11 +2097,27 @@ const FinanceDashboardAdvanced: React.FC = () => {
                                     </Col>
                                 </Row>
                             ) : (
-                                <ReactECharts option={analysisTrendOption} style={{ height: 360 }} />
+                                <ReactECharts
+                                    option={analysisTrendOption}
+                                    style={{ height: 360 }}
+                                    onEvents={{ click: handleAnalysisChartClick }}
+                                />
                             )
                         )}
-                        {analysisChartType === 'pie' && <ReactECharts option={analysisPieOption} style={{ height: 360 }} />}
-                        {analysisChartType === 'breakdown' && <ReactECharts option={analysisBreakdownOption} style={{ height: 360 }} />}
+                        {analysisChartType === 'pie' && (
+                            <ReactECharts
+                                option={analysisPieOption}
+                                style={{ height: 360 }}
+                                onEvents={{ click: handleAnalysisChartClick }}
+                            />
+                        )}
+                        {analysisChartType === 'breakdown' && (
+                            <ReactECharts
+                                option={analysisBreakdownOption}
+                                style={{ height: 360 }}
+                                onEvents={{ click: handleAnalysisChartClick }}
+                            />
+                        )}
                     </PremiumCard>
                 </Col>
             </Row>
@@ -2266,6 +2372,35 @@ const FinanceDashboardAdvanced: React.FC = () => {
             </Row>
 
             {renderCashflow()}
+
+            {/* The table belongs under the charts on this tab too: clicking a segment
+                above sets chartFilter, and without a list here the drill-down had
+                nowhere to land. Same embedded component and same external filters as
+                the Overview tab, so there is one transaction table implementation. */}
+            <Row className="g-3" ref={txSectionRef}>
+                <Col lg={12}>
+                    <PremiumCard
+                        title={`Transactions (${filteredRecentTransactions.length})`}
+                        icon={CreditCard}
+                        action={
+                            drilldownBadgeLabel ? (
+                                <div className="d-flex align-items-center gap-2">
+                                    <Badge bg="primary">{drilldownBadgeLabel}</Badge>
+                                    <Button size="sm" variant="outline-secondary" onClick={clearChartFilter}>
+                                        Clear Filter
+                                    </Button>
+                                </div>
+                            ) : undefined
+                        }
+                    >
+                        <TransactionsList
+                            embedded
+                            autoCollapseFilters
+                            externalFilters={transactionsExternalFilters}
+                        />
+                    </PremiumCard>
+                </Col>
+            </Row>
         </>
     );
 

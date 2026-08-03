@@ -20,6 +20,12 @@
     "noFallthroughCasesInSwitch": true,
     "module": "esnext",
     "moduleResolution": "node",
+    /* TS5107 (moduleResolution=node10 is deprecated) is emitted as a config-level
+       ERROR, and tsc stops before checking any source when config errors exist.
+       So `tsc --noEmit` was silently checking nothing — it exited non-zero having
+       verified no code at all, which made it useless as a gate. CRA 5 pins the
+       resolution mode, so silence the deprecation rather than change it. */
+    "ignoreDeprecations": "6.0",
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
