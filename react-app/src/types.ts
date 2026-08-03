@@ -176,8 +176,9 @@ export interface Story {
   // state exists solely on AI-delegated items. 'human_review' means the AI has
   // finished and the result is waiting on Jim; it is never expressed via `status`,
   // because status has no Review lane (story 0/2/4, task 0/1/2 — writing 2 on a
-  // task would close it).
-  aiDelegationStatus?: 'queued' | 'in_progress' | 'human_review' | 'blocked' | 'failed';
+  // task would close it). The UI labels 'human_review' as "Review" — that label is
+  // the delegation review state, not a `status` lane.
+  aiDelegationStatus?: 'queued' | 'in_progress' | 'human_review' | 'revision_requested' | 'rejected' | 'blocked' | 'failed';
   aiDelegationNote?: string;
   aiDelegatedAt?: number;
   aiDelegationDocumentLink?: string;
@@ -185,6 +186,19 @@ export interface Story {
   aiDelegationRevision?: number;
   aiDelegationPreviousDocumentLink?: string;
   aiDelegationExecutionSummary?: string;
+  // Which engine executes the work. 'gemini' runs in Cloud Functions; 'hermes' runs on
+  // Jim's Mac. Unset means gemini — the two engines share one `flaggedToAi` queue and
+  // this field is what stops them both picking up the same item.
+  aiDelegationEngine?: 'gemini' | 'hermes';
+  // The instruction actually sent to the model. Absent on first delegation (the title is
+  // used); always set afterwards, including the rewritten prompt a revision produced.
+  aiDelegationPrompt?: string;
+  aiDelegationType?: 'simple' | 'research' | 'analysis' | 'image';
+  aiDelegationTaskType?: string;
+  aiDelegationModel?: string;
+  aiDelegationRejectedReason?: string;
+  aiDelegationCompletedAt?: string;
+  aiDelegationReviewedAt?: any;
 }
 
 export interface JournalMindsetAnalysis {
@@ -401,8 +415,9 @@ export interface Task {
   // state exists solely on AI-delegated items. 'human_review' means the AI has
   // finished and the result is waiting on Jim; it is never expressed via `status`,
   // because status has no Review lane (story 0/2/4, task 0/1/2 — writing 2 on a
-  // task would close it).
-  aiDelegationStatus?: 'queued' | 'in_progress' | 'human_review' | 'blocked' | 'failed';
+  // task would close it). The UI labels 'human_review' as "Review" — that label is
+  // the delegation review state, not a `status` lane.
+  aiDelegationStatus?: 'queued' | 'in_progress' | 'human_review' | 'revision_requested' | 'rejected' | 'blocked' | 'failed';
   aiDelegationNote?: string;
   aiDelegatedAt?: number;
   aiDelegationDocumentLink?: string;
@@ -410,6 +425,19 @@ export interface Task {
   aiDelegationRevision?: number;
   aiDelegationPreviousDocumentLink?: string;
   aiDelegationExecutionSummary?: string;
+  // Which engine executes the work. 'gemini' runs in Cloud Functions; 'hermes' runs on
+  // Jim's Mac. Unset means gemini — the two engines share one `flaggedToAi` queue and
+  // this field is what stops them both picking up the same item.
+  aiDelegationEngine?: 'gemini' | 'hermes';
+  // The instruction actually sent to the model. Absent on first delegation (the title is
+  // used); always set afterwards, including the rewritten prompt a revision produced.
+  aiDelegationPrompt?: string;
+  aiDelegationType?: 'simple' | 'research' | 'analysis' | 'image';
+  aiDelegationTaskType?: string;
+  aiDelegationModel?: string;
+  aiDelegationRejectedReason?: string;
+  aiDelegationCompletedAt?: string;
+  aiDelegationReviewedAt?: any;
 }
 
 export interface Column {

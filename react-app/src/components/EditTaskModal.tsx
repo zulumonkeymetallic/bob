@@ -27,6 +27,8 @@ import { getGoalDisplayPath, getLeafGoalOptions, resolveLeafGoalSelection } from
 import EditStoryModal from './EditStoryModal';
 import NewCalendarEventModal, { buildCalendarComposerInitialValues } from './planner/NewCalendarEventModal';
 import DeferItemModal from './DeferItemModal';
+import DelegateToAiModal from './DelegateToAiModal';
+import { isAwaitingReview } from '../utils/delegationRouting';
 import { Activity, Bot, CalendarPlus, CheckCheck, Clock3, Maximize2, Minimize2, Trash2, Wand2 } from 'lucide-react';
 import DrivePickerButton from './shared/DrivePickerButton';
 
@@ -130,6 +132,7 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
   const [showCalendarComposer, setShowCalendarComposer] = useState(false);
   const [calendarComposerInitialValues, setCalendarComposerInitialValues] = useState<any>({});
   const [showDeferModal, setShowDeferModal] = useState(false);
+  const [showDelegate, setShowDelegate] = useState(false);
   const visibleSprints = planningSprints(sprints);
   const selectedSprint = form.sprintId ? sprints.find((sprint) => sprint.id === form.sprintId) : null;
   const selectedSprintStatus = selectedSprint
@@ -600,35 +603,20 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
               <Button variant="outline-secondary" size="sm" title="Open calendar composer" onClick={handleOpenCalendarComposer}>
                 <CalendarPlus size={14} />
               </Button>
+              {/* Delegation lifecycle — engine choice, the ask, and accept/reject-with-
+                  commentary all live in DelegateToAiModal. See EditStoryModal for why the
+                  bare toggle and the separate Mark reviewed tick went away. */}
               <Button
-                variant={(task as any)?.flaggedToAi ? 'warning' : 'outline-secondary'}
+                variant={isAwaitingReview(task) ? 'warning' : ((task as any)?.flaggedToAi ? 'info' : 'outline-secondary')}
                 size="sm"
-                title={(task as any)?.flaggedToAi ? 'Remove AI delegation' : 'Delegate to AI'}
-                onClick={async () => {
-                  const newVal = !(task as any)?.flaggedToAi;
-                  await updateDoc(doc(db, 'tasks', task!.id), { flaggedToAi: newVal, updatedAt: serverTimestamp() });
-                }}
+                title={isAwaitingReview(task)
+                  ? 'AI result waiting on your review'
+                  : ((task as any)?.flaggedToAi ? 'Queued for AI — open to change or run now' : 'Delegate to AI')}
+                onClick={() => setShowDelegate(true)}
                 disabled={saving || !task}
               >
-                <Bot size={14} />
+                {isAwaitingReview(task) ? <CheckCheck size={14} /> : <Bot size={14} />}
               </Button>
-              {(task as any)?.aiDelegationStatus === 'human_review' && (
-                <Button
-                  variant="success"
-                  size="sm"
-                  title="Mark reviewed — clears the human review state. Status is left alone, so this never closes the task."
-                  onClick={async () => {
-                    await updateDoc(doc(db, 'tasks', task!.id), {
-                      aiDelegationStatus: null,
-                      aiDelegationReviewedAt: serverTimestamp(),
-                      updatedAt: serverTimestamp(),
-                    });
-                  }}
-                  disabled={saving || !task}
-                >
-                  <CheckCheck size={14} />
-                </Button>
-              )}
               <Button variant="outline-secondary" size="sm" title="Defer intelligently" onClick={() => setShowDeferModal(true)}>
                 <Clock3 size={14} />
               </Button>
@@ -1179,6 +1167,13 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
           setShowDeferModal(false);
           onUpdated?.();
         }}
+      />
+      <DelegateToAiModal
+        show={showDelegate && !!task}
+        onHide={() => setShowDelegate(false)}
+        entityType="task"
+        entityId={task?.id}
+        entity={task}
       />
     </Modal>
 

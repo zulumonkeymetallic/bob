@@ -4,13 +4,20 @@
  * delegationWorker.js
  *
  * Firestore-triggered notifications for AI-delegated tasks and stories.
- * Fires when aiDelegationStatus changes to 'review' (Hermes completed work).
+ * Fires when aiDelegationStatus enters the review state, whichever engine produced it.
  *
- * Hermes executes the work locally and updates Firestore directly via
- * bob_firestore_mutation.py. This function handles:
+ * Either Hermes executes the work locally and writes Firestore via bob_firestore_mutation.py,
+ * or the cloud cycle in ../aiDelegation.js does. This function handles:
  *   - Email to Jim
  *   - Activity stream entry
  *   - Copying aiDelegationDocumentLink → documentLink (surfaces in Edit modal)
+ *
+ * WHY TWO ACCEPTED VALUES: this file only ever matched the literal 'review', but every
+ * producer — aiDelegation.js, run_delegation_cycle.py, and the `aiDelegationStatus` union in
+ * react-app/src/types.ts — writes 'human_review'. So the trigger has never fired for a real
+ * delegation: no email, no activity entry, and documentLink left unset. 'human_review' is the
+ * canonical value (it is the one CLAUDE.md documents and the one the UI clears); 'review' is
+ * accepted so any legacy row already carrying it still notifies.
  */
 
 const { onDocumentUpdated } = require('firebase-functions/v2/firestore');
@@ -22,6 +29,9 @@ if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
 const BOB_URL = 'https://bob.jc1.tech';
 const REGION = 'europe-west2';
+
+const REVIEW_STATES = new Set(['human_review', 'review']);
+const isReviewState = (value) => REVIEW_STATES.has(String(value || ''));
 
 // ---------------------------------------------------------------------------
 // Shared notification logic
@@ -118,7 +128,7 @@ exports.onStoryDelegationComplete = onDocumentUpdated(
     const before = event.data.before.data();
     const after = event.data.after.data();
     if (!after || before?.aiDelegationStatus === after?.aiDelegationStatus) return;
-    if (after.aiDelegationStatus !== 'review') return;
+    if (!isReviewState(after.aiDelegationStatus)) return;
     await notifyDelegationComplete(after, 'story', event.params.docId);
   },
 );
@@ -129,7 +139,7 @@ exports.onTaskDelegationComplete = onDocumentUpdated(
     const before = event.data.before.data();
     const after = event.data.after.data();
     if (!after || before?.aiDelegationStatus === after?.aiDelegationStatus) return;
-    if (after.aiDelegationStatus !== 'review') return;
+    if (!isReviewState(after.aiDelegationStatus)) return;
     await notifyDelegationComplete(after, 'task', event.params.docId);
   },
 );

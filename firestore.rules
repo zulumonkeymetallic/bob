@@ -684,6 +684,21 @@ service cloud.firestore {
       allow read, update, delete: if isOwner();
     }
 
+    // AI research / delegation output documents.
+    //
+    // This collection had NO rule at all, and there is no catch-all below — so every client
+    // read was denied by default and ResearchDocModal's document list could never populate,
+    // whatever the pipeline wrote. Written server-side only (Admin SDK bypasses rules), so
+    // the client gets read and nothing else.
+    //
+    // A collection query must constrain ownerUid for this to be satisfiable — see
+    // DelegateToAiModal, which filters on ownerUid plus the entity id and sorts client-side
+    // rather than adding an orderBy that would need a composite index.
+    match /research_docs/{id} {
+      allow read: if isOwner();
+      allow write: if false;
+    }
+
     // ── LLM Model Registry ─────────────────────────────────────────────────
     // Refreshed daily by refreshModelRegistry scheduled function.
     // All authenticated users can read (used by getAIModels fallback chain).

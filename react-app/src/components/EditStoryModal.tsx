@@ -25,6 +25,8 @@ import NewCalendarEventModal, { buildCalendarComposerInitialValues } from './pla
 import DeferItemModal from './DeferItemModal';
 import { findItemWithManualPriorityRank, getManualPriorityLabel, getManualPriorityRank, getNextManualPriorityRank } from '../utils/manualPriority';
 import DrivePickerButton from './shared/DrivePickerButton';
+import DelegateToAiModal from './DelegateToAiModal';
+import { isAwaitingReview } from '../utils/delegationRouting';
 import {
   buildStoryProgressUpdate,
   computePointsRemaining,
@@ -92,6 +94,7 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
   const [showCalendarComposer, setShowCalendarComposer] = useState(false);
   const [calendarComposerInitialValues, setCalendarComposerInitialValues] = useState<any>({});
   const [showDeferModal, setShowDeferModal] = useState(false);
+  const [showDelegate, setShowDelegate] = useState(false);
   const [flaggingPriority, setFlaggingPriority] = useState(false);
   const [takenOrderMap, setTakenOrderMap] = useState<Map<number, string>>(new Map()); // rank → story doc id
   const isHiddenSprint = (sprint: Sprint) => isStatus(sprint.status, 'closed') || isStatus(sprint.status, 'cancelled');
@@ -628,35 +631,21 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
               <Button variant="outline-secondary" size="sm" title="Open calendar composer" onClick={handleOpenCalendarComposer}>
                 <CalendarPlus size={14} />
               </Button>
+              {/* One button for the whole delegation lifecycle. This used to be a bare
+                  flaggedToAi toggle — no way to say what you wanted, which engine should
+                  run it, or to reject the result — plus a separate Mark reviewed tick that
+                  could only accept. Both now live in DelegateToAiModal. */}
               <Button
-                variant={(story as any)?.flaggedToAi ? 'warning' : 'outline-secondary'}
+                variant={isAwaitingReview(story) ? 'warning' : ((story as any)?.flaggedToAi ? 'info' : 'outline-secondary')}
                 size="sm"
-                title={(story as any)?.flaggedToAi ? 'Remove AI delegation' : 'Delegate to AI'}
-                onClick={async () => {
-                  const newVal = !(story as any)?.flaggedToAi;
-                  await updateDoc(doc(db, 'stories', story!.id), { flaggedToAi: newVal, updatedAt: serverTimestamp() });
-                }}
+                title={isAwaitingReview(story)
+                  ? 'AI result waiting on your review'
+                  : ((story as any)?.flaggedToAi ? 'Queued for AI — open to change or run now' : 'Delegate to AI')}
+                onClick={() => setShowDelegate(true)}
                 disabled={loading || !story}
               >
-                <Bot size={14} />
+                {isAwaitingReview(story) ? <CheckCheck size={14} /> : <Bot size={14} />}
               </Button>
-              {(story as any)?.aiDelegationStatus === 'human_review' && (
-                <Button
-                  variant="success"
-                  size="sm"
-                  title="Mark reviewed — clears the human review state. Status is left alone."
-                  onClick={async () => {
-                    await updateDoc(doc(db, 'stories', story!.id), {
-                      aiDelegationStatus: null,
-                      aiDelegationReviewedAt: serverTimestamp(),
-                      updatedAt: serverTimestamp(),
-                    });
-                  }}
-                  disabled={loading || !story}
-                >
-                  <CheckCheck size={14} />
-                </Button>
-              )}
               <Button variant="outline-secondary" size="sm" title="Defer intelligently" onClick={() => setShowDeferModal(true)}>
                 <Clock3 size={14} />
               </Button>
@@ -1183,6 +1172,13 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
           setShowDeferModal(false);
           onStoryUpdated?.();
         }}
+      />
+      <DelegateToAiModal
+        show={showDelegate && !!story}
+        onHide={() => setShowDelegate(false)}
+        entityType="story"
+        entityId={story?.id}
+        entity={story}
       />
     </Modal>
 

@@ -7,7 +7,14 @@
  * the same grounds wherever it is processed, or moving the cycle server-side quietly changes
  * what Jim gets back.
  */
-const { classifyDelegationTask, shouldReject, TIER_MODELS } = require('./aiDelegation');
+// Mocked for the whole file: resolveWorkingPrompt makes a real model call on the revision
+// path, and a unit test must never depend on Vertex credentials being present.
+jest.mock('./utils/llmHelper', () => ({ callLLM: jest.fn() }));
+
+const {
+  classifyDelegationTask, shouldReject, selectEngine, resolveWorkingPrompt,
+  TIER_MODELS, REVISION_MODEL, ENGINE_GEMINI, ENGINE_HERMES,
+} = require('./aiDelegation');
 
 describe('classifyDelegationTask', () => {
   it('routes an image request to the image tier, whatever else it says', () => {
@@ -101,5 +108,100 @@ describe('model routing', () => {
     ['simple', 'research', 'analysis', 'image'].forEach((tier) => {
       expect(Object.prototype.hasOwnProperty.call(TIER_MODELS, tier)).toBe(true);
     });
+  });
+});
+
+describe('selectEngine', () => {
+  it('routes to hermes only on an explicit hermes value', () => {
+    expect(selectEngine('hermes')).toBe(ENGINE_HERMES);
+    expect(selectEngine('  HERMES  ')).toBe(ENGINE_HERMES);
+  });
+
+  it('defaults everything else — including unset — to the cloud engine', () => {
+    // The default matters: every item flagged before aiDelegationEngine existed has no value,
+    // and those must keep being processed by the engine that runs whether or not the Mac is on.
+    [undefined, null, '', 'gemini', 'nonsense'].forEach((v) => {
+      expect(selectEngine(v)).toBe(ENGINE_GEMINI);
+    });
+  });
+});
+
+describe('resolveWorkingPrompt', () => {
+  const { callLLM } = require('./utils/llmHelper');
+
+  beforeEach(() => {
+    callLLM.mockReset();
+  });
+
+  it('passes the prompt through untouched with no feedback, at the classified tier', async () => {
+    const out = await resolveWorkingPrompt({}, 'research the ITOM market', 'ST-1');
+    expect(out.revised).toBe(false);
+    expect(out.prompt).toBe('research the ITOM market');
+    expect(out.taskType).toBe('research');
+    expect(out.model).toBe(TIER_MODELS.research);
+    // No feedback means no rewrite call — the revision pass must not cost a model call on
+    // every ordinary delegation.
+    expect(callLLM).not.toHaveBeenCalled();
+  });
+
+  it('honours an explicit tier override instead of classifying', async () => {
+    const out = await resolveWorkingPrompt({ aiDelegationType: 'simple' }, 'research the market', 'ST-1');
+    expect(out.taskType).toBe('simple');
+    expect(out.model).toBe(TIER_MODELS.simple);
+  });
+
+  it('rewrites the prompt from the rejection commentary', async () => {
+    callLLM.mockResolvedValue('Name at least five UK suppliers with 2026 list prices.');
+    const out = await resolveWorkingPrompt(
+      { aiDelegationFeedback: 'Too generic — I need named suppliers.', aiOutput: 'previous doc' },
+      'research suppliers',
+      'ST-1',
+    );
+    expect(out.revised).toBe(true);
+    expect(out.prompt).toBe('Name at least five UK suppliers with 2026 list prices.');
+    // The rewrite must see the original prompt, the rejected output and the commentary —
+    // rewriting from the commentary alone loses what the document was supposed to be.
+    const sentToModel = callLLM.mock.calls[0][1];
+    expect(sentToModel).toContain('research suppliers');
+    expect(sentToModel).toContain('previous doc');
+    expect(sentToModel).toContain('Too generic');
+  });
+
+  it('forces the top tier on a revision, whatever the prompt classifies as', async () => {
+    // 'draft an email' is the cheap tier, but a rejected result is evidence the cheap tier
+    // was the wrong call — so a revision must not go back to flash.
+    callLLM.mockResolvedValue('Rewritten prompt.');
+    const out = await resolveWorkingPrompt(
+      { aiDelegationFeedback: 'Too shallow.' },
+      'draft an email',
+      'ST-1',
+    );
+    expect(out.revised).toBe(true);
+    expect(out.model).toBe(REVISION_MODEL);
+    expect(callLLM.mock.calls[0][2]).toBe(REVISION_MODEL);
+  });
+
+  it('falls back to appending the commentary when the rewrite call fails', async () => {
+    // The rewrite is one extra model call; if it fails the revision must still happen with
+    // the feedback incorporated, not silently re-run the prompt that was already rejected.
+    callLLM.mockRejectedValue(new Error('vertex down'));
+    const out = await resolveWorkingPrompt(
+      { aiDelegationFeedback: 'Needs named suppliers.' },
+      'research suppliers',
+      'ST-1',
+    );
+    expect(out.revised).toBe(true);
+    expect(out.prompt).toContain('research suppliers');
+    expect(out.prompt).toContain('Needs named suppliers.');
+  });
+
+  it('keeps the original prompt when the rewrite comes back empty', async () => {
+    callLLM.mockResolvedValue('   ');
+    const out = await resolveWorkingPrompt(
+      { aiDelegationFeedback: 'Not good enough.' },
+      'research suppliers',
+      'ST-1',
+    );
+    expect(out.prompt).toBe('research suppliers');
   });
 });

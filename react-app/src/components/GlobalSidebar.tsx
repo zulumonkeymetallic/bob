@@ -14,7 +14,7 @@ import { validateRef } from '../utils/referenceGenerator';
 import { Z } from '../utils/layoutTokens';
 import { DETAIL_PANE_ID } from './layout/TabletPanes';
 import GoalChatModal from './GoalChatModal';
-import ResearchDocModal from './ResearchDocModal';
+import DelegateToAiModal from './DelegateToAiModal';
 import EditStoryModal from './EditStoryModal';
 import DriveFilesModal from './shared/DriveFilesModal';
 import EditGoalModal from './EditGoalModal';
@@ -994,13 +994,13 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
                   >
                     <MessageCircle size={16} />
                   </Button>
-                  {(selectedType === 'goal' || selectedType === 'story') && (
+                  {(selectedType === 'goal' || selectedType === 'story' || selectedType === 'task') && (
                     <Button
                       variant="link"
                       size="sm"
                       style={{ color: actionIconColor, padding: '4px' }}
                       onClick={() => setShowResearch(true)}
-                      title="Open Research"
+                      title="Delegate to AI"
                     >
                       <BookOpen size={16} />
                     </Button>
@@ -1683,13 +1683,16 @@ const GlobalSidebar: React.FC<GlobalSidebarProps> = ({
         <GoalChatModal goalId={(selectedItem as any).id} show={showChat} onHide={() => setShowChat(false)} />
       )}
 
-      {/* Research Modal (goal or story) */}
-      {showResearch && (
-        <ResearchDocModal
+      {/* Delegate to AI (goal, story or task) — this button used to open ResearchDocModal,
+          a parallel research feature with its own model dropdowns and no review step. Same
+          entry point, unified destination. */}
+      {showResearch && (selectedType === 'goal' || selectedType === 'story' || selectedType === 'task') && (
+        <DelegateToAiModal
           show={showResearch}
           onHide={() => setShowResearch(false)}
-          goalId={selectedType === 'goal' ? (selectedItem as any)?.id : undefined}
-          storyId={selectedType === 'story' ? (selectedItem as any)?.id : undefined}
+          entityType={selectedType as 'goal' | 'story' | 'task'}
+          entityId={(selectedItem as any)?.id}
+          entity={selectedItem}
         />
       )}
     </>

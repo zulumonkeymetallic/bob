@@ -1307,6 +1307,9 @@ exports.runAiDelegationNow = httpsV2.onCall(
         // dryRun classifies and reports without calling a model or writing anything — the
         // safe way to see what the queue would do before letting it loose.
         dryRun: req.data?.dryRun === true,
+        // Scope the run to one item. DelegateToAiModal's "run now" passes this so the user
+        // waits on their own document rather than on the whole queue ahead of it.
+        onlyId: String(req.data?.entityId || '').trim() || null,
       });
     } catch (err) {
       throw new httpsV2.HttpsError('internal', err?.message || 'Delegation cycle failed');
