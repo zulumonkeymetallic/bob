@@ -8,6 +8,7 @@ const { DateTime, Interval } = require('luxon');
 const { ensureFirestore, resolveTimezone } = require('./lib/reporting');
 const { makeRefCandidate } = require('./lib/refGenerator');
 const { clampTaskPoints } = require('./utils/taskPoints');
+const { rejectGenericCriteria } = require('./utils/acceptanceCriteria');
 const { buildAbsoluteUrl, buildEntityUrl } = require('./utils/urlHelpers');
 const { coerceZone, toDateTime, toMillis } = require('./lib/time');
 const { resolveActiveSprintIds, resolveActiveSprintIdsByPersona } = require('./lib/sprintStatus');
@@ -5308,8 +5309,11 @@ async function generateMissingAcceptanceCriteria() {
           ? `Story Title: ${story.title}\nDescription: ${story.description}`
           : `Story Title: ${story.title}`;
         const parsed = await callLLMJsonSafe({ system, user, purpose: 'storyAcceptanceCriteria', userId });
-        const ac = Array.isArray(parsed?.acceptanceCriteria) ? parsed.acceptanceCriteria.filter(Boolean) : null;
-        if (!ac || ac.length === 0) continue;
+        // Generic lines are dropped rather than written. Leaving the story empty costs one
+        // more LLM call tomorrow; writing filler costs the story every future attempt, because
+        // the candidate filter above skips anything with a non-empty array.
+        const ac = rejectGenericCriteria(parsed?.acceptanceCriteria);
+        if (ac.length === 0) continue;
         writer.set(story.ref, {
           acceptanceCriteria: ac,
           aiEnriched: true,

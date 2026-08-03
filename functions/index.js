@@ -38,6 +38,7 @@ const { importFromSteam, importFromTrakt, importFromGoodreadsLike } = require('.
 const { aggregateTransactions } = require('./finance/dashboard');
 const { buildAbsoluteUrl, buildEntityPath, buildEntityUrl } = require('./utils/urlHelpers');
 const { ensureTaskPoints, clampTaskPoints, deriveTaskPoints } = require('./utils/taskPoints');
+const { rejectGenericCriteria } = require('./utils/acceptanceCriteria');
 const { mondayRequest, ensureBoardForGoal, upsertMondayItemForStory, mapStatusToBob } = require('./mondaySync');
 // Expose advanced LLM-powered daily digest from separate module
 try {
@@ -20529,11 +20530,11 @@ exports.generateDailyDigest = generateDailyDigest;
 // ===== Task → Story Conversion Automation (Issue #206)
 
 async function generateAcceptanceCriteria(task, goal, { userId }) {
-  const existing = Array.isArray(task.acceptanceCriteria)
+  const existing = rejectGenericCriteria(Array.isArray(task.acceptanceCriteria)
     ? task.acceptanceCriteria.filter(Boolean)
     : typeof task.acceptanceCriteria === 'string'
       ? task.acceptanceCriteria.split('\n').map((line) => line.trim()).filter(Boolean)
-      : [];
+      : []);
   if (existing.length) return existing.slice(0, 10);
 
   const prompt = [
@@ -20557,7 +20558,9 @@ async function generateAcceptanceCriteria(task, goal, { userId }) {
       temperature: 0.1,
     });
     const parsed = JSON.parse(response || '{}');
-    const criteria = Array.isArray(parsed.criteria) ? parsed.criteria.map((c) => String(c).trim()).filter(Boolean) : [];
+    const criteria = rejectGenericCriteria(
+      Array.isArray(parsed.criteria) ? parsed.criteria.map((c) => String(c).trim()) : [],
+    );
     if (criteria.length) return criteria.slice(0, 6);
   } catch (error) {
     console.warn('[auto-convert] LLM acceptance criteria failed', error?.message || error);
