@@ -36,6 +36,8 @@ import { buildPlannerRecommendation, type PlannerRecommendation } from '../utils
 import CheckInDaily from './checkins/CheckInDaily';
 import { buildDayCapacityMap, plannerItemPoints } from '../utils/plannerCapacity';
 import { schedulePlannerItem as schedulePlannerItemMutation } from '../utils/plannerScheduling';
+// Soft-deleted records (merged-away duplicates) must not be listed — see utils/softDelete.
+import { excludeSoftDeleted } from '../utils/softDelete';
 
 type TimelineFilter = 'task' | 'story' | 'chore' | 'focus' | 'review' | 'top3' | null;
 type DailyPlanMode = 'list' | 'plan' | 'review' | 'checkin';
@@ -207,7 +209,7 @@ const DailyPlanPage: React.FC = () => {
     }
     const q = query(collection(db, 'tasks'), where('ownerUid', '==', currentUser.uid), orderBy('updatedAt', 'desc'), limit(300));
     const unsub = onSnapshot(q, (snap) => {
-      let rows = snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as Task[];
+      let rows = excludeSoftDeleted(snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) }))) as Task[];
       rows = rows.filter((task: any) => currentPersona === 'work' ? task.persona === 'work' : task.persona == null || task.persona === 'personal');
       setTasks(rows);
     }, (error) => {
@@ -224,7 +226,7 @@ const DailyPlanPage: React.FC = () => {
     }
     const q = query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid), orderBy('updatedAt', 'desc'), limit(300));
     const unsub = onSnapshot(q, (snap) => {
-      let rows = snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) })) as Story[];
+      let rows = excludeSoftDeleted(snap.docs.map((docSnap) => ({ id: docSnap.id, ...(docSnap.data() as any) }))) as Story[];
       rows = rows.filter((story: any) => currentPersona === 'work' ? story.persona === 'work' : story.persona == null || story.persona === 'personal');
       setStories(rows);
     }, (error) => {

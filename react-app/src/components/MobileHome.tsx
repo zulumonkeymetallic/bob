@@ -52,6 +52,8 @@ import {
   formatStoryProgressLabel,
   MOBILE_STORY_PROGRESS_OPTIONS,
 } from '../utils/storyProgress';
+// Soft-deleted records (merged-away duplicates) must not be listed — see utils/softDelete.
+import { excludeSoftDeleted } from '../utils/softDelete';
 
 type TabKey = 'overview' | 'coach' | 'daily_plan' | 'tasks' | 'stories' | 'goals' | 'chores' | 'finance';
 type TaskViewFilter = 'top3' | 'due_today' | 'overdue' | 'all';
@@ -359,7 +361,7 @@ const MobileHome: React.FC = () => {
       where('ownerUid', '==', currentUser.uid),
       where('persona', '==', currentPersona)
     );
-    const unsub = onSnapshot(q, (snap) => setGoals(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Goal[]));
+    const unsub = onSnapshot(q, (snap) => setGoals(excludeSoftDeleted(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }))) as Goal[]));
     return () => unsub();
   }, [currentUser?.uid, currentPersona]);
 
@@ -373,7 +375,7 @@ const MobileHome: React.FC = () => {
     ] as any[];
     if (selectedSprintId) base.push(where('sprintId', '==', selectedSprintId));
     const q = query.apply(null, base as any);
-    const unsub = onSnapshot(q, (snap) => setStories(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Story[]));
+    const unsub = onSnapshot(q, (snap) => setStories(excludeSoftDeleted(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }))) as Story[]));
     return () => unsub();
   }, [currentUser?.uid, selectedSprintId, currentPersona]);
 
@@ -389,7 +391,7 @@ const MobileHome: React.FC = () => {
     if (selectedSprintId) base.push(where('sprintId', '==', selectedSprintId));
     const q = query.apply(null, base as any);
     const unsub = onSnapshot(q, (snap) => {
-      const data = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Task[];
+      const data = excludeSoftDeleted(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }))) as Task[];
       setTasks(data);
       setLoading(false);
     });

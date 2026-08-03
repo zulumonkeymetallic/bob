@@ -9,6 +9,8 @@ import EditTaskModal from './EditTaskModal';
 import EditStoryModal from './EditStoryModal';
 import EditGoalModal from './EditGoalModal';
 import { generateRef } from '../utils/referenceGenerator';
+// Soft-deleted records (merged-away duplicates) must not be listed — see utils/softDelete.
+import { excludeSoftDeleted } from '../utils/softDelete';
 
 type ResultType = 'task' | 'story' | 'goal';
 
@@ -175,7 +177,7 @@ const GlobalSearchBar: React.FC = () => {
       orderBy('updatedAt', 'desc'),
       limit(300),
     ));
-    const goals = goalsSnap.docs.map((item) => ({ id: item.id, ...(item.data() as any) })) as Goal[];
+    const goals = excludeSoftDeleted(goalsSnap.docs.map((item) => ({ id: item.id, ...(item.data() as any) }))) as Goal[];
     if (!currentPersona) return goals;
     return goals.filter((goal) => !goal.persona || goal.persona === currentPersona);
   };

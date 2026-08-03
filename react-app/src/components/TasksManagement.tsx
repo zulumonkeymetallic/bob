@@ -17,6 +17,8 @@ import { SkeletonStatCard } from './common/SkeletonLoader';
 import EmptyState from './common/EmptyState';
 import { colors } from '../utils/colors';
 import { getChoreKind } from '../utils/choreKind';
+// Soft-deleted records (merged-away duplicates) must not be listed — see utils/softDelete.
+import { excludeSoftDeleted } from '../utils/softDelete';
 
 const TasksManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -53,10 +55,10 @@ const TasksManagement: React.FC = () => {
     );
 
     const unsubscribeTasks = onSnapshot(tasksQuery, (snapshot) => {
-      const tasksData = snapshot.docs.map(doc => ({
+      const tasksData = excludeSoftDeleted(snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
-      })) as Task[];
+      }))) as Task[];
       setTasks(tasksData);
     });
 

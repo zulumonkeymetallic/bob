@@ -7,6 +7,8 @@ import { db, functions } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
 import { dedupeTasks } from '../utils/taskDedupe';
+// Soft-deleted records (merged-away duplicates) must not be listed — see utils/softDelete.
+import { excludeSoftDeleted } from '../utils/softDelete';
 
 type TaskType = 'chore' | 'routine';
 
@@ -65,7 +67,7 @@ const ChoresTasksPage: React.FC = () => {
       where('type', 'in', ['chore', 'routine'] as any),
     );
     const unsub = onSnapshot(q, (snap) => {
-      const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as TaskRow[];
+      const list = excludeSoftDeleted(snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }))) as TaskRow[];
       const filtered = list.filter((r) => Number(r.status || 0) !== 2)
         .filter((r) => !currentPersona || !r.persona || r.persona === currentPersona);
       filtered.sort((a, b) => {

@@ -23,6 +23,8 @@ import { Story, Task } from '../types';
 import { compareTop3Stories, compareTop3Tasks, getEntityAiScore } from '../utils/top3';
 import { getManualPriorityRank } from '../utils/manualPriority';
 import { isDoneStatus, storyLane, taskLane, LANE_LABELS, LANE_COLORS } from '../utils/workStatus';
+// Soft-deleted records (merged-away duplicates) must not be listed — see utils/softDelete.
+import { excludeSoftDeleted } from '../utils/softDelete';
 
 const MAX_ROWS = 5;
 
@@ -56,12 +58,12 @@ const WorkOnNextBanner: React.FC = () => {
     const unsubs = [
       onSnapshot(
         query(collection(db, 'stories'), where('ownerUid', '==', currentUser.uid), where('persona', '==', currentPersona)),
-        (snap) => setStories(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Story))),
+        (snap) => setStories(excludeSoftDeleted(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Story)))),
         () => setStories([]),
       ),
       onSnapshot(
         query(collection(db, 'tasks'), where('ownerUid', '==', currentUser.uid), where('persona', '==', currentPersona)),
-        (snap) => setTasks(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Task))),
+        (snap) => setTasks(excludeSoftDeleted(snap.docs.map((d) => ({ id: d.id, ...d.data() } as Task)))),
         () => setTasks([]),
       ),
     ];

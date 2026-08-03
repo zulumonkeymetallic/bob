@@ -30,6 +30,8 @@ import { colors } from '../utils/colors';
 import { findSprintForDate } from '../utils/taskSprintHelpers';
 import { getActiveFocusLeafGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
 import { FocusGoal } from '../types';
+// Soft-deleted records (merged-away duplicates) must not be listed — see utils/softDelete.
+import { excludeSoftDeleted } from '../utils/softDelete';
 
 const StoriesManagement: React.FC = () => {
   const { currentUser } = useAuth();
@@ -144,7 +146,7 @@ const StoriesManagement: React.FC = () => {
         return baseStory;
       }) as Story[];
 
-      const normalizedStories = rawStories
+      const normalizedStories = excludeSoftDeleted(rawStories)
         .map((story, index) => ({
           ...story,
           orderIndex:

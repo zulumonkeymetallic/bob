@@ -129,6 +129,8 @@ import { db } from './firebase';
 import type { Goal, Story, Task } from './types';
 import { setupRecaptchaOnStartup } from './utils/recaptchaHelper';
 import { buildPlannerPath } from './utils/plannerRoutes';
+// Soft-deleted records (merged-away duplicates) must not be listed — see utils/softDelete.
+import { excludeSoftDeleted } from './utils/softDelete';
 
 
 // Lazy-loaded heavy routes
@@ -219,13 +221,13 @@ function AppContent() {
 
     const unsubGoals = onSnapshot(
       goalsQuery,
-      (snap) => setGoals(snap.docs.map((doc) => ({ id: doc.id, ...(doc.data() as any) }) as Goal)),
+      (snap) => setGoals(excludeSoftDeleted(snap.docs.map((doc) => ({ id: doc.id, ...(doc.data() as any) }) as Goal))),
       (err) => console.warn('[global-sidebar] goals snapshot error', err?.message || err)
     );
 
     const unsubStories = onSnapshot(
       storiesQuery,
-      (snap) => setStories(snap.docs.map((doc) => ({ id: doc.id, ...(doc.data() as any) }) as Story)),
+      (snap) => setStories(excludeSoftDeleted(snap.docs.map((doc) => ({ id: doc.id, ...(doc.data() as any) }) as Story))),
       (err) => console.warn('[global-sidebar] stories snapshot error', err?.message || err)
     );
 

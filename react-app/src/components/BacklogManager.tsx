@@ -10,6 +10,8 @@ import { Goal } from '../types';
 import { ChoiceHelper } from '../config/choices';
 import { isStatus, isTheme, isPriority, getThemeClass, getPriorityBadge } from '../utils/statusHelpers';
 import { useSprint } from '../contexts/SprintContext';
+// Soft-deleted records (merged-away duplicates) must not be listed — see utils/softDelete.
+import { excludeSoftDeleted } from '../utils/softDelete';
 
 
 interface BacklogItem {
@@ -105,10 +107,10 @@ const BacklogManager: React.FC = () => {
     );
 
     const unsubscribeGoals = onSnapshot(goalsQuery, (snapshot) => {
-      const goalsData = snapshot.docs.map(doc => ({
+      const goalsData = excludeSoftDeleted(snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
-      })) as Goal[];
+      }))) as Goal[];
       setGoals(goalsData);
     });
 
