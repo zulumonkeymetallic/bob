@@ -168,6 +168,31 @@ EOF
             return 1
         fi
 
+        # firestore.rules has no deploy step anywhere else in this pipeline — it's a
+        # separate `--only firestore:rules` target Firebase doesn't bundle into hosting or
+        # functions deploys. Confirmed live 2026-07-21: the committed rules file was 18 days
+        # ahead of what was actually live, and the gap (missing null-ownerUid fallback on
+        # tasks/stories update) was the real cause of "Failed to move item" on Kanban drags —
+        # a genuine permission-denied, not a code bug.
+        #
+        # BEFORE FUNCTIONS, deliberately. This step used to sit last, after the functions
+        # deploy — which meant any functions failure returned early and skipped rules
+        # entirely, exactly the silent drift the step was added to prevent. Confirmed live
+        # 2026-08-03: 24 of 251 functions hit the Cloud Run CPU quota wall, the build stopped
+        # there, and a rules change committed that same hour never reached production.
+        # Rules are one small upload with no quota exposure, so there is no reason for the
+        # riskiest step in the pipeline to gate the cheapest one.
+        log_info "Deploying Firestore rules..."
+        local rules_log
+        rules_log="$(mktemp -t bob_firestore_rules_deploy)"
+        firebase deploy --only firestore:rules --force > "$rules_log" 2>&1
+        local rules_status=$?
+        grep -E "Deploy complete|Error|✔|✖|compiled" "$rules_log" | tail -20 >&2
+        if [ $rules_status -ne 0 ]; then
+            log_error "Firestore rules deploy failed (exit $rules_status) — see $rules_log"
+            return 1
+        fi
+
         # Deploy functions. `firebase deploy --only functions` logs one line per function
         # analyzed/deployed — with 100+ functions in this project that's always far more than
         # 10 lines matching "functions", so piping straight into `head -N` closes head's stdin
@@ -212,23 +237,6 @@ EOF
             return 1
         fi
 
-        # firestore.rules has no deploy step anywhere else in this pipeline — it's a
-        # separate `--only firestore:rules` target Firebase doesn't bundle into hosting or
-        # functions deploys. Confirmed live 2026-07-21: the committed rules file was 18 days
-        # ahead of what was actually live, and the gap (missing null-ownerUid fallback on
-        # tasks/stories update) was the real cause of "Failed to move item" on Kanban drags —
-        # a genuine permission-denied, not a code bug. Every web build now keeps rules in
-        # sync with whatever's committed, so this can't silently drift again.
-        log_info "Deploying Firestore rules..."
-        local rules_log
-        rules_log="$(mktemp -t bob_firestore_rules_deploy)"
-        firebase deploy --only firestore:rules --force > "$rules_log" 2>&1
-        local rules_status=$?
-        grep -E "Deploy complete|Error|✔|✖|compiled" "$rules_log" | tail -20 >&2
-        if [ $rules_status -ne 0 ]; then
-            log_error "Firestore rules deploy failed (exit $rules_status) — see $rules_log"
-            return 1
-        fi
     else
         log_warning "DRY RUN: Skipping Firebase deployment"
     fi
