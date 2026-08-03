@@ -1,0 +1,116 @@
+/* Monthly position sheet.
+   Colours come from Bootstrap CSS variables so the sheet follows the app theme
+   in both light and dark rather than pinning hex literals. */
+
+.ledger-sheet {
+    width: 100%;
+}
+
+/* The sheet scrolls horizontally inside its own container — the page body must not. */
+.ledger-scroll {
+    overflow-x: auto;
+    overflow-y: visible;
+    max-width: 100%;
+    border: 1px solid var(--bs-border-color);
+    border-radius: 0.5rem;
+}
+
+.ledger-table {
+    margin-bottom: 0;
+    min-width: max-content;
+}
+
+/* Sticky first column so the account stays visible while scrolling months. */
+.ledger-table .ledger-label-col {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    min-width: 210px;
+    max-width: 260px;
+    background: var(--bs-body-bg);
+    vertical-align: top;
+}
+
+.ledger-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--bs-tertiary-bg);
+    white-space: nowrap;
+}
+
+.ledger-table thead th.ledger-label-col {
+    z-index: 4;
+}
+
+.ledger-month-col {
+    min-width: 108px;
+}
+
+.ledger-month-year {
+    font-size: 0.7rem;
+    font-weight: 400;
+    color: var(--bs-secondary-color);
+}
+
+.ledger-label-meta {
+    font-size: 0.75rem;
+    color: var(--bs-secondary-color);
+}
+
+.ledger-field-legend {
+    margin-top: 0.35rem;
+    font-size: 0.7rem;
+    color: var(--bs-secondary-color);
+}
+
+.ledger-field-legend-item {
+    line-height: 1.6;
+}
+
+.ledger-cell {
+    text-align: right;
+    white-space: nowrap;
+    cursor: pointer;
+    font-variant-numeric: tabular-nums;
+}
+
+.ledger-cell:focus-visible {
+    outline: 2px solid var(--bs-primary);
+    outline-offset: -2px;
+}
+
+.ledger-cell-editing {
+    padding: 0.15rem;
+}
+
+.ledger-cell-empty .ledger-cell-placeholder {
+    color: var(--bs-secondary-color);
+}
+
+.ledger-cell-estimate {
+    font-style: italic;
+    color: var(--bs-secondary-color);
+}
+
+.ledger-cell-estimate-marker {
+    margin-left: 0.2rem;
+    opacity: 0.7;
+}
+
+.ledger-total-row td,
+.ledger-total-row th {
+    background: var(--bs-tertiary-bg);
+    border-top: 2px solid var(--bs-border-color);
+}
+
+@media (max-width: 768px) {
+    .ledger-table .ledger-label-col {
+        min-width: 150px;
+        max-width: 170px;
+    }
+
+    .ledger-month-col {
+        min-width: 92px;
+    }
+}

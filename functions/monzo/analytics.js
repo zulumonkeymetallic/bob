@@ -7,6 +7,8 @@ const {
   coerceCategoryType,
   SAFE_CATEGORY_TYPES,
 } = require('./shared');
+const { resolveTransactionCategory, buildCategoryIndex } = require('../finance/bucketResolver');
+const { mergeFinanceCategories } = require('../finance/categories');
 
 const THEME_NAME_MAP = {
   0: 'General',
@@ -42,7 +44,7 @@ function parseAmount(data) {
   return 0;
 }
 
-function summariseTransactions(transactions, potIndex = new Map()) {
+function summariseTransactions(transactions, potIndex = new Map(), categoryIndex = null) {
   const totals = { mandatory: 0, optional: 0, savings: 0, income: 0 };
   const monthlyMap = new Map();
   const categoryTotals = new Map();
@@ -50,26 +52,6 @@ function summariseTransactions(transactions, potIndex = new Map()) {
   const allMerchantTotals = new Map();
   const pendingClassification = [];
   let pendingCount = 0;
-
-  const mapAiBucket = (bucket) => {
-    const raw = String(bucket || '').toLowerCase();
-    if (!raw) return null;
-    if (raw === 'discretionary') return 'optional';
-    if (raw.includes('saving') || raw === 'investment') return 'savings';
-    if (raw === 'debt_repayment') return 'mandatory';
-    if (raw === 'net_salary' || raw === 'irregular_income') return 'income';
-    return raw;
-  };
-
-  const resolvePotTransfer = (data) => {
-    const metadata = data.metadata || {};
-    const potId = metadata.pot_id || metadata.destination_pot_id || metadata.source_pot_id || null;
-    if (!potId) return null;
-    const pot = potIndex.get(String(potId).toLowerCase());
-    const potName = pot?.name || pot?.title || potId;
-    const isToPot = !!metadata.destination_pot_id || (!metadata.source_pot_id && parseAmount(data) < 0);
-    return { potId, potName, direction: isToPot ? 'to' : 'from' };
-  };
 
   for (const doc of transactions) {
     const data = doc.data() || {};
@@ -79,50 +61,55 @@ function summariseTransactions(transactions, potIndex = new Map()) {
     const raw = data.raw || {};
     const inferredType = inferDefaultCategoryType(raw);
     const fallbackType = amount >= 0 ? 'income' : 'optional';
-    const aiBucket = mapAiBucket(data.aiBucket);
-    const potTransfer = resolvePotTransfer(data);
-    const categoryType = coerceCategoryType(
-      potTransfer ? 'bank_transfer' : (aiBucket || data.userCategoryType || data.categoryType || data.defaultCategoryType || inferredType),
-      fallbackType
-    );
 
-    const categoryLabel = potTransfer
-      ? `Transfer ${potTransfer.direction === 'to' ? 'to' : 'from'} ${potTransfer.potName}`
-      : String(
-        data.aiCategoryLabel
-        || data.userCategoryLabel
-        || data.userCategory
-        || data.defaultCategoryLabel
-        || inferDefaultCategoryLabel(raw)
-      );
+    // One resolver, shared with dashboard.js/enhancements.js and mirrored in the
+    // react app. Replaces the local mapAiBucket/resolvePotTransfer pair, which
+    // ranked aiBucket ABOVE userCategoryType and so reported Jim's hand-corrected
+    // transactions under the AI's bucket in this very doc.
+    const resolved = resolveTransactionCategory(data, { categoryIndex, potIndex });
+    const potTransfer = resolved.potTransfer;
 
-    if (categoryType === 'bank_transfer') continue;
+    // Pot movements are not spend, and must not reach totals/monthly/categories.
+    // The old guard was `if (categoryType === 'bank_transfer') continue;` placed
+    // AFTER coerceCategoryType, which only ever returns a V4 value — so it never
+    // fired and every outbound pot transfer was counted as discretionary spend.
+    // It is a flag rather than a `continue` because the branch further down still
+    // needs to record transfers in allMerchantTotals with isTransfer: true.
+    const isPotTransfer = resolved.bucket === 'bank_transfer';
+
+    const categoryType = coerceCategoryType(resolved.bucketV4, fallbackType);
+    const categoryLabel = resolved.bucketSource === 'none'
+      ? String(inferDefaultCategoryLabel(raw))
+      : resolved.categoryLabel;
 
     const absoluteAmount = Math.abs(amount);
-    totals[categoryType] = (totals[categoryType] || 0) + absoluteAmount;
 
-    const monthKey = data.monthKey || (data.createdISO ? toMonthKey(data.createdISO) : null);
-    if (monthKey) {
-      if (!monthlyMap.has(monthKey)) {
-        monthlyMap.set(monthKey, { mandatory: 0, optional: 0, savings: 0, income: 0 });
+    if (!isPotTransfer) {
+      totals[categoryType] = (totals[categoryType] || 0) + absoluteAmount;
+
+      const monthKey = data.monthKey || (data.createdISO ? toMonthKey(data.createdISO) : null);
+      if (monthKey) {
+        if (!monthlyMap.has(monthKey)) {
+          monthlyMap.set(monthKey, { mandatory: 0, optional: 0, savings: 0, income: 0 });
+        }
+        const monthTotals = monthlyMap.get(monthKey);
+        monthTotals[categoryType] += absoluteAmount;
       }
-      const monthTotals = monthlyMap.get(monthKey);
-      monthTotals[categoryType] += absoluteAmount;
-    }
 
-    const categoryKey = `${categoryType}__${categoryLabel.toLowerCase()}`;
-    if (!categoryTotals.has(categoryKey)) {
-      categoryTotals.set(categoryKey, { label: categoryLabel, type: categoryType, amount: 0, count: 0 });
+      const categoryKey = `${categoryType}__${categoryLabel.toLowerCase()}`;
+      if (!categoryTotals.has(categoryKey)) {
+        categoryTotals.set(categoryKey, { label: categoryLabel, type: categoryType, amount: 0, count: 0 });
+      }
+      const categoryEntry = categoryTotals.get(categoryKey);
+      categoryEntry.amount += absoluteAmount;
+      categoryEntry.count += 1;
     }
-    const categoryEntry = categoryTotals.get(categoryKey);
-    categoryEntry.amount += absoluteAmount;
-    categoryEntry.count += 1;
 
     const isSpend = amount < 0;
     const merchantName = potTransfer?.potName || data.merchant?.name || data.counterparty?.name || data.description || categoryLabel;
     const merchantKey = normaliseMerchantName(merchantName || data.transactionId || data.id || 'merchant');
 
-    if (isSpend && categoryType !== 'bank_transfer') {
+    if (isSpend && !isPotTransfer) {
       if (!merchantTotals.has(merchantKey)) {
         merchantTotals.set(merchantKey, {
           merchantKey,
@@ -170,7 +157,9 @@ function summariseTransactions(transactions, potIndex = new Map()) {
       }
       if (mKey) allEntry.months.add(mKey);
       allEntry.amounts.push(absoluteAmount);
-      if (!data.aiBucket && !data.userCategoryType) {
+      // "Nothing but the Monzo-derived default classified this" — expressed via the
+      // resolver so it stays true as new signals are added.
+      if (resolved.bucketSource === 'none' || resolved.bucketSource === 'default') {
         pendingCount += 1;
         if (pendingClassification.length < 25) {
           pendingClassification.push({
@@ -184,7 +173,7 @@ function summariseTransactions(transactions, potIndex = new Map()) {
           });
         }
       }
-    } else if (potTransfer) {
+    } else if (isPotTransfer) {
       if (!allMerchantTotals.has(merchantKey)) {
         allMerchantTotals.set(merchantKey, {
           merchantKey,
@@ -465,12 +454,19 @@ async function computeMonzoAnalytics(uidOrDb, maybeUid) {
   if (!uid) {
     throw new Error('computeMonzoAnalytics requires uid');
   }
-  const [txSnap, potSnap, goalsSnap, budgetsSnap] = await Promise.all([
+  const [txSnap, potSnap, goalsSnap, budgetsSnap, categoriesSnap] = await Promise.all([
     db.collection('monzo_transactions').where('ownerUid', '==', uid).get(),
     db.collection('monzo_pots').where('ownerUid', '==', uid).get(),
     db.collection('goals').where('ownerUid', '==', uid).get(),
     db.collection('finance_budgets').doc(uid).get(),
+    db.collection('finance_categories').doc(uid).get(),
   ]);
+
+  // The resolver needs the catalogue to turn a userCategoryKey/aiCategoryKey into
+  // a bucket. Same merge the LLM classifier uses, so both see the same taxonomy.
+  const categoryIndex = buildCategoryIndex(
+    mergeFinanceCategories(categoriesSnap.exists ? (categoriesSnap.data() || {}).categories : [])
+  );
 
   const budgetByCategory = {};
   const budgetLabelIndex = {};
@@ -499,7 +495,7 @@ async function computeMonzoAnalytics(uidOrDb, maybeUid) {
     if (pot.name) potIndex.set(String(pot.name).toLowerCase(), pot);
   });
 
-  const aggregation = summariseTransactions(txSnap.docs, potIndex);
+  const aggregation = summariseTransactions(txSnap.docs, potIndex, categoryIndex);
 
   // Calculate average monthly savings
   const months = Object.values(aggregation.monthly);

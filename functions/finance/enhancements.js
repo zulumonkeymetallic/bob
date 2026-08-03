@@ -4,6 +4,7 @@ const admin = require('firebase-admin');
 const crypto = require('crypto');
 const { normaliseMerchantName, inferDefaultCategoryType, inferDefaultCategoryLabel } = require('../monzo/shared');
 const { mergeFinanceCategories } = require('./categories');
+const { resolveTransactionCategory, buildCategoryIndex, narrowToV4 } = require('./bucketResolver');
 const { callLLM } = require('../utils/llmHelper');
 
 const OPENROUTER_API_KEY_SECRET = defineSecret('OPENROUTER_API_KEY');
@@ -398,14 +399,10 @@ function monthKeyFromMs(ms) {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
+// V10 -> V4 projection. Delegates to the shared resolver so this file cannot
+// drift from analytics.js and dashboard.js the way it had.
 function normalizeBucket(bucketRaw) {
-  const bucket = String(bucketRaw || '').toLowerCase();
-  if (!bucket) return 'unknown';
-  if (bucket === 'discretionary') return 'optional';
-  if (bucket.includes('saving') || bucket === 'investment') return 'savings';
-  if (bucket === 'net_salary' || bucket === 'irregular_income') return 'income';
-  if (bucket === 'debt_repayment') return 'mandatory';
-  return bucket;
+  return narrowToV4(bucketRaw) || 'unknown';
 }
 
 function buildActionId(action) {
@@ -1218,6 +1215,13 @@ const fetchFinanceEnhancementData = httpsV2.onCall({ region: FUNCTION_REGION }, 
     db.collection('finance_manual_accounts').where('ownerUid', '==', uid).get(),
   ]);
 
+  // Merged before the transaction loop because the bucket resolver needs it to
+  // turn a userCategoryKey/aiCategoryKey into a bucket.
+  const categoriesMerged = mergeFinanceCategories(
+    Array.isArray(categoriesSnap.data()?.categories) ? categoriesSnap.data().categories : []
+  );
+  const categoryIndex = buildCategoryIndex(categoriesMerged);
+
   const monthly = {};
   const optionalMerchants = new Map();
   const categorySpendInRange = {};
@@ -1253,9 +1257,10 @@ const fetchFinanceEnhancementData = httpsV2.onCall({ region: FUNCTION_REGION }, 
     coverageEndMs = coverageEndMs === null ? dateMs : Math.max(coverageEndMs, dateMs);
 
     const amountMinor = normalizeAmountMinor(data);
-    const bucket = normalizeBucket(data.userCategoryType || data.aiBucket || data.defaultCategoryType);
-    const categoryKey = String(data.userCategoryKey || data.aiCategoryKey || data.category || 'uncategorized').trim() || 'uncategorized';
-    const categoryLabel = String(data.userCategoryLabel || data.aiCategoryLabel || categoryKey).trim() || categoryKey;
+    const resolved = resolveTransactionCategory(data, { categoryIndex });
+    const bucket = normalizeBucket(resolved.bucket);
+    const categoryKey = resolved.categoryKey;
+    const categoryLabel = resolved.categoryLabel;
     const merchantName = data.merchant?.name || data.counterparty?.name || data.description || 'Unknown';
     const merchantKey = data.merchantKey || normaliseMerchantName(merchantName);
     const month = monthKeyFromMs(dateMs);
@@ -1369,7 +1374,7 @@ const fetchFinanceEnhancementData = httpsV2.onCall({ region: FUNCTION_REGION }, 
     .sort((a, b) => b.avgMonthlySpendPence - a.avgMonthlySpendPence)
     .slice(0, 24);
 
-  const categoriesMerged = mergeFinanceCategories(Array.isArray(categoriesSnap.data()?.categories) ? categoriesSnap.data().categories : []);
+  // categoriesMerged is built above, before the transaction loop that needs it.
   const categoryMeta = new Map();
   categoriesMerged.forEach((category) => {
     if (!category?.key) return;

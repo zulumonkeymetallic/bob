@@ -4,12 +4,15 @@
  * Examples: ST-12345, TK-67890, GR-54321, SP-98765
  */
 
-export const generateRef = (type: 'story' | 'task' | 'sprint' | 'goal', existingRefs?: string[]): string => {
+export type RefEntityType = 'story' | 'task' | 'sprint' | 'goal' | 'account';
+
+export const generateRef = (type: RefEntityType, existingRefs?: string[]): string => {
     const prefixes = {
         story: 'ST',
         task: 'TK', 
         sprint: 'SP',
-        goal: 'GR'
+        goal: 'GR',
+        account: 'AC'
     };
 
     const prefix = prefixes[type];
@@ -40,12 +43,13 @@ export const generateRef = (type: 'story' | 'task' | 'sprint' | 'goal', existing
     return ref;
 };
 
-export const validateRef = (ref: string, type: 'story' | 'task' | 'sprint' | 'goal'): boolean => {
+export const validateRef = (ref: string, type: RefEntityType): boolean => {
     const prefixes = {
         story: 'ST',
         task: 'TK',
         sprint: 'SP', 
-        goal: 'GR'
+        goal: 'GR',
+        account: 'AC'
     };
 
     // Pattern for format like ST-12345

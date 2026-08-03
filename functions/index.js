@@ -93,6 +93,21 @@ try {
 } catch (e) {
   console.warn('[init] financeEnhancements not loaded', e?.message || e);
 }
+
+try {
+  const financeLedger = require('./finance/ledger');
+  if (financeLedger) {
+    exports.upsertFinanceLedgerAccount = financeLedger.upsertFinanceLedgerAccount;
+    exports.deleteFinanceLedgerAccount = financeLedger.deleteFinanceLedgerAccount;
+    exports.upsertFinancePositions = financeLedger.upsertFinancePositions;
+    exports.fetchFinanceLedger = financeLedger.fetchFinanceLedger;
+    exports.upsertFinancePlanAssumptions = financeLedger.upsertFinancePlanAssumptions;
+    exports.recomputeFinanceNetWorth = financeLedger.recomputeFinanceNetWorth;
+    exports.migrateManualAccountsToLedger = financeLedger.migrateManualAccountsToLedger;
+  }
+} catch (e) {
+  console.warn('[init] financeLedger not loaded', e?.message || e);
+}
 const { sendEmail } = require('./lib/email');
 const { coerceZone, toDateTime, computeDayWindow } = require('./lib/time');
 const {
@@ -5960,6 +5975,9 @@ exports.updateMonzoTransactionCategory = httpsV2.onCall({ secrets: [MONZO_CLIENT
     ownerUid: uid,
     userCategoryType: categoryType,
     userCategoryLabel: label,
+    // This is a per-transaction choice, not a merchant rule. The flag is what
+    // stops the next sync and applyMappingToExisting from overwriting it.
+    manualCategory: true,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   }, { merge: true });
 
@@ -6518,6 +6536,29 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
     let pageNewestCreated = null;
     let pageOldestCreated = null;
 
+    // Which of this page's transactions already carry a per-transaction category
+    // override? One batched read of at most `limit` docs — deliberately not a
+    // `where('manualCategory','==',true)` query, which would need a composite
+    // index, and orchestrate-build.sh does not deploy firestore.indexes.json.
+    const manualOverrides = new Set();
+    try {
+      const existingRefs = transactions
+        .filter((tx) => tx && tx.id)
+        .map((tx) => transactionsCol.doc(`${uid}_${tx.id}`));
+      if (existingRefs.length) {
+        const existingDocs = await db.getAll(...existingRefs);
+        existingDocs.forEach((snap) => {
+          if (snap.exists && (snap.data() || {}).manualCategory === true) {
+            manualOverrides.add(String(snap.id).slice(uid.length + 1));
+          }
+        });
+      }
+    } catch (err) {
+      // A failed prefetch must not fail the sync. Worst case we fall back to the
+      // old behaviour for this page: the merchant rule wins.
+      console.warn('[monzo] manual override prefetch failed', err?.message || err);
+    }
+
     for (const tx of transactions) {
       const docRef = transactionsCol.doc(`${uid}_${tx.id}`);
       const defaultCategoryType = inferDefaultCategoryType(tx);
@@ -6589,8 +6630,18 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
         };
       }
 
-      // Apply merchant mapping if available
-      if (merchantKey && merchantMap.has(merchantKey)) {
+      // Apply merchant mapping if available.
+      //
+      // A merchant mapping is a RULE. A per-transaction override made in
+      // TransactionsList is a CHOICE. Rules must not silently overwrite choices:
+      // this write used to land on every sync, and monzoBackstopSync runs every
+      // 15 minutes, so a transaction recategorised by hand reverted within the
+      // hour. userCategoryKey survived only because it is absent from docData.
+      //
+      // manualOverrides is prefetched per page (see above) and holds the txIds
+      // whose stored doc has manualCategory === true — the same flag
+      // applyMappingToExisting already honours.
+      if (merchantKey && merchantMap.has(merchantKey) && !manualOverrides.has(tx.id)) {
         const m = merchantMap.get(merchantKey);
         docData.userCategoryType = m.type;
         if (m.label) docData.userCategoryLabel = m.label;

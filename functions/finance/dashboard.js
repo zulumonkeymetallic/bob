@@ -2,12 +2,21 @@
 // Helper functions to aggregate Monzo transaction data for the advanced budget dashboard.
 // This module is deliberately lightweight – it expects an array of transaction objects
 // with the fields used throughout the codebase:
-//   - amount (pence, signed; positive for income, negative for spend)
+//   - amount (POUNDS, signed; positive for income, negative for spend) — the header
+//     used to say pence, but toAmountMinor multiplies it by 100, and the sync writer
+//     stores amount = amountMinor / 100. Pass amountMinor when you mean pence.
 //   - userCategoryKey (string) – the category key assigned by the user or LLM
-//   - userCategoryType (bucket) – one of 'mandatory', 'discretionary', 'savings', 'income'
+//   - userCategoryType (bucket) – one of 'mandatory', 'optional', 'savings', 'income'
 //   - linkedGoalId (optional) – ID of a goal this transaction contributes to
 //   - createdAt (timestamp) – Firestore timestamp or Date
 //   - needsClassification (boolean) – ignored here (already classified)
+
+const { resolveTransactionCategory, buildCategoryIndex } = require('./bucketResolver');
+const { DEFAULT_FINANCE_CATEGORIES } = require('./categories');
+
+// Callers that have the user's own catalogue should pass an index built from it;
+// the default keeps every existing call site working unchanged.
+const DEFAULT_CATEGORY_INDEX = buildCategoryIndex(DEFAULT_FINANCE_CATEGORIES);
 
 /**
  * Simple static mapping of category keys to theme names.
@@ -27,6 +36,9 @@ const CATEGORY_THEME_MAP = {
 
 function parseTransactionDate(tx) {
   const createdAt = tx?.createdAt;
+  if (createdAt instanceof Date) {
+    if (!Number.isNaN(createdAt.getTime())) return createdAt;
+  }
   if (createdAt?.toDate) {
     const dt = createdAt.toDate();
     if (dt instanceof Date && !Number.isNaN(dt.getTime())) return dt;
@@ -73,7 +85,7 @@ function toAmountMinor(tx) {
  * Aggregate an array of transactions into the structures required by the dashboard.
  * Supports optional date filtering (startDate, endDate).
  */
-function aggregateTransactions(transactions, startDate, endDate) {
+function aggregateTransactions(transactions, startDate, endDate, categoryIndex = DEFAULT_CATEGORY_INDEX) {
   const result = {
     totalSpend: 0,
     spendByBucket: {},
@@ -92,8 +104,6 @@ function aggregateTransactions(transactions, startDate, endDate) {
   transactions.forEach((tx) => {
     const txDate = parseTransactionDate(tx);
     if (!txDate) return;
-    const metadata = tx.metadata || {};
-    const potId = metadata.pot_id || metadata.destination_pot_id || metadata.source_pot_id || null;
 
     // Apply date filter
     if (start && txDate < start) return;
@@ -104,13 +114,19 @@ function aggregateTransactions(transactions, startDate, endDate) {
         const amount = minor !== null
             ? minor
             : (Number.isFinite(rawAmount) ? Math.round(rawAmount * 100) : 0);
-        // User overrides should win over AI for reporting.
-        const bucketRaw = potId ? 'bank_transfer' : (tx.userCategoryType || tx.aiBucket || tx.defaultCategoryType || 'unspecified');
-        const bucket = String(bucketRaw).toLowerCase();
-        const bucketNormalized = bucket === 'optional' ? 'discretionary' : bucket;
+        // Shared resolver — see functions/finance/bucketResolver.js. This used to be
+        // a hand-written precedence chain plus a partial fold that only handled
+        // `optional`, so net_salary and income reported as two separate buckets and
+        // debt_repayment never rolled into mandatory.
+        const resolved = resolveTransactionCategory(tx, { categoryIndex });
+        const bucketNormalized = resolved.bucket;
 
-        // Exclude bank transfers from all aggregates
-        if (bucketNormalized === 'bank_transfer' || bucketNormalized === 'unknown') return;
+        // Exclude bank transfers from all aggregates. Unclassified spend stays IN:
+        // dropping it would understate total spend, and uncategorizedSummary below
+        // is what surfaces it. (The old chain fell back to the literal string
+        // 'unspecified', which this guard never matched, so this preserves the
+        // effective behaviour rather than the written one.)
+        if (bucketNormalized === 'bank_transfer') return;
 
         // Only consider spend (negative amounts) for most aggregates
         if (amount < 0 && !['income', 'net_salary', 'irregular_income'].includes(bucketNormalized)) {
@@ -130,8 +146,7 @@ function aggregateTransactions(transactions, startDate, endDate) {
         result.timeSeriesByBucket[bucketNormalized][month] = (result.timeSeriesByBucket[bucketNormalized][month] || 0) + amount;
 
         // Category aggregation
-        const catKeyRaw = tx.userCategoryKey || tx.userCategoryLabel || tx.aiCategoryKey || tx.aiCategoryLabel || tx.categoryKey || tx.category || 'uncategorized';
-        const catKey = String(catKeyRaw || 'uncategorized').trim() || 'uncategorized';
+        const catKey = resolved.categoryKey;
         result.spendByCategory[catKey] = (result.spendByCategory[catKey] || 0) + amount;
 
         if (!result.timeSeriesByCategory) result.timeSeriesByCategory = {};
@@ -187,9 +202,9 @@ function aggregateTransactions(transactions, startDate, endDate) {
 /**
  * Combine transactions, goals, pots, and budget settings to build the full dashboard payload.
  */
-function buildDashboardData(transactions, goals, pots, budgetSettings, filter) {
+function buildDashboardData(transactions, goals, pots, budgetSettings, filter, categoryIndex = DEFAULT_CATEGORY_INDEX) {
     const { startDate, endDate } = filter || {};
-    const aggregation = aggregateTransactions(transactions, startDate, endDate);
+    const aggregation = aggregateTransactions(transactions, startDate, endDate, categoryIndex);
     const start = startDate ? new Date(startDate) : null;
     const end = endDate ? new Date(endDate) : null;
     const endBoundary = end ? new Date(end.getTime() + 24 * 60 * 60 * 1000) : null;
@@ -204,24 +219,12 @@ function buildDashboardData(transactions, goals, pots, budgetSettings, filter) {
         const amountMinor = toAmountMinor(tx);
         if (amountMinor >= 0) return summary;
 
-        const metadata = tx.metadata || {};
-        const potId = metadata.pot_id || metadata.destination_pot_id || metadata.source_pot_id || null;
-        const bucketRaw = potId ? 'bank_transfer' : (tx.userCategoryType || tx.aiBucket || tx.defaultCategoryType || '');
-        const bucket = String(bucketRaw || '').toLowerCase();
-        const bucketNormalized = bucket === 'optional' ? 'discretionary' : bucket;
-        if (bucketNormalized === 'bank_transfer') return summary;
-        if (['income', 'net_salary', 'irregular_income'].includes(bucketNormalized)) return summary;
+        const resolved = resolveTransactionCategory(tx, { categoryIndex });
+        if (resolved.bucket === 'bank_transfer') return summary;
+        if (['net_salary', 'irregular_income'].includes(resolved.bucket)) return summary;
 
         summary.classifiableTransactionCount += 1;
-        const categoryKey = String(
-            tx.userCategoryKey ||
-            tx.userCategoryLabel ||
-            tx.aiCategoryKey ||
-            tx.aiCategoryLabel ||
-            tx.categoryKey ||
-            tx.category ||
-            ''
-        ).trim().toLowerCase();
+        const categoryKey = resolved.categoryKey.toLowerCase();
         if (!categoryKey || ['uncategorized', 'unknown', 'unassigned', 'none'].includes(categoryKey)) {
             summary.uncategorizedCount += 1;
         }
@@ -327,11 +330,19 @@ function buildDashboardData(transactions, goals, pots, budgetSettings, filter) {
                     ? Math.round(Number(t.amountMinor))
                     : Math.round(Number(t.amount || 0) * 100);
                 const amount = amountMinor / 100;
+                const resolved = resolveTransactionCategory(t, { categoryIndex });
                 return {
                     id: t.id || t.transactionId || null,
                     merchantName: t.merchantName || t.description,
                     amount,
                     amountMinor,
+                    // Resolved fields — the shape clients should read. The raw
+                    // user*/ai* fields below stay for the editing surfaces, which
+                    // need to know what is actually stored versus what was derived.
+                    bucket: resolved.bucket,
+                    bucketSource: resolved.bucketSource,
+                    resolvedCategoryKey: resolved.categoryKey,
+                    resolvedCategoryLabel: potTransferLabel || resolved.categoryLabel,
                     categoryKey: t.userCategoryKey,
                     categoryLabel: potTransferLabel || t.userCategoryLabel,
                     categoryType: potId ? 'bank_transfer' : (t.userCategoryType || t.defaultCategoryType || null),

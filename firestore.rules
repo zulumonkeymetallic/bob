@@ -241,11 +241,10 @@ service cloud.firestore {
       allow update: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid || resource.data.ownerUid == null);
       allow delete: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid || resource.data.ownerUid == null);
     }
-    // Monzo pots per user
-    match /monzo_pots/{id} {
-      allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
-      allow read, update, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;
-    }
+    // NOTE: monzo_pots is matched once, further down. There used to be a second,
+    // looser block here allowing unrestricted update. Firestore ORs duplicate
+    // matches, so the looser rule won and the ownerUid-immutability check on the
+    // real block was dead. Removed 2026-08-03.
     match /monzo_transactions/{id} {
       // Individual transaction rows carry ownerUid
       // Create: enforce ownerUid equals request.auth.uid
@@ -358,6 +357,32 @@ service cloud.firestore {
       allow update: if isSignedIn() &&
                     resource.data.ownerUid == request.auth.uid &&
                     request.resource.data.ownerUid == resource.data.ownerUid;
+    }
+
+    // Monthly position ledger. finance_ledger_accounts is the account register
+    // (superset of finance_manual_accounts, which it replaces); finance_positions
+    // holds one row per account per month; finance_net_worth_history is the
+    // persisted rollup; finance_plan_assumptions is a per-user singleton.
+    match /finance_ledger_accounts/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, delete: if isOwner();
+      allow update: if isOwner() && request.resource.data.ownerUid == resource.data.ownerUid;
+    }
+    match /finance_positions/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, delete: if isOwner();
+      allow update: if isOwner() && request.resource.data.ownerUid == resource.data.ownerUid;
+    }
+    match /finance_net_worth_history/{id} {
+      allow create: if isOwnerForCreate();
+      allow read, delete: if isOwner();
+      allow update: if isOwner() && request.resource.data.ownerUid == resource.data.ownerUid;
+    }
+    match /finance_plan_assumptions/{uid} {
+      allow create: if isSignedIn() && (request.auth.uid == uid || request.resource.data.ownerUid == request.auth.uid);
+      allow read: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+      allow update: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+      allow delete: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
     }
 
     // New scheduler-related collections

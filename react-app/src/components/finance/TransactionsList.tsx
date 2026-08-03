@@ -7,6 +7,7 @@ import { httpsCallable } from 'firebase/functions';
 import { db, functions } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import { BUCKET_LABELS, getCategoryByKey, FinanceCategory, mergeFinanceCategories } from '../../utils/financeCategories';
+import { buildCategoryIndex, resolveTransactionCategory } from '../../utils/financeBuckets';
 import {
   buildActionLookup,
   buildCadenceByMerchant,
@@ -207,8 +208,10 @@ const shouldExcludeFromAiAndSubscriptionAnalysis = (
   row: Partial<TxRow> & { displayBucket?: string | null; isPotTransfer?: boolean }
 ): boolean => {
   if (row.isPotTransfer) return true;
+  // Enriched rows carry displayBucket; raw rows go through the shared resolver
+  // rather than a local precedence chain (which had aiBucket outranking the user).
   const rawBucket = toText(
-    row.displayBucket || row.aiBucket || row.userCategoryType || row.defaultCategoryType,
+    row.displayBucket || resolveTransactionCategory(row).bucket,
     ''
   ).toLowerCase();
   if (rawBucket === 'bank_transfer' || rawBucket === 'investment') return true;
@@ -614,6 +617,7 @@ const TransactionsList: React.FC<TransactionsListProps> = ({ embedded = false, e
   }, [currentUser, mapDocToRow]);
 
   const allCategories = useMemo(() => mergeFinanceCategories(customCategories), [customCategories]);
+  const categoryIndex = useMemo(() => buildCategoryIndex(allCategories), [allCategories]);
   const allCategoryKeys = useMemo(() => new Set(allCategories.map((category) => category.key)), [allCategories]);
   const categoryKeyByLabel = useMemo(() => {
     const map = new Map<string, string>();
@@ -669,8 +673,13 @@ const TransactionsList: React.FC<TransactionsListProps> = ({ embedded = false, e
       const transferLabel = potName ? `Transfer ${isTransferToPot ? 'to' : 'from'} ${potName}` : null;
       const displayDescription =
         transferLabel && toText(r.description, '').startsWith('pot_') ? transferLabel : toText(r.description, 'Transaction');
-      const displayCategoryLabel = transferLabel || toNullableText(r.aiCategoryLabel || r.userCategoryLabel || r.defaultCategoryLabel);
-      const displayBucket = isPotTransfer ? 'bank_transfer' : toNullableText(r.aiBucket || r.userCategoryType || r.defaultCategoryType);
+      // Shared resolver — see utils/financeBuckets.ts. This used to read
+      // `aiBucket || userCategoryType`, so a transaction recategorised by hand
+      // still displayed, filtered and grouped under the AI's bucket.
+      const resolved = resolveTransactionCategory(r, { categoryIndex });
+      const displayCategoryLabel = transferLabel || toNullableText(resolved.categoryLabel);
+      const displayBucket = isPotTransfer ? 'bank_transfer' : resolved.bucket;
+      const displayBucketSource = resolved.bucketSource;
       const cadence = cadenceByMerchant.get(resolveMerchantKey(r));
       const inferredFrequency = cadence?.frequencyLabel || 'Irregular';
       const isDiscretionaryBucket = ['discretionary', 'irregular_income'].includes(String(displayBucket || '').toLowerCase());
@@ -693,6 +702,7 @@ const TransactionsList: React.FC<TransactionsListProps> = ({ embedded = false, e
         displayDescription,
         displayCategoryLabel,
         displayBucket,
+        displayBucketSource,
         isPotTransfer,
         inferredFrequency,
         cadenceConfidence: cadence?.confidence || 0,
@@ -714,12 +724,14 @@ const TransactionsList: React.FC<TransactionsListProps> = ({ embedded = false, e
         if (Number.isFinite(externalRangeEndMs) && createdMs > Number(externalRangeEndMs)) return false;
       }
       if (!showTransferRows) {
-        const rawBucket = toText(r.displayBucket || r.aiBucket || r.userCategoryType || r.defaultCategoryType, '').toLowerCase();
+        const rawBucket = toText(r.displayBucket, '').toLowerCase();
         if (r.isPotTransfer || rawBucket === 'bank_transfer') return false;
       }
       if (bucketFilter !== 'all') {
+        // displayBucket is always set by the enrichment above. The 'discretionary'
+        // default keeps unclassified spend visible under the Discretionary filter.
         const bucket = normalizeBucketFilterValue(
-          r.displayBucket || r.aiBucket || r.userCategoryType || (r.userCategoryKey ? r.defaultCategoryType : 'discretionary')
+          r.displayBucket === 'unknown' && !r.userCategoryKey ? 'discretionary' : r.displayBucket
         );
         if (bucket !== normalizeBucketFilterValue(bucketFilter)) return false;
       }
@@ -774,7 +786,7 @@ const TransactionsList: React.FC<TransactionsListProps> = ({ embedded = false, e
       const selectedCategoryLabel = selectedCategoryKey
         ? getCategoryByKey(selectedCategoryKey, allCategories)?.label || selectedCategoryKey
         : '';
-      const bucketKey = row.displayBucket || row.aiBucket || row.userCategoryType || row.defaultCategoryType || 'unknown';
+      const bucketKey = row.displayBucket || 'unknown';
       const bucketLabel = BUCKET_LABELS[bucketKey as keyof typeof BUCKET_LABELS] || bucketKey || 'unknown';
 
       if (key === 'date') return parseRowDateMs(row) || 0;
@@ -822,6 +834,9 @@ const TransactionsList: React.FC<TransactionsListProps> = ({ embedded = false, e
     amountMax,
     showTransferRows,
     allCategories,
+    // Without this the rows keep their first-pass buckets when the user's custom
+    // categories arrive from Firestore a tick later than the transactions.
+    categoryIndex,
     categorySelection,
     subscriptionSelection,
     cadenceByMerchant,
@@ -1507,7 +1522,7 @@ const TransactionsList: React.FC<TransactionsListProps> = ({ embedded = false, e
                             <div className="finance-chip subtle">
                               {bucketLabelFromCategory(
                                 selectedKey || tx.aiCategoryKey || tx.userCategoryKey,
-                                tx.displayBucket || tx.aiBucket || tx.userCategoryType || tx.defaultCategoryType
+                                tx.displayBucket
                               )}
                             </div>
                           </div>

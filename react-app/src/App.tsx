@@ -94,6 +94,7 @@ import FinanceDashboardModern from './components/FinanceDashboardModern';
 import MerchantMappings from './components/finance/MerchantMappings';
 import BudgetsPage from './components/finance/BudgetsPage';
 import GoalPotLinking from './components/finance/GoalPotLinking';
+import FinanceLedgerPage from './components/finance/FinanceLedgerPage';
 import TransactionsList from './components/finance/TransactionsList';
 import FinanceFlowDiagram from './components/finance/FinanceFlowDiagram';
 import PotsBoard from './components/finance/PotsBoard';
@@ -560,6 +561,7 @@ function AppContent() {
             <Route path="/finance/merchants" element={<MerchantMappings />} />
             <Route path="/finance/categories" element={<Navigate to="/finance/merchants" replace />} />
             <Route path="/finance/budgets" element={<BudgetsPage />} />
+            <Route path="/finance/ledger" element={<FinanceLedgerPage />} />
             <Route path="/finance/goals" element={<GoalPotLinking />} />
             <Route path="/finance/transactions" element={<TransactionsList />} />
             <Route path="/finance/dashboard" element={<FinanceDashboardAdvanced />} />

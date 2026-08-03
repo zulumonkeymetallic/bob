@@ -182,6 +182,7 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       lucideIcon: PiggyBank,
       items: [
         { label: 'Dashboard', path: '/finance/dashboard', icon: 'chart-line' },
+        { label: 'Ledger', path: '/finance/ledger', icon: 'table' },
         { label: 'Budgets', path: '/finance/budgets', icon: 'wallet' },
         { label: 'Merchants', path: '/finance/merchants', icon: 'tags' },
         { label: 'Transactions', path: '/finance/transactions', icon: 'receipt' },
