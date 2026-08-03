@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import SprintTriageTable from './SprintTriageTable';
 import type { Goal, Story, Task } from '../types';
@@ -208,21 +208,38 @@ describe('criticality, points and time of day', () => {
 });
 
 describe('status rendering', () => {
-  it('renders in-progress as plain text, not a filled chip', () => {
-    // An active sprint is mostly in-progress rows, so the chip was a wall of identical blue
-    // boxes. Backlog and Done are the states worth spotting.
+  const cellFor = (rowText: string, columnLabel: string) => {
+    const headers = screen.getAllByRole('columnheader').map((h) => h.textContent?.trim());
+    const row = screen.getByText(rowText).closest('tr')!;
+    return row.querySelectorAll('td')[headers.indexOf(columnLabel)];
+  };
+
+  it('shades the status cell by lane — grey backlog, green in progress, blue complete', () => {
+    // Deliberately NOT the shared LANE_COLORS the Kanban board uses, which maps
+    // in-progress→blue and done→green. Requested for this table specifically.
     renderTable();
-    const inProgress = screen.getByTitle('In Progress');
-    expect(inProgress).toHaveStyle({ backgroundColor: 'transparent', borderStyle: 'none' });
+    expect(cellFor(LONG_TITLE, 'Status')).toHaveStyle({ backgroundColor: 'rgba(25, 135, 84, 0.12)' });
+    expect(cellFor(task.title, 'Status')).toHaveStyle({ backgroundColor: 'rgba(108, 117, 125, 0.10)' });
   });
 
-  it('keeps the filled chip for backlog and done', () => {
-    renderTable();
-    // statusLabel returns the lane label, so a task on status 0 reads 'Backlog'.
-    expect(screen.getByTitle('Backlog')).not.toHaveStyle({ backgroundColor: 'transparent' });
+  it('shades a completed row blue', () => {
+    const done = { ...story, id: 's2', title: 'A finished story', status: 4 } as unknown as Story;
+    renderTable({ stories: [done] });
+    // hideDone defaults to on, so reveal completed rows before asserting on one.
+    fireEvent.click(screen.getByText('Showing active only'));
+    expect(cellFor('A finished story', 'Status')).toHaveStyle({ backgroundColor: 'rgba(13, 110, 253, 0.12)' });
   });
 
-  it('leaves in-progress editable despite losing the box', async () => {
+  it('renders the status control as plain text in every lane, not a filled chip', () => {
+    // The cell behind it is already shaded by lane; a filled box on top would be a second,
+    // smaller box saying the same thing.
+    renderTable();
+    ['In Progress', 'Backlog'].forEach((label) => {
+      expect(screen.getByTitle(label)).toHaveStyle({ backgroundColor: 'transparent', borderStyle: 'none' });
+    });
+  });
+
+  it('leaves the status editable despite losing the box', async () => {
     // Dropping the border must not cost the dropdown — the caret is what signals it is one.
     const { updateDoc } = require('firebase/firestore');
     renderTable();

@@ -53,11 +53,35 @@ interface SprintTriageTableProps {
 // finished. Removed per Jim, 2026-07-28.
 const isDone = (status: number, type: RowType) => isDoneStatus(status, type);
 
+/**
+ * Lane colours for the triage table: grey backlog, green in progress, blue complete.
+ *
+ * NOTE this is NOT the shared LANE_COLORS from utils/workStatus, which the Kanban board uses
+ * and which maps in-progress→blue and done→green — the reverse of the last two. Requested for
+ * this table specifically by Jim, 2026-08-03. Kept local rather than changed at source, because
+ * editing LANE_COLORS would silently repaint the board, the cards and every other consumer.
+ * If the board should match, that is a deliberate change to workStatus.ts, not a side effect
+ * of this one.
+ */
+const LANE_TEXT: Record<string, string> = {
+    'backlog': '#6c757d',
+    'in-progress': '#198754',
+    'done': '#0d6efd',
+};
+
+/** Subtle enough to scan a column by, faint enough not to fight the text on it. */
+const LANE_CELL_BG: Record<string, string> = {
+    'backlog': 'rgba(108, 117, 125, 0.10)',
+    'in-progress': 'rgba(25, 135, 84, 0.12)',
+    'done': 'rgba(13, 110, 253, 0.12)',
+};
+
 function statusColor(status: number, type: RowType) {
-    const lane = laneFor(status, type);
-    if (lane === 'in-progress') return '#0d6efd';
-    if (lane === 'done') return '#198754';
-    return themeVars.muted as string;
+    return LANE_TEXT[laneFor(status, type)] || (themeVars.muted as string);
+}
+
+function statusCellBg(status: number, type: RowType) {
+    return LANE_CELL_BG[laneFor(status, type)];
 }
 
 function fmtDate(v: any): string {
@@ -587,11 +611,10 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
         const raw = (item as any).status;
         const value = canonicalStatusValue(raw, type);
         const col = statusColor(value, type);
-        // In-progress renders as plain text rather than a filled chip. Most rows in an active
-        // sprint are in progress, so the chip was a wall of identical blue boxes carrying no
-        // information — the states worth spotting at a glance are Backlog and Done. Still a
-        // select, so it stays editable; the caret is what signals that. Per Jim, 2026-08-03.
-        const plain = laneFor(value, type) === 'in-progress';
+        // No chip fill in any lane — the cell behind this is shaded by lane instead, so a
+        // filled box on top of it would just be a second, smaller box saying the same thing.
+        // Still a select, so it stays editable; the caret is what signals that. Per Jim,
+        // 2026-08-03 (first "no box on in progress", then lane shading on the cell).
         return (
             <select
                 className="form-select form-select-sm"
@@ -609,9 +632,11 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
                     // Longhands, not `border: 'none'` — jsdom's CSS engine silently drops that
                     // shorthand, so the style would be untestable (and the test that caught it
                     // would have been asserting against a rule that never rendered).
-                    ...(plain
-                        ? { backgroundColor: 'transparent', borderWidth: 0, borderStyle: 'none', boxShadow: 'none', paddingLeft: 0 }
-                        : { backgroundColor: col + '22', borderColor: col + '44' }),
+                    backgroundColor: 'transparent',
+                    borderWidth: 0,
+                    borderStyle: 'none',
+                    boxShadow: 'none',
+                    paddingLeft: 0,
                 }}
             >
                 {statusOptions(type).map((o) => (
@@ -1052,8 +1077,12 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
                                         {acceptanceCriteriaCell(item, rowType)}
                                     </td>
                                     )}
-                                    {/* Status */}
-                                    <td style={{ ...TD, verticalAlign: 'top' }}>{inlineStatus(item, rowType)}</td>
+                                    {/* Status — cell shaded by lane (grey backlog, green in
+                                        progress, blue complete) so the column can be scanned
+                                        without reading it. */}
+                                    <td style={{ ...TD, verticalAlign: 'top', backgroundColor: statusCellBg(canonicalStatusValue((item as any).status, rowType), rowType) }}>
+                                        {inlineStatus(item, rowType)}
+                                    </td>
                                     {/* Criticality — the human-set priority, next to Status.
                                         Distinct from the AI column, which is the model's
                                         computed 0–100 score. */}
