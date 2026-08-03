@@ -8248,6 +8248,10 @@ exports.orchestrateGoalPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_AI
     console.warn('[orchestrateGoalPlanning] email send failed', e?.message || e);
   }
 
+  // TODO(orphaned 2026-08-03): nothing sets `researchOnly` any more. Its only caller was
+  // ResearchDocModal, deleted after 396ead6a folded AI research into DelegateToAiModal.
+  // The rest of this function is live — GoalRoadmapV3 calls it as `{ goalId }` — so only
+  // this early return is dead. Safe to drop with the `researchOnly` read above.
   if (researchOnly) {
     return { ok: true, researchDocId: researchRef.id };
   }
@@ -8389,6 +8393,10 @@ exports.orchestrateStoryPlanning = functionsV2.https.onCall({ secrets: [GOOGLE_A
       }
     } catch (e) { console.warn('[orchestrateStoryPlanning] email send failed', e?.message || e); }
   }
+  // TODO(orphaned 2026-08-03): as in orchestrateGoalPlanning, nothing sets `researchOnly`
+  // since ResearchDocModal was deleted. Note the block above is NOT dead: it also fires on
+  // `research`, which the iOS client still plumbs (FunctionsService.orchestrateStoryPlanning).
+  // Only this early return, and the `researchOnly` read, go.
   if (researchOnly) {
     return { ok: true, researchDocId };
   }
@@ -8487,6 +8495,10 @@ function escapeHtml(s) {
 // (GitHub helper removed)
 
 // Generate stories/tasks from an existing research doc using a chosen model
+// TODO(orphaned 2026-08-03): this whole function has no caller left. Its only one was
+// ResearchDocModal's "Generate Stories & Tasks" button, deleted after 396ead6a. Unlike the
+// `researchOnly` branches above, nothing here is reachable — it is a deployed callable
+// (europe-west2) that no client invokes. Retire it in a functions cleanup pass.
 exports.generateStoriesFromResearch = httpsV2.onCall({ secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET] }, async (req) => {
   const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const goalId = String(req?.data?.goalId || '').trim() || null;
