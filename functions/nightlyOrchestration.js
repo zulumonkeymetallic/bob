@@ -5270,9 +5270,20 @@ async function generateMissingAcceptanceCriteria() {
         storiesSnap.docs.forEach((doc) => {
           const data = doc.data() || {};
           if (Array.isArray(data.acceptanceCriteria) && data.acceptanceCriteria.length > 0) return;
-          if (!data.description) return;
           if (isStoryDoneStatus(data.status)) return;
-          candidates.push({ ref: doc.ref, title: data.title || '', description: data.description || '' });
+          // A description used to be mandatory here, which excluded exactly the stories that
+          // need this job most: task→story auto-conversion copies `task.description`, and
+          // tasks captured by voice or from Reminders almost never have one. Of the 213
+          // stories found carrying placeholder criteria, 204 had no description — so even
+          // after clearing the placeholder they would have stayed permanently blank.
+          //
+          // A substantial title is enough to draft criteria from ("Write unit/integration
+          // tests for frontend components" needs no prose to expand). The length floor keeps
+          // stubs like "Test" or "Fix" out, where the model would only invent.
+          const title = String(data.title || '').trim();
+          const description = String(data.description || '').trim();
+          if (!description && (title.length < 20 || title.split(/\s+/).length < 4)) return;
+          candidates.push({ ref: doc.ref, title, description });
         });
       }
       if (candidates.length === 0) continue;
@@ -5290,7 +5301,12 @@ async function generateMissingAcceptanceCriteria() {
         }
         const system = 'You are an expert Agile Product Owner. Generate 2-5 clear, testable acceptance '
           + 'criteria for the given user story. Return ONLY valid JSON: {"acceptanceCriteria": ["AC1", "AC2"]}';
-        const user = `Story Title: ${story.title}\nDescription: ${story.description}`;
+        // The Description line is omitted rather than sent empty — a trailing "Description:"
+        // with nothing after it reads as a description the model failed to receive, and
+        // invites it to fill the gap.
+        const user = story.description
+          ? `Story Title: ${story.title}\nDescription: ${story.description}`
+          : `Story Title: ${story.title}`;
         const parsed = await callLLMJsonSafe({ system, user, purpose: 'storyAcceptanceCriteria', userId });
         const ac = Array.isArray(parsed?.acceptanceCriteria) ? parsed.acceptanceCriteria.filter(Boolean) : null;
         if (!ac || ac.length === 0) continue;
