@@ -54,14 +54,59 @@ function toMs(v) {
   return Number.isNaN(p) ? null : p;
 }
 
+// Bonus by CANONICAL rank, where 4 is Critical and 1 is Low.
+const PRIORITY_BONUS_BY_RANK = { 4: 500, 3: 400, 2: 200, 1: 100 };
+
+/**
+ * Priority's contribution to effectiveScore.
+ *
+ * ## The inversion this replaces
+ *
+ * The old body stripped a leading "P" and then read the bare number on the P-scale:
+ *
+ *     .replace(/^P/, '')
+ *     if (p === '1' || p === 'CRITICAL') return 500;
+ *     ...
+ *     if (p === '4' || p === 'LOW')      return 100;
+ *
+ * That is right for "P1".."P4" and right for the word forms, but wrong for a bare number
+ * — and a bare number is what nearly all the data is. On a live snapshot, 669 stories
+ * carry priority as an integer and only ~47 as a string. So a stored `4` (Critical) was
+ * scored 100 and a stored `1` (Low) was scored 500: **the planner gave its largest boost
+ * to the least important work, every night.**
+ *
+ * The numeric scale runs 4 = Critical down to 1 = Low. That is not a guess — it is what
+ * the importer writes (`importNormalise.normalisePriority` maps "P1" to 4 and comments
+ * that the P-scale and the numeric scale are NOT interchangeable), what
+ * `priorityUtils.isCriticalPriority` reads (`>= 4`), what the iOS labels and dot colours
+ * render, what `nightlyOrchestration.js` already assumed twelve hundred lines away
+ * (`Number(priority) >= 4 ? 500 : 0`), and what the data shows — Jim's pinned stories
+ * carry 4, 4, 3 and 2.
+ *
+ * P1 is the highest on the P-scale and 1 is the lowest on the numeric one, so the two must
+ * never be collapsed by stripping the prefix. They are converted separately below.
+ *
+ * Higher priority therefore scores higher and is scheduled first; lower priority scores
+ * lower and falls to later days as capacity fills.
+ */
 function parsePriorityBonus(priority) {
-  const p = String(priority || '').toUpperCase().trim().replace(/^P/, '');
-  if (p === '1' || p === 'CRITICAL') return 500;
-  if (p === '2' || p === 'HIGH')     return 400;
-  if (p === '3' || p === 'MEDIUM')   return 200;
-  if (p === '4' || p === 'LOW')      return 100;
-  const n = Number(priority);
-  if (Number.isFinite(n) && n >= 1 && n <= 4) return Math.max(0, (5 - n) * 100);
+  const raw = String(priority ?? '').trim().toUpperCase();
+  if (!raw) return 0;
+
+  // Word forms are unambiguous whichever scale the writer had in mind.
+  if (raw === 'CRITICAL' || raw === 'URGENT') return PRIORITY_BONUS_BY_RANK[4];
+  if (raw === 'HIGH') return PRIORITY_BONUS_BY_RANK[3];
+  if (raw === 'MEDIUM' || raw === 'MED' || raw === 'NORMAL') return PRIORITY_BONUS_BY_RANK[2];
+  if (raw === 'LOW') return PRIORITY_BONUS_BY_RANK[1];
+
+  // "P1".."P4" — the P-scale, where P1 is the HIGHEST. Mirrors the importer's `5 - n`.
+  const pScale = raw.match(/^P([1-4])$/);
+  if (pScale) return PRIORITY_BONUS_BY_RANK[5 - Number(pScale[1])];
+
+  // A bare number is the stored scale, where 4 is Critical.
+  const n = Number(raw);
+  if (Number.isInteger(n) && n >= 1 && n <= 4) return PRIORITY_BONUS_BY_RANK[n];
+
   return 0;
 }
 
@@ -467,4 +512,6 @@ async function runForAllUsers() {
   return { ok: true, results };
 }
 
-module.exports = { runForUser, runForAllUsers };
+// parsePriorityBonus and effectiveScore are exported for the test suite only. They were
+// unreachable from a test, which is how the numeric branch stayed inverted in production.
+module.exports = { runForUser, runForAllUsers, parsePriorityBonus, effectiveScore };
