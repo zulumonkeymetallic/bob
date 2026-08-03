@@ -12,6 +12,8 @@ import SprintTriageTable from './SprintTriageTable';
 import { displayRefForEntity } from '../utils/referenceGenerator';
 import { useSprint } from '../contexts/SprintContext';
 import { isStatus } from '../utils/statusHelpers';
+// Merged-away duplicates carry deleted:true and were showing on every surface — see utils/softDelete.
+import { excludeSoftDeleted } from '../utils/softDelete';
 import { useSidebar } from '../contexts/SidebarContext';
 import GLOBAL_THEMES from '../constants/globalThemes';
 import SprintSelector from './SprintSelector';
@@ -242,19 +244,19 @@ const SprintKanbanPageV2: React.FC = () => {
         }
 
         const unsubStories = onSnapshot(storiesQuery, (snap) => {
-            setStories(snap.docs.map(d => ({ id: d.id, ...d.data() } as Story)));
+            setStories(excludeSoftDeleted(snap.docs.map(d => ({ id: d.id, ...d.data() } as Story))));
         }, (err) => {
             console.error('[kanban] stories snapshot error', err?.message || err);
         });
 
         const unsubGoals = onSnapshot(goalsQuery, (snap) => {
-            setGoals(snap.docs.map(d => ({ id: d.id, ...d.data() } as Goal)));
+            setGoals(excludeSoftDeleted(snap.docs.map(d => ({ id: d.id, ...d.data() } as Goal))));
         }, (err) => {
             console.error('[kanban] goals snapshot error', err?.message || err);
         });
 
         const unsubTasks = onSnapshot(tasksQuery, (snap) => {
-            setTasks(snap.docs.map(d => ({ id: d.id, ...d.data() } as Task)));
+            setTasks(excludeSoftDeleted(snap.docs.map(d => ({ id: d.id, ...d.data() } as Task))));
             setLoading(false);
         }, (err) => {
             console.error('[kanban] tasks snapshot error', err?.message || err);

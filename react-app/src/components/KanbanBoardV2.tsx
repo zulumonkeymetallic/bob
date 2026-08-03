@@ -18,6 +18,8 @@ import { getManualPriorityRank } from '../utils/manualPriority';
 import { useActivityTracking } from '../hooks/useActivityTracking';
 import { formatTaskTagLabel } from '../utils/tagDisplay';
 import { isGoalInHierarchySet } from '../utils/goalHierarchy';
+// Merged-away duplicates carry deleted:true and were showing on every surface — see utils/softDelete.
+import { excludeSoftDeleted } from '../utils/softDelete';
 import { compareTop3Stories, compareTop3Tasks, getEntityAiScore, isTop3Story, isTop3Task } from '../utils/top3';
 import '../styles/KanbanCards.css';
 import '../styles/KanbanFixes.css';
@@ -186,22 +188,22 @@ const KanbanBoardV2: React.FC<KanbanBoardV2Props> = ({
         }
 
         const unsubGoals = onSnapshot(goalsQuery, (snap) => {
-            setGoals(snap.docs.map(d => ({ id: d.id, ...d.data() } as Goal)));
+            setGoals(excludeSoftDeleted(snap.docs.map(d => ({ id: d.id, ...d.data() } as Goal))));
         }, (err) => { console.error('[KanbanBoardV2] goals error', err?.message); });
 
         const unsubStories = onSnapshot(storiesQuery, (snap) => {
-            setStories(snap.docs.map(d => ({ id: d.id, ...d.data() } as Story)));
+            setStories(excludeSoftDeleted(snap.docs.map(d => ({ id: d.id, ...d.data() } as Story))));
         }, (err) => { console.error('[KanbanBoardV2] stories error', err?.message); });
 
         const unsubTasks = onSnapshot(tasksQuery, (snap) => {
-            setTasks(snap.docs.map(d => {
+            setTasks(excludeSoftDeleted(snap.docs.map(d => {
                 const data = d.data();
                 return {
                     id: d.id,
                     ...data,
                     ref: data.ref || `TASK-${d.id.slice(-4).toUpperCase()}`,
                 } as Task;
-            }));
+            })));
             setLoading(false);
         }, (err) => { console.error('[KanbanBoardV2] tasks error', err?.message); setLoading(false); });
 
