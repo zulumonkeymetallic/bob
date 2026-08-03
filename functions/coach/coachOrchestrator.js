@@ -815,23 +815,73 @@ exports.logHealthMetric = httpsV2.onCall({ region: REGION }, async (req) => {
   if (fatTodayG !== undefined) payload.fatTodayG = fatTodayG;
   if (caloriesTodayKcal !== undefined) payload.caloriesTodayKcal = caloriesTodayKcal;
 
-  // Mirror current-value fields to profiles for macro engine
-  const writes = [
-    db().collection('health_metrics').doc(docId).set(
-      { ...payload, createdAt: admin.firestore.FieldValue.serverTimestamp() },
-      { merge: true }
-    ),
-  ];
-  if (weightKg !== undefined || bodyFatPct !== undefined) {
-    const profileUpdate = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
-    if (weightKg !== undefined) profileUpdate.healthkitWeightKg = weightKg;
-    if (bodyFatPct !== undefined) profileUpdate.healthkitBodyFatPct = bodyFatPct;
-    writes.push(db().collection('profiles').doc(uid).update(profileUpdate));
-  }
+  await db().collection('health_metrics').doc(docId).set(
+    { ...payload, createdAt: admin.firestore.FieldValue.serverTimestamp() },
+    { merge: true }
+  );
 
-  await Promise.all(writes);
+  await mirrorToProfile(uid, date, {
+    healthkitWeightKg: weightKg,
+    healthkitBodyFatPct: bodyFatPct,
+    // The macro engine reads these off the PROFILE, not off health_metrics:
+    // `_runOrchestratorForUser` does `profile.healthkitProteinTodayG ?? profile.manualProteinG`.
+    // They were only ever written to health_metrics, so `proteinActualG` was permanently
+    // null however faithfully the device reported — the same starvation that made the
+    // web's "Protein 180g — 0/30 days hit target" read as a failed habit rather than
+    // missing data.
+    healthkitProteinTodayG: proteinTodayG,
+    healthkitCarbsTodayG: carbsTodayG,
+    healthkitFatTodayG: fatTodayG,
+    healthkitCaloriesTodayKcal: caloriesTodayKcal,
+    healthkitStepsToday: stepsToday,
+  });
+
   return { ok: true, docId };
 });
+
+/**
+ * Mirror a day's readings onto `profiles/{uid}` as the current values — but only ever
+ * forwards in time.
+ *
+ * **Why the date guard.** These fields answer "what is it now", and the writer does not
+ * only send today: the iOS app pushes today *and* yesterday on every sync, and its
+ * backfill walks 90 days in ascending order. Whichever write landed last won, so the
+ * profile ended up holding yesterday's weight after a routine sync, and a three-month-old
+ * weight after a backfill. The existing weight/bodyFat mirror had this bug; adding four
+ * more fields to it would have multiplied it.
+ *
+ * Comparing the ISO date strings is enough — `YYYY-MM-DD` sorts lexicographically — and it
+ * sidesteps the timezone question entirely: whatever the device calls today is later than
+ * whatever it calls yesterday, wherever it is. A transaction because two syncs can land
+ * together and the check is read-then-write.
+ *
+ * @param {string} uid
+ * @param {string} date ISO `YYYY-MM-DD` the readings belong to
+ * @param {Object} fields healthkit* values; `undefined` entries are skipped
+ */
+async function mirrorToProfile(uid, date, fields) {
+  const present = Object.entries(fields).filter(([, v]) => v !== undefined);
+  if (present.length === 0) return;
+
+  const ref = db().collection('profiles').doc(uid);
+  await db().runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const lastMirrored = snap.exists ? snap.data()?.healthkitSnapshotDate : null;
+    // Same date is allowed through: a later sync on the same day carries fuller totals
+    // (food logged after breakfast), and refusing it would freeze the day at its first read.
+    if (lastMirrored && String(lastMirrored) > date) return;
+
+    const update = {
+      healthkitSnapshotDate: date,
+      healthkitLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    for (const [k, v] of present) update[k] = v;
+    // `set(merge)` not `update`: a profile that does not exist yet must not throw and
+    // lose the reading.
+    tx.set(ref, update, { merge: true });
+  });
+}
 
 /**
  * Callable — return today's coach state (hydrates if absent)
