@@ -5,12 +5,14 @@
  * Navigates to /finance/dashboard on interaction.
  */
 import React, { useEffect, useMemo, useState } from 'react';
-import { Badge, Card, ProgressBar, Spinner } from 'react-bootstrap';
+import { Badge, Card, Spinner } from 'react-bootstrap';
 import { collection, onSnapshot, query, where, orderBy, limit } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import { PoundSterling, Tag, AlertCircle } from 'lucide-react';
 import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
+import { resolveTransactionCategory } from '../../utils/financeBuckets';
+import BucketDonut, { BucketSlice } from '../finance/BucketDonut';
 
 const fmt = (pence: number) =>
   new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format(Math.abs(pence) / 100);
@@ -63,18 +65,25 @@ const FinanceSummaryWidget: React.FC = () => {
 
   const stats = useMemo(() => {
     let discretionaryPence = 0;
+    let mandatoryPence = 0;
     let totalSpendPence = 0;
     let uncategorized = 0;
     const categoryTotals: Record<string, { label: string; pence: number }> = {};
+    const bucketTotals: Record<string, number> = {};
 
     for (const tx of txns) {
       const amt = Math.abs(tx.amountMinor ?? 0);
-      totalSpendPence += amt;
 
-      const bucket = (tx.userCategoryType || tx.aiBucket || tx.defaultCategoryType || '').toLowerCase();
-      if (bucket === 'discretionary' || bucket === 'optional') {
-        discretionaryPence += amt;
-      }
+      // Shared resolver rather than a local precedence chain — this widget used
+      // to rank userCategoryType above aiBucket but below nothing else, which
+      // disagreed with every other surface.
+      const resolved = resolveTransactionCategory(tx);
+      if (resolved.bucket === 'bank_transfer') continue;
+
+      totalSpendPence += amt;
+      bucketTotals[resolved.bucket] = (bucketTotals[resolved.bucket] || 0) + amt;
+      if (resolved.bucketV4 === 'optional') discretionaryPence += amt;
+      if (resolved.bucketV4 === 'mandatory') mandatoryPence += amt;
 
       const catKey = tx.userCategoryKey || tx.aiCategoryKey || null;
       const catLabel = tx.userCategoryLabel || tx.aiCategoryLabel || catKey || 'Uncategorised';
@@ -95,7 +104,18 @@ const FinanceSummaryWidget: React.FC = () => {
       ? Math.round((discretionaryPence / totalSpendPence) * 100)
       : 0;
 
-    return { discretionaryPence, totalSpendPence, uncategorized, topCategories, discretionaryPct };
+    const donutData: BucketSlice[] = Object.entries(bucketTotals)
+      .map(([bucket, pence]) => ({ bucket, pence }));
+
+    return {
+      discretionaryPence,
+      mandatoryPence,
+      totalSpendPence,
+      uncategorized,
+      topCategories,
+      discretionaryPct,
+      donutData,
+    };
   }, [txns]);
 
   return (
@@ -132,20 +152,23 @@ const FinanceSummaryWidget: React.FC = () => {
               <span className="fw-bold">{fmt(stats.totalSpendPence)}</span>
             </div>
 
-            {/* Discretionary */}
-            <div
-              style={{ cursor: 'pointer' }}
-              onClick={() => navigate('/finance/dashboard?tab=spend')}
-            >
-              <div className="d-flex align-items-center justify-content-between mb-1">
-                <span className="small text-muted">Discretionary</span>
-                <span className="small fw-semibold">{fmt(stats.discretionaryPence)} · {stats.discretionaryPct}%</span>
-              </div>
-              <ProgressBar
-                now={stats.discretionaryPct}
-                variant={stats.discretionaryPct > 50 ? 'danger' : stats.discretionaryPct > 30 ? 'warning' : 'success'}
-                style={{ height: 4 }}
-              />
+            {/* Mandatory vs discretionary. Replaces a bare progress bar that only
+                ever showed one number and no comparison. */}
+            <BucketDonut
+              data={stats.donutData}
+              size="sm"
+              showLegend
+              centreLabel={`${stats.discretionaryPct}%`}
+              centreSubLabel="discretionary"
+              onSliceClick={() => navigate('/finance/dashboard?tab=spend')}
+            />
+            <div className="d-flex align-items-center justify-content-between small">
+              <span className="text-muted">Mandatory</span>
+              <span className="fw-semibold">{fmt(stats.mandatoryPence)}</span>
+            </div>
+            <div className="d-flex align-items-center justify-content-between small">
+              <span className="text-muted">Discretionary</span>
+              <span className="fw-semibold">{fmt(stats.discretionaryPence)}</span>
             </div>
 
             {/* Top categories */}

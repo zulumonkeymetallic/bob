@@ -131,7 +131,8 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         { label: 'Daily Check-in', path: '/dashboard/daily-checkin', icon: 'clipboard-check' },
         { label: 'Mobile', path: '/mobile', icon: 'mobile-alt' },
         { label: 'Theme Progress', path: '/dashboard/theme-progress', icon: 'chart-line' },
-        { label: 'Finance Dashboard', path: '/dashboard/finance', icon: 'wallet' },
+        // 'Finance Dashboard' -> /dashboard/finance lived here too, but that path is
+        // only a redirect to /finance/dashboard, which the Finance group already lists.
         { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
         { label: 'Fitness', path: '/fitness', icon: 'heartbeat' },
         { label: 'Kanban Board', path: '/sprints/kanban', icon: 'columns' },
@@ -181,13 +182,14 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'piggy-bank',
       lucideIcon: PiggyBank,
       items: [
+        // Pots was dropped: it was a read-only subset of Goal Linking, and the
+        // URL now redirects there. Merchants is reachable from Transactions and
+        // Budgets, so it no longer needs its own top-level entry.
         { label: 'Dashboard', path: '/finance/dashboard', icon: 'chart-line' },
         { label: 'Ledger', path: '/finance/ledger', icon: 'table' },
         { label: 'Budgets', path: '/finance/budgets', icon: 'wallet' },
-        { label: 'Merchants', path: '/finance/merchants', icon: 'tags' },
         { label: 'Transactions', path: '/finance/transactions', icon: 'receipt' },
         { label: 'Spend Breakdown', path: '/finance/flow', icon: 'sitemap' },
-        { label: 'Pots', path: '/finance/pots', icon: 'database' },
         { label: 'Goal Linking', path: '/finance/goals', icon: 'link' }
       ]
     },

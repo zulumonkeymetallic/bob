@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Row, Col, Spinner, Alert, Form, Button, Badge, ButtonGroup } from 'react-bootstrap';
 import { httpsCallable } from 'firebase/functions';
 import { doc, getDoc } from 'firebase/firestore';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { db, functions } from '../../firebase';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
@@ -10,6 +10,7 @@ import { PremiumCard } from '../common/PremiumCard';
 import ReactECharts from 'echarts-for-react';
 import TransactionsList from './TransactionsList';
 import { normalizeMerchantKey } from './financeInsights';
+import BucketDonut from './BucketDonut';
 import {
     TrendingUp,
     PieChart as PieIcon,
@@ -192,6 +193,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const { theme } = useTheme();
     const isDark = theme === 'dark';
     const [searchParams, setSearchParams] = useSearchParams();
+    const navigate = useNavigate();
 
     const [data, setData] = useState<any>(null);
     const [yoyData, setYoyData] = useState<any>(null);
@@ -1808,6 +1810,28 @@ const FinanceDashboardAdvanced: React.FC = () => {
                 </Row>
             )}
 
+            {/* Mandatory vs discretionary. The two donuts elsewhere on this page are
+                merchant/category distributions — neither answers "how much of my
+                spend is actually optional", which is the question this one exists for. */}
+            <Row className="g-3 mb-4">
+                <Col md={6} lg={4}>
+                    <PremiumCard title="Mandatory vs Discretionary" icon={Target}>
+                        <BucketDonut
+                            data={Object.entries(bucketTotals).map(([bucket, pounds]) => ({
+                                bucket,
+                                // bucketTotals is in pounds; BucketDonut speaks pence.
+                                pence: Math.round(Number(pounds || 0) * 100),
+                            }))}
+                            size="md"
+                            onSliceClick={(bucket) => {
+                                setCardFilter('all');
+                                setChartFilter({ type: 'bucket', value: bucket });
+                            }}
+                        />
+                    </PremiumCard>
+                </Col>
+            </Row>
+
             <Row className="g-3 mb-4">
                 <Col md={8} lg={8}>
                     <PremiumCard
@@ -2794,6 +2818,20 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
     const renderAssets = () => (
         <>
+            {/* Superseded by /finance/ledger, which adds the month axis, APR, and
+                contributed-vs-value. Kept read-only for one phase so the pre-migration
+                figures stay visible and finance_manual_accounts remains the rollback
+                path — deleting it is the last step of the migration, not the first. */}
+            <Alert variant="secondary" className="d-flex flex-wrap justify-content-between align-items-center gap-2">
+                <span>
+                    <strong>Legacy register.</strong> A single current balance per account, with no
+                    history. The Ledger tracks the same accounts month by month.
+                </span>
+                <Button size="sm" variant="outline-primary" onClick={() => navigate('/finance/ledger')}>
+                    Open the Ledger
+                </Button>
+            </Alert>
+
             <Row className="g-4 mb-4">
                 <Col md={3}>
                     <PremiumCard title="Tracked Assets" icon={Landmark}>

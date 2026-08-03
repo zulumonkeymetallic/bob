@@ -90,14 +90,12 @@ import AiCoachPage from './components/coach/AiCoachPage';
 import CoachHubPage from './components/coach/CoachHubPage';
 import FitnessTabBar from './components/coach/FitnessTabBar';
 import HealthHubPage from './components/health/HealthHubPage';
-import FinanceDashboardModern from './components/FinanceDashboardModern';
 import MerchantMappings from './components/finance/MerchantMappings';
 import BudgetsPage from './components/finance/BudgetsPage';
 import GoalPotLinking from './components/finance/GoalPotLinking';
 import FinanceLedgerPage from './components/finance/FinanceLedgerPage';
 import TransactionsList from './components/finance/TransactionsList';
 import FinanceFlowDiagram from './components/finance/FinanceFlowDiagram';
-import PotsBoard from './components/finance/PotsBoard';
 import IntegrationSettings from './components/IntegrationSettings';
 import IntegrationLogs from './components/IntegrationLogs';
 import SettingsEmailPage from './components/settings/SettingsEmailPage';
@@ -566,7 +564,10 @@ function AppContent() {
             <Route path="/finance/transactions" element={<TransactionsList />} />
             <Route path="/finance/dashboard" element={<FinanceDashboardAdvanced />} />
             <Route path="/finance/flow" element={<FinanceFlowDiagram />} />
-            <Route path="/finance/pots" element={<PotsBoard />} />
+            {/* PotsBoard was a read-only subset of GoalPotLinking — same two
+                collections, same pot/goal pairing, minus the editing. Removed;
+                the URL still works. */}
+            <Route path="/finance/pots" element={<Navigate to="/finance/goals" replace />} />
             <Route path="/finance/coach" element={<Navigate to="/coach/finance" replace />} />
             <Route path="/finance/advanced" element={<Navigate to="/finance/dashboard" replace />} />
             <Route path="/settings" element={<SettingsPage />} />

@@ -42,6 +42,7 @@ import {
 import { compareTop3Stories, compareTop3Tasks, isTop3Story, isTop3Task, top3DateForToday } from '../utils/top3';
 import { useFocusGoals } from '../hooks/useFocusGoals';
 import { useDashboardData } from '../hooks/useDashboardData';
+import BucketDonut from './finance/BucketDonut';
 import { bucketFromTime, isTaskDueToday, useDailyPlanTimeline, type DailyPlanBucket } from '../hooks/useDailyPlanTimeline';
 import DailyPlanList from './dashboard/DailyPlanList';
 import { getProtectedFocusGoalIds, isGoalInHierarchySet } from '../utils/goalHierarchy';
@@ -2288,8 +2289,31 @@ const MobileFinanceTab: React.FC = () => {
   const overBudget = budgetRows.filter((r) => r.actual > r.budget);
   const recentTxns: any[] = (data?.recentTransactions || []).slice(0, 5);
 
+  const mandatory = Math.abs(data?.mandatorySpend || 0);
+  const discretionary = Math.abs(data?.discretionarySpend || 0);
+  const discretionaryPct = (mandatory + discretionary) > 0
+    ? Math.round((discretionary / (mandatory + discretionary)) * 100)
+    : 0;
+
   return (
     <div className="d-flex flex-column gap-3">
+      {/* Mandatory vs discretionary — the one number worth seeing first on a phone. */}
+      {(mandatory > 0 || discretionary > 0) && (
+        <Card className="border-0 shadow-sm">
+          <Card.Body className="py-2">
+            <BucketDonut
+              data={[
+                { bucket: 'mandatory', pence: mandatory },
+                { bucket: 'discretionary', pence: discretionary },
+              ]}
+              size="sm"
+              centreLabel={`${discretionaryPct}%`}
+              centreSubLabel="discretionary"
+            />
+          </Card.Body>
+        </Card>
+      )}
+
       {/* Spending health */}
       <Card className={`border-0 bg-${verdict.bg} text-white`}>
         <Card.Body className="py-3">

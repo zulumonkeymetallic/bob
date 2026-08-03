@@ -11,7 +11,6 @@ import { Settings, Palette, Database, Wand2, KeyRound, Clipboard, FileCode, Plug
 import LLMSettings from './settings/LLMSettings';
 import { useThemeDebugger } from '../utils/themeDebugger';
 import IntegrationSettings from './IntegrationSettings';
-import BudgetSettings from './finance/BudgetSettings';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useDiagnosticsLog } from '../hooks/useDiagnosticsLog';
 
