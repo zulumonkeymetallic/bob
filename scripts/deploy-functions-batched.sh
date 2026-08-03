@@ -117,14 +117,22 @@ for entry in $CODEBASES; do
       DEPLOYED_COUNT=$((DEPLOYED_COUNT + ${#batch[@]}))
     else
       # Pull out which ones actually failed; the rest of the batch did land.
+      # Two error shapes, both seen in production:
+      #   "- Error Failed to update function NAME in region europe-west2"   (quota, transient)
+      #   "Error: [NAME(europe-west2)] Upgrading from 1st Gen to 2nd Gen..." (structural)
+      # Matching only the first meant a Gen 1 batch produced no per-function names, fell into
+      # the whole-batch fallback below, and retried eight functions that were mostly fine.
       batch_failed=()
       while IFS= read -r line; do
         [[ -n "$line" ]] && batch_failed+=("$line")
-      done < <(grep -oE '^- Error Failed to (update|create) function [^ ]+' "$batch_log" | awk '{print $NF}' | sort -u)
+      done < <({
+        grep -oE '^- Error Failed to (update|create) function [^ ]+' "$batch_log" | awk '{print $NF}'
+        grep -oE '^Error: \[[A-Za-z0-9_]+\(' "$batch_log" | sed -E 's/^Error: \[([A-Za-z0-9_]+)\($/\1/'
+      } | sort -u)
       if [[ ${#batch_failed[@]} -eq 0 ]]; then
         err "  batch $batch_num failed with no per-function errors — see $batch_log"
         grep -E "Error" "$batch_log" | head -5 >&2
-        FAILED_ALL+=("${batch[@]}")
+        FAILED_ALL+=("${batch[@]/#/${codebase}:}")
       else
         warn "  batch $batch_num: ${#batch_failed[@]} of ${#batch[@]} failed — will retry individually"
         FAILED_ALL+=("${batch_failed[@]/#/${codebase}:}")
