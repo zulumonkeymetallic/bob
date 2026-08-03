@@ -5623,18 +5623,31 @@ exports.setGoalPotLink = httpsV2.onCall({ secrets: [] }, async (req) => {
   return { ok: true, goalId, linkedPotId: linkedPotId || null };
 });
 
-// Callable to fetch aggregated dashboard data
-exports.fetchDashboardData = httpsV2.onCall(async (req) => {
+// Callable to fetch aggregated dashboard data.
+//
+// memory: this used to run on the 256MiB default and read every transaction the
+// user has ever had. At 8,471 documents that is ~260MiB of heap, so the finance
+// dashboard failed with a bare "internal" on every load — confirmed in the logs
+// as 'Memory limit of 256 MiB exceeded with 260 MiB used'. The range filter below
+// is the real fix; the raised limit is the backstop for "All History".
+exports.fetchDashboardData = httpsV2.onCall({ memory: '1GiB' }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const { startDate, endDate } = req.data || {};
   const db = admin.firestore();
 
+  // Push the date window into the query instead of reading everything and
+  // filtering in memory. Uses the existing (ownerUid, createdISO) composite index.
+  let txQuery = db.collection('monzo_transactions').where('ownerUid', '==', uid);
+  if (startDate) txQuery = txQuery.where('createdISO', '>=', new Date(startDate).toISOString());
+  if (endDate) {
+    const endBoundary = new Date(new Date(endDate).getTime() + 24 * 60 * 60 * 1000);
+    txQuery = txQuery.where('createdISO', '<', endBoundary.toISOString());
+  }
+
   // Fetch transactions, goals, pots, and budget settings in parallel
   const [txSnap, goalsSnap, potsSnap, budgetSnap] = await Promise.all([
-    db.collection('monzo_transactions')
-      .where('ownerUid', '==', uid)
-      .get(),
+    txQuery.get(),
     db.collection('goals')
       .where('ownerUid', '==', uid)
       .get(),

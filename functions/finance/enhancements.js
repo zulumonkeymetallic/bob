@@ -1177,7 +1177,11 @@ const deleteManualFinanceAccount = httpsV2.onCall({ region: FUNCTION_REGION }, a
   return { ok: true, deleted: true, accountId };
 });
 
-const fetchFinanceEnhancementData = httpsV2.onCall({ region: FUNCTION_REGION }, async (req) => {
+// memory: reads every monzo_transactions doc (deliberately — the coverage stats
+// and trailing comparisons span all history). At 8,471 documents that blew the
+// 256MiB default, which is what surfaced as a bare "internal" on the finance
+// dashboard. Confirmed in the logs as 'Memory limit of 256 MiB exceeded'.
+const fetchFinanceEnhancementData = httpsV2.onCall({ region: FUNCTION_REGION, memory: '1GiB' }, async (req) => {
   if (!req?.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const startMs = Date.parse(String(req.data?.startDate || '2018-01-01T00:00:00.000Z'));

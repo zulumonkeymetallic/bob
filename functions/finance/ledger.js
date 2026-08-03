@@ -607,7 +607,10 @@ async function computeNetWorthForUser(db, uid, { months, dryRun }) {
   return { snapshots, written };
 }
 
-const recomputeFinanceNetWorth = httpsV2.onCall({ region: FUNCTION_REGION, memory: '512MiB' }, async (req) => {
+// 1GiB, not the 512MiB first chosen: computeNetWorthForUser reads every
+// monzo_transactions doc for the flow totals, and 8,471 of them exceeded 256MiB
+// in fetchDashboardData. 512MiB would have been uncomfortably close.
+const recomputeFinanceNetWorth = httpsV2.onCall({ region: FUNCTION_REGION, memory: '1GiB' }, async (req) => {
   const uid = requireAuth(req);
   const db = admin.firestore();
 
@@ -881,7 +884,8 @@ const financeMonthlyRollup = schedulerV2.onSchedule({
   schedule: '0 3 1-3 * *',
   timeZone: 'Europe/London',
   region: FUNCTION_REGION,
-  memory: '512MiB',
+  // Same reasoning as recomputeFinanceNetWorth, and this one loops over every user.
+  memory: '1GiB',
 }, async () => {
   const db = admin.firestore();
 
