@@ -104,6 +104,7 @@ try {
     exports.upsertFinancePlanAssumptions = financeLedger.upsertFinancePlanAssumptions;
     exports.recomputeFinanceNetWorth = financeLedger.recomputeFinanceNetWorth;
     exports.migrateManualAccountsToLedger = financeLedger.migrateManualAccountsToLedger;
+    exports.financeMonthlyRollup = financeLedger.financeMonthlyRollup;
   }
 } catch (e) {
   console.warn('[init] financeLedger not loaded', e?.message || e);
@@ -5286,6 +5287,9 @@ exports.monzoOAuthCallback = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID, MONZ
       ...buildTimestampPatch('lastConnectedAt'),
       lastSyncError: admin.firestore.FieldValue.delete(),
       lastErrorMessage: admin.firestore.FieldValue.delete(),
+      // Cleared here so a reconnect resolves the banner. If Monzo again returns no
+      // refresh token the very next expiry re-raises it — see ensureMonzoAccessToken.
+      needsReauth: !refresh,
     });
 
     await enqueueMonzoSyncJob(uid, {
@@ -5334,6 +5338,26 @@ async function ensureMonzoAccessToken(uid) {
 
   const refreshToken = await resolveMonzoRefreshToken(tokenRef, data);
   if (!refreshToken) {
+    // Monzo only issues refresh tokens to CONFIDENTIAL OAuth clients. A
+    // non-confidential client gets an access token that simply expires, and the
+    // integration then dies silently: this was recorded as
+    // lastErrorMessage='Missing Monzo refresh token' while connected stayed true,
+    // so the UI looked healthy for the eight days after 2026-07-26 during which
+    // every sync failed. Mark it disconnected so the dashboard and the hourly
+    // monzoIntegrationMonitor both surface it.
+    try {
+      await updateMonzoIntegrationStatus(uid, {
+        connected: false,
+        needsReauth: true,
+        lastErrorMessage: 'Monzo access token expired and no refresh token is stored. '
+          + 'Reconnect Monzo, and set the OAuth client to Confidential in the Monzo '
+          + 'developer portal so a refresh token is issued.',
+        ...buildTimestampPatch('lastErrorAt'),
+      });
+      await db.collection('profiles').doc(uid).set({ monzoConnected: false }, { merge: true });
+    } catch (statusError) {
+      console.warn('[monzo] could not flag reauth requirement', statusError?.message || statusError);
+    }
     throw new httpsV2.HttpsError('failed-precondition', 'Missing Monzo refresh token');
   }
   if (!process.env.MONZO_CLIENT_ID || !process.env.MONZO_CLIENT_SECRET) {
@@ -7373,6 +7397,25 @@ async function syncMonzoDataForUser(uid, { since, fullRefresh } = {}) {
         docData.accountCreatedAt = admin.firestore.Timestamp.fromDate(new Date(account.created));
         docData.accountCreatedISO = account.created;
       }
+
+      // Current-account balance. Until now BOB stored pot balances but never the
+      // account itself, so net worth was missing the main account entirely.
+      // Lives here rather than in its own function because it needs the same
+      // access token and the same account list. Failure must not fail the sync,
+      // matching how the pots fetch below is guarded.
+      try {
+        const balance = await monzoApi(accessToken, '/balance', { account_id: account.id });
+        const minor = (value) => (Number.isFinite(Number(value)) ? Math.round(Number(value)) : null);
+        docData.balanceMinor = minor(balance?.balance);
+        // total_balance includes pots; balance does not.
+        docData.totalBalanceMinor = minor(balance?.total_balance);
+        docData.spendTodayMinor = minor(balance?.spend_today);
+        docData.balanceCurrency = balance?.currency || null;
+        docData.balanceUpdatedAt = admin.firestore.FieldValue.serverTimestamp();
+      } catch (balanceError) {
+        console.warn('[monzo] balance fetch failed', account.id, balanceError?.message || balanceError);
+      }
+
       batch.set(docRef, docData, { merge: true });
     }
     await batch.commit();
@@ -20519,11 +20562,19 @@ async function generateAcceptanceCriteria(task, goal, { userId }) {
   } catch (error) {
     console.warn('[auto-convert] LLM acceptance criteria failed', error?.message || error);
   }
-  return [
-    'Define clear “done” outcome and validation steps.',
-    'Include success metrics or completion signal.',
-    'Address dependencies and blockers before sign-off.',
-  ];
+  // Empty, not a generic three-line placeholder.
+  //
+  // The placeholder that used to live here ("Define clear done outcome…", "Include success
+  // metrics…", "Address dependencies and blockers…") was worse than nothing, because
+  // generateMissingAcceptanceCriteria in nightlyOrchestration skips any story whose
+  // `acceptanceCriteria` array is non-empty. Writing filler on the LLM's bad day therefore
+  // inoculated the story against the nightly job that would have written real criteria the
+  // next night — permanently. 213 of 669 stories were carrying exactly those three lines and
+  // nothing else when this was found.
+  //
+  // An empty array is honest and self-healing: the story reads as unspecified, and the
+  // nightly job picks it up.
+  return [];
 }
 
 function deriveStorySize(task) {

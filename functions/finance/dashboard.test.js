@@ -10,9 +10,11 @@ describe('aggregateTransactions', () => {
     test('should correctly aggregate spend by bucket, category, and theme', () => {
         const transactions = [
             { amountMinor: -1000, createdAt: AT, userCategoryType: 'mandatory', userCategoryKey: 'groceries' }, // £10
-            { amountMinor: -2000, createdAt: AT, userCategoryType: 'discretionary', userCategoryKey: 'entertainment' }, // £20
+            // £20
+            { amountMinor: -2000, createdAt: AT, userCategoryType: 'discretionary', userCategoryKey: 'entertainment' },
             { amountMinor: -500, createdAt: AT, userCategoryType: 'mandatory', userCategoryKey: 'rent' }, // £5
-            { amountMinor: 5000, createdAt: AT, userCategoryType: 'income', userCategoryKey: 'salary' } // Income (should be ignored for spend totals)
+            // Income — ignored for spend totals
+            { amountMinor: 5000, createdAt: AT, userCategoryType: 'income', userCategoryKey: 'salary' }
         ];
 
         const result = aggregateTransactions(transactions);

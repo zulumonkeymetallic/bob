@@ -13,6 +13,7 @@
 // upsert and re-seeds/retries cannot double-count.
 
 const httpsV2 = require('firebase-functions/v2/https');
+const schedulerV2 = require('firebase-functions/v2/scheduler');
 const admin = require('firebase-admin');
 const crypto = require('crypto');
 
@@ -751,7 +752,175 @@ const migrateManualAccountsToLedger = httpsV2.onCall({ region: FUNCTION_REGION }
   return { ok: true, created, skipped, written, monthKey };
 });
 
+// ---------------------------------------------------------------------------
+// Monthly rollup
+// ---------------------------------------------------------------------------
+
+/**
+ * Fill in a month's positions from Monzo, then carry forward whatever is missing.
+ *
+ * Two rules that matter:
+ *  - A row whose source is 'manual' is NEVER overwritten. Read before write.
+ *  - An account with no row at all gets the last known row copied with
+ *    isEstimate:true, so the net-worth series stays continuous instead of
+ *    cliff-diving to zero in any month Jim did not fill in.
+ */
+async function seedAndRollForward(db, uid, monthKey) {
+  const [accounts, positions, monzoAccountsSnap, potsSnap] = await Promise.all([
+    loadAccounts(db, uid),
+    loadPositions(db, uid),
+    db.collection('monzo_accounts').where('ownerUid', '==', uid).get(),
+    db.collection('monzo_pots').where('ownerUid', '==', uid).get(),
+  ]);
+
+  const balanceByMonzoAccount = new Map();
+  monzoAccountsSnap.docs.forEach((doc) => {
+    const data = doc.data() || {};
+    if (data.closed) return;
+    // balanceMinor is written by syncMonzoDataForUser; absent on data synced
+    // before /balance was wired in, in which case there is nothing to seed.
+    if (!Number.isFinite(Number(data.balanceMinor))) return;
+    balanceByMonzoAccount.set(String(data.accountId), Math.round(Number(data.balanceMinor)));
+  });
+
+  const balanceByPot = new Map();
+  potsSnap.docs.forEach((doc) => {
+    const data = doc.data() || {};
+    if (data.deleted === true) return;
+    balanceByPot.set(String(data.potId), Math.round(Number(data.balance) || 0));
+  });
+
+  const targetIndex = monthIndexOf(monthKey);
+  const byAccount = new Map();
+  positions.forEach((position) => {
+    if (!byAccount.has(position.accountId)) byAccount.set(position.accountId, []);
+    byAccount.get(position.accountId).push(position);
+  });
+
+  const operations = [];
+  const seeded = [];
+  const rolled = [];
+
+  accounts.forEach((account) => {
+    if (account.archived === true) return;
+
+    const history = byAccount.get(account.accountId) || [];
+    const existing = history.find((p) => p.monthIndex === targetIndex) || null;
+
+    let valuePence = null;
+    let source = null;
+
+    if (account.autoSeedFromMonzo) {
+      if (account.monzoPotId && balanceByPot.has(account.monzoPotId)) {
+        valuePence = balanceByPot.get(account.monzoPotId);
+        source = 'monzo_pot';
+      } else if (account.monzoAccountId && balanceByMonzoAccount.has(account.monzoAccountId)) {
+        valuePence = balanceByMonzoAccount.get(account.monzoAccountId);
+        source = 'monzo_account';
+      }
+    }
+
+    // A figure Jim typed outranks anything Monzo reports for the same month.
+    if (existing && existing.source === 'manual') return;
+
+    if (valuePence !== null) {
+      const payload = buildPositionPayload(uid, account, monthKey, {
+        valuePence,
+        contributedPence: existing ? existing.contributedPence : 0,
+        source,
+        confidence: 'actual',
+        isEstimate: false,
+        enteredBy: 'system',
+      }, existing);
+      operations.push((batch) => batch.set(
+        db.collection(POSITIONS).doc(positionDocId(uid, account.accountId, monthKey)),
+        payload,
+        { merge: true },
+      ));
+      seeded.push(account.accountId);
+      return;
+    }
+
+    if (existing) return;
+
+    const earlier = history
+      .filter((p) => p.monthIndex < targetIndex)
+      .sort((a, b) => b.monthIndex - a.monthIndex);
+    const previous = earlier[0];
+    if (!previous) return;
+
+    const payload = buildPositionPayload(uid, account, monthKey, {
+      valuePence: previous.valuePence,
+      contributedPence: previous.contributedPence,
+      source: 'rollforward',
+      confidence: 'estimated',
+      isEstimate: true,
+      enteredBy: 'system',
+    }, null);
+    operations.push((batch) => batch.set(
+      db.collection(POSITIONS).doc(positionDocId(uid, account.accountId, monthKey)),
+      payload,
+      { merge: true },
+    ));
+    rolled.push(account.accountId);
+  });
+
+  await commitInChunks(db, operations);
+  return { seeded, rolled };
+}
+
+/**
+ * Runs on the 1st-3rd at 03:00 targeting the PREVIOUS month. The three-day window
+ * buys idempotent retries for free, because every doc id is deterministic.
+ *
+ * Iterates ownerUid from finance_ledger_accounts rather than from `tokens` (which
+ * is what nightlyMonzoAnalytics does) — a ledger is useful without Monzo connected,
+ * and right now Monzo is exactly the thing that can be disconnected.
+ */
+const financeMonthlyRollup = schedulerV2.onSchedule({
+  schedule: '0 3 1-3 * *',
+  timeZone: 'Europe/London',
+  region: FUNCTION_REGION,
+  memory: '512MiB',
+}, async () => {
+  const db = admin.firestore();
+
+  const now = new Date();
+  const targetMonth = monthKeyFromIndex(monthIndexOf(monthKeyFromDate(now)) - 1);
+
+  const accountsSnap = await db.collection(ACCOUNTS).get();
+  const uids = Array.from(new Set(
+    accountsSnap.docs
+      .map((doc) => (doc.data() || {}).ownerUid)
+      .filter(Boolean),
+  ));
+
+  let succeeded = 0;
+  for (const uid of uids) {
+    try {
+      const { seeded, rolled } = await seedAndRollForward(db, uid, targetMonth);
+      // Recompute a 13-month window so the delta against the prior month is right
+      // even when an earlier month was backfilled since the last run.
+      const months = monthKeysBetween(
+        monthKeyFromIndex(monthIndexOf(targetMonth) - 12),
+        targetMonth,
+      );
+      const { written } = await computeNetWorthForUser(db, uid, { months, dryRun: false });
+      succeeded += 1;
+      console.log('[financeMonthlyRollup]', uid, {
+        targetMonth, seeded: seeded.length, rolled: rolled.length, written,
+      });
+    } catch (error) {
+      // One user's bad data must not stop the rest.
+      console.error('[financeMonthlyRollup] failed for user', uid, error?.message || error);
+    }
+  }
+
+  console.log('[financeMonthlyRollup] done', { targetMonth, users: uids.length, succeeded });
+});
+
 module.exports = {
+  financeMonthlyRollup,
   upsertFinanceLedgerAccount,
   deleteFinanceLedgerAccount,
   upsertFinancePositions,
@@ -759,8 +928,9 @@ module.exports = {
   upsertFinancePlanAssumptions,
   recomputeFinanceNetWorth,
   migrateManualAccountsToLedger,
-  // Exported for tests and for the Phase-2 scheduled rollup.
+  // Exported for tests.
   computeNetWorthForUser,
+  seedAndRollForward,
   summariseFlows,
   MANUAL_TYPE_TO_KIND,
 };

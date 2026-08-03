@@ -193,6 +193,25 @@ EOF
             return 1
         fi
 
+        # firestore.indexes.json had exactly the same gap the rules step above was added to
+        # close: firebase.json configures it, nothing ever deployed it. A missing composite
+        # index does not fail the build — it surfaces later as a runtime FAILED_PRECONDITION
+        # on the first real query, in production. Same placement rationale as rules: cheap,
+        # no quota exposure, must not be gated by the functions deploy.
+        #
+        # Index builds are asynchronous, so this returns as soon as Firebase accepts them;
+        # a query issued in the minutes afterwards can still fail while the index builds.
+        log_info "Deploying Firestore indexes..."
+        local indexes_log
+        indexes_log="$(mktemp -t bob_firestore_indexes_deploy)"
+        firebase deploy --only firestore:indexes --force > "$indexes_log" 2>&1
+        local indexes_status=$?
+        grep -E "Deploy complete|Error|✔|✖|index" "$indexes_log" | tail -20 >&2
+        if [ $indexes_status -ne 0 ]; then
+            log_error "Firestore indexes deploy failed (exit $indexes_status) — see $indexes_log"
+            return 1
+        fi
+
         # Deploy functions. `firebase deploy --only functions` logs one line per function
         # analyzed/deployed — with 100+ functions in this project that's always far more than
         # 10 lines matching "functions", so piping straight into `head -N` closes head's stdin
