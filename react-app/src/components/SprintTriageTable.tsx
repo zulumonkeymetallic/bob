@@ -326,6 +326,9 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
         let updates: Record<string, any> = {};
         if (field === 'title') updates.title = val.trim();
         else if (field === 'description') updates.description = val.trim();
+        else if (field === 'acceptanceCriteria') {
+            updates.acceptanceCriteria = val.split('\n').map((c) => c.trim()).filter(Boolean);
+        }
         else if (field === 'status') updates.status = Number(val);
         else if (field === 'dueDate') updates.dueDate = parseDateMs(val);
         else if (field === 'sprintId') updates.sprintId = val || null;
@@ -445,7 +448,14 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
         </th>
     );
 
-    const inlineText = (item: Story | Task, type: RowType, field: string, val: string, multiline = false) => {
+    /** `wrap` renders the value over as many lines as it needs instead of clipping it to one
+     *  with an ellipsis. Titles and acceptance criteria use it — the point of this table is
+     *  triage, and a truncated title you have to hover to read defeats that. Confirmed by
+     *  Jim, 2026-08-03. */
+    const inlineText = (
+        item: Story | Task, type: RowType, field: string, val: string,
+        multiline = false, wrap = false, rows = 2,
+    ) => {
         const editing = editCell?.id === item.id && editCell?.field === field;
         if (editing) {
             const shared = {
@@ -460,16 +470,54 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
                 style: { fontSize: 13, padding: '2px 6px', width: '100%' },
                 className: 'form-control form-control-sm',
             };
-            return multiline ? <textarea {...shared} rows={2} /> : <input {...shared} />;
+            return multiline ? <textarea {...shared} rows={rows} /> : <input {...shared} />;
         }
         return (
             <span
                 onClick={() => startEdit(item.id, field, val)}
-                style={{ cursor: 'text', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                title={val || '—'}
+                style={wrap
+                    ? { cursor: 'text', display: 'block', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.35 }
+                    : { cursor: 'text', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                title={wrap ? undefined : (val || '—')}
             >
                 {val || <span style={{ color: themeVars.muted as string }}>—</span>}
             </span>
+        );
+    };
+
+    /** Acceptance criteria are stored as string[] on stories (tasks carry them only when a
+     *  writer has set the same field). Edited as one criterion per line, which is how they
+     *  read, and stored back as the array the rest of the app expects. */
+    const acceptanceCriteriaLines = (item: Story | Task): string[] => {
+        const raw = (item as any).acceptanceCriteria;
+        if (Array.isArray(raw)) return raw.map((c) => String(c).trim()).filter(Boolean);
+        if (typeof raw === 'string') return raw.split('\n').map((c) => c.trim()).filter(Boolean);
+        return [];
+    };
+
+    const acceptanceCriteriaCell = (item: Story | Task, type: RowType) => {
+        const lines = acceptanceCriteriaLines(item);
+        const editing = editCell?.id === item.id && editCell?.field === 'acceptanceCriteria';
+        if (editing) {
+            return inlineText(item, type, 'acceptanceCriteria', lines.join('\n'), true, true, Math.min(8, Math.max(3, lines.length + 1)));
+        }
+        if (lines.length === 0) {
+            return (
+                <span
+                    onClick={() => startEdit(item.id, 'acceptanceCriteria', '')}
+                    style={{ cursor: 'text', color: themeVars.muted as string, display: 'block' }}
+                >
+                    —
+                </span>
+            );
+        }
+        return (
+            <ul
+                onClick={() => startEdit(item.id, 'acceptanceCriteria', lines.join('\n'))}
+                style={{ cursor: 'text', margin: 0, paddingLeft: 16, lineHeight: 1.35, whiteSpace: 'normal', overflowWrap: 'anywhere' }}
+            >
+                {lines.map((c, i) => <li key={i} style={{ marginBottom: 2 }}>{c}</li>)}
+            </ul>
         );
     };
 
@@ -708,13 +756,14 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
     return (
         <>
             <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: '70vh' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: compactColumns ? 480 : 1100 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: compactColumns ? 480 : 1320 }}>
                     <thead>
                         <tr>
                             {!compactColumns && <TH label="Type" col="type" style={{ minWidth: 70 }} />}
                             {!compactColumns && <TH label="Ref" col="ref" style={{ minWidth: 80 }} />}
                             <TH label="Title" col="title" style={{ minWidth: 200 }} />
                             {!compactColumns && <TH label="Description" style={{ minWidth: 160, cursor: 'default' }} />}
+                            {!compactColumns && <TH label="Acceptance criteria" style={{ minWidth: 220, cursor: 'default', whiteSpace: 'normal' }} />}
                             <TH label="Status" col="status" style={{ minWidth: 100 }} />
                             <TH label="AI" col="ai" style={{ minWidth: 50 }} />
                             {!compactColumns && <TH label="Due" col="dueDate" style={{ minWidth: 90 }} />}
@@ -727,7 +776,7 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
                     <tbody>
                         {rows.length === 0 && (
                             <tr>
-                                <td colSpan={compactColumns ? 4 : 11} style={{ padding: 32, textAlign: 'center', color: themeVars.muted as string, fontSize: 13 }}>
+                                <td colSpan={compactColumns ? 4 : 12} style={{ padding: 32, textAlign: 'center', color: themeVars.muted as string, fontSize: 13 }}>
                                     No stories or tasks in this sprint.
                                 </td>
                             </tr>
@@ -764,14 +813,22 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
                                         </button>
                                     </td>
                                     )}
-                                    {/* Title */}
-                                    <td style={{ ...TD, maxWidth: 240, fontWeight: 500 }}>
-                                        {inlineText(item, rowType, 'title', item.title || '')}
+                                    {/* Title — wrapped, so the whole thing is readable without
+                                        hovering for a tooltip. */}
+                                    <td style={{ ...TD, maxWidth: 320, fontWeight: 500, verticalAlign: 'top' }}>
+                                        {inlineText(item, rowType, 'title', item.title || '', false, true)}
                                     </td>
                                     {/* Description */}
                                     {!compactColumns && (
-                                    <td style={{ ...TD, maxWidth: 180, color: themeVars.muted as string }}>
-                                        {inlineText(item, rowType, 'description', (item as any).description || '', true)}
+                                    <td style={{ ...TD, maxWidth: 240, color: themeVars.muted as string, verticalAlign: 'top' }}>
+                                        {inlineText(item, rowType, 'description', (item as any).description || '', true, true, 3)}
+                                    </td>
+                                    )}
+                                    {/* Acceptance criteria — wrapped bullet list, click to edit
+                                        (one criterion per line). */}
+                                    {!compactColumns && (
+                                    <td style={{ ...TD, maxWidth: 340, fontSize: 12, verticalAlign: 'top' }}>
+                                        {acceptanceCriteriaCell(item, rowType)}
                                     </td>
                                     )}
                                     {/* Status */}
