@@ -27,7 +27,14 @@ jest.mock('firebase/firestore', () => ({
 jest.mock('firebase/functions', () => ({ httpsCallable: jest.fn(() => async () => ({ data: {} })) }));
 jest.mock('../firebase', () => ({ db: {}, functions: {} }));
 jest.mock('react-router-dom', () => ({ useNavigate: () => jest.fn() }));
-jest.mock('../contexts/AuthContext', () => ({ useAuth: () => ({ currentUser: { uid: 'u1' } }) }));
+jest.mock('../contexts/AuthContext', () => ({
+  useAuth: () => ({ currentUser: { uid: 'u1', email: 'jim@jc1.tech' } }),
+}));
+
+const mockAddNote = jest.fn();
+jest.mock('../services/ActivityStreamService', () => ({
+  ActivityStreamService: { addNote: (...args: any[]) => mockAddNote(...args) },
+}));
 jest.mock('../contexts/SidebarContext', () => ({ useSidebar: () => ({ showSidebar: jest.fn() }) }));
 jest.mock('../hooks/useThemeAwareColors', () => ({
   useThemeAwareColors: () => ({ backgrounds: { surface: '#fff' } }),
@@ -43,6 +50,9 @@ const story = {
   title: LONG_TITLE,
   description: 'A long description that also needs to be readable in full rather than clipped.',
   status: 1,
+  priority: 3,
+  points: 5,
+  goalId: 'g1',
   sprintId: 'sp1',
   acceptanceCriteria: [
     'Rollover runs before projected due dates are computed',
@@ -50,6 +60,7 @@ const story = {
   ],
 } as unknown as Story;
 
+// No acceptanceCriteria and no parent — the row both shaded cells are asserted against.
 const task = {
   id: 't1',
   ref: 'TK-22222',
@@ -58,12 +69,14 @@ const task = {
   sprintId: 'sp1',
 } as unknown as Task;
 
+const goal = { id: 'g1', ref: 'GR-33333', title: 'Ship the nightly chain', status: 1 } as unknown as Goal;
+
 const renderTable = (props: Partial<React.ComponentProps<typeof SprintTriageTable>> = {}) =>
   render(
     <SprintTriageTable
       stories={[story]}
       tasks={[task]}
-      goals={[] as Goal[]}
+      goals={[goal]}
       sprints={[{ id: 'sp1', name: 'Sprint 1' }]}
       filterSprintId="sp1"
       onEditStory={jest.fn()}
@@ -117,5 +130,155 @@ describe('SprintTriageTable', () => {
     // iPad landscape. A new column must respect that, not quietly reintroduce the scroll.
     renderTable({ compactColumns: true });
     expect(screen.queryByText('Acceptance criteria')).not.toBeInTheDocument();
+  });
+});
+
+describe('column order', () => {
+  it('puts Parent directly after Title', () => {
+    renderTable();
+    const headers = screen.getAllByRole('columnheader').map((h) => h.textContent?.trim());
+    expect(headers.indexOf('Parent')).toBe(headers.indexOf('Title') + 1);
+  });
+
+  it('puts Criticality directly after Status', () => {
+    renderTable();
+    const headers = screen.getAllByRole('columnheader').map((h) => h.textContent?.trim());
+    expect(headers.indexOf('Criticality')).toBe(headers.indexOf('Status') + 1);
+  });
+});
+
+describe('missing-data shading', () => {
+  // Same red as ModernStoriesTable's data-quality columns — the two surfaces must mean the
+  // same thing by the same colour, or the signal is worthless.
+  const RED = 'rgba(239, 68, 68, 0.14)';
+
+  const cellFor = (rowText: string, columnLabel: string) => {
+    const headers = screen.getAllByRole('columnheader').map((h) => h.textContent?.trim());
+    const row = screen.getByText(rowText).closest('tr')!;
+    return row.querySelectorAll('td')[headers.indexOf(columnLabel)];
+  };
+
+  it('shades the acceptance criteria cell when there are none', () => {
+    renderTable();
+    expect(cellFor(task.title, 'Acceptance criteria')).toHaveStyle({ backgroundColor: RED });
+  });
+
+  it('shades the parent cell when nothing parents the row', () => {
+    renderTable();
+    expect(cellFor(task.title, 'Parent')).toHaveStyle({ backgroundColor: RED });
+  });
+
+  it('leaves a fully-populated row unshaded', () => {
+    renderTable();
+    expect(cellFor(LONG_TITLE, 'Acceptance criteria')).not.toHaveStyle({ backgroundColor: RED });
+    expect(cellFor(LONG_TITLE, 'Parent')).not.toHaveStyle({ backgroundColor: RED });
+  });
+});
+
+describe('criticality, points and time of day', () => {
+  const { updateDoc } = require('firebase/firestore');
+
+  it('writes priority — not aiCriticalityScore — from the criticality dropdown', async () => {
+    // aiCriticalityScore is the model's computed 0-100 score and is shown read-only in the AI
+    // column. The editable field here is the human-set `priority`.
+    renderTable();
+    const select = screen.getAllByTitle(/^Criticality \(priority\)/)[0];
+    await userEvent.selectOptions(select, '4');
+    expect(updateDoc).toHaveBeenCalledWith(undefined, expect.objectContaining({ priority: 4 }));
+  });
+
+  it('clamps points to the entity ceiling', async () => {
+    // A story tops out at 13; typing 99 must not persist 99. Rows sort by type ascending
+    // ('story' < 'task'), so [0] is the story.
+    renderTable();
+    await userEvent.click(screen.getAllByTitle('Points')[0]);
+    const input = await screen.findByRole('spinbutton');
+    await userEvent.clear(input);
+    await userEvent.type(input, '99');
+    await userEvent.tab();
+    expect(updateDoc).toHaveBeenCalledWith(undefined, expect.objectContaining({ points: 13 }));
+  });
+
+  it('writes timeOfDay, and clears it back to null for Any time', async () => {
+    renderTable();
+    const select = screen.getAllByTitle(/Time of day/)[0];
+    await userEvent.selectOptions(select, 'morning');
+    expect(updateDoc).toHaveBeenCalledWith(undefined, expect.objectContaining({ timeOfDay: 'morning' }));
+  });
+});
+
+describe('status rendering', () => {
+  it('renders in-progress as plain text, not a filled chip', () => {
+    // An active sprint is mostly in-progress rows, so the chip was a wall of identical blue
+    // boxes. Backlog and Done are the states worth spotting.
+    renderTable();
+    const inProgress = screen.getByTitle('In Progress');
+    expect(inProgress).toHaveStyle({ backgroundColor: 'transparent', borderStyle: 'none' });
+  });
+
+  it('keeps the filled chip for backlog and done', () => {
+    renderTable();
+    // statusLabel returns the lane label, so a task on status 0 reads 'Backlog'.
+    expect(screen.getByTitle('Backlog')).not.toHaveStyle({ backgroundColor: 'transparent' });
+  });
+
+  it('leaves in-progress editable despite losing the box', async () => {
+    // Dropping the border must not cost the dropdown — the caret is what signals it is one.
+    const { updateDoc } = require('firebase/firestore');
+    renderTable();
+    await userEvent.selectOptions(screen.getByTitle('In Progress'), '4');
+    expect(updateDoc).toHaveBeenCalledWith(undefined, expect.objectContaining({ status: 4 }));
+  });
+});
+
+describe('row alignment', () => {
+  it('vertically centres the title and description', () => {
+    // Acceptance criteria make rows tall; a short title pinned to the top of a five-line row
+    // reads as belonging to nothing.
+    const headers = () => screen.getAllByRole('columnheader').map((h) => h.textContent?.trim());
+    renderTable();
+    const cols = headers();
+    const row = screen.getByText(LONG_TITLE).closest('tr')!;
+    const cells = row.querySelectorAll('td');
+    expect(cells[cols.indexOf('Title')]).toHaveStyle({ verticalAlign: 'middle' });
+    expect(cells[cols.indexOf('Description')]).toHaveStyle({ verticalAlign: 'middle' });
+  });
+});
+
+describe('adding a note', () => {
+  it('offers an add affordance when there is no note', () => {
+    renderTable();
+    expect(screen.getAllByText('Add note').length).toBeGreaterThan(0);
+  });
+
+  it('writes through ActivityStreamService so ownerUid and the note shape are right', async () => {
+    // A hand-rolled addDoc that missed ownerUid would save without error and then never
+    // appear — Firestore rules require it on create, and this table's own listener filters
+    // on it.
+    renderTable();
+    await userEvent.click(screen.getAllByText('Add note')[0]);
+    const box = await screen.findByPlaceholderText(/Add a note/);
+    await userEvent.type(box, 'Blocked on the licensing quote');
+    await userEvent.tab();
+
+    expect(mockAddNote).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringMatching(/^(story|task)$/),
+      'Blocked on the licensing quote',
+      'u1',
+      'jim@jc1.tech',
+      expect.any(String),
+      expect.any(String),
+      'human',
+    );
+  });
+
+  it('does not write an empty note', async () => {
+    renderTable();
+    await userEvent.click(screen.getAllByText('Add note')[0]);
+    const box = await screen.findByPlaceholderText(/Add a note/);
+    await userEvent.type(box, '   ');
+    await userEvent.tab();
+    expect(mockAddNote).not.toHaveBeenCalled();
   });
 });

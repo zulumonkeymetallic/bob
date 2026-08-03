@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Spinner } from 'react-bootstrap';
-import { Activity, Clock3, Wand2, Pencil, Trash2, ExternalLink, ChevronUp, ChevronDown } from 'lucide-react';
+import { Activity, Clock3, Wand2, Pencil, Trash2, ExternalLink, ChevronUp, ChevronDown, MessageSquarePlus } from 'lucide-react';
 import {
     doc, updateDoc, deleteDoc, serverTimestamp,
     collection, query, where, orderBy, limit, onSnapshot,
@@ -17,6 +17,10 @@ import DeferItemModal from './DeferItemModal';
 import { useAuth } from '../contexts/AuthContext';
 import { useSidebar } from '../contexts/SidebarContext';
 import { canonicalStatusValue, isDoneStatus, laneFor, statusLabel, statusOptions } from '../utils/workStatus';
+import { MISSING_INFO_CELL_BG, MISSING_INFO_CELL_BG_HOVER } from '../utils/dataQuality';
+import { normalizePriorityValue } from '../utils/priorityUtils';
+import { POINTS_STEP, STORY_POINTS_MAX, TASK_POINTS_MAX, normalizePointsValue, parsePointsValue } from '../utils/points';
+import { ActivityStreamService } from '../services/ActivityStreamService';
 
 const BASE_URL = 'https://bob.jc1.tech';
 const EXCLUDED_TASK_TYPES = new Set(['chore', 'routine', 'habit', 'core', 'read', 'watch']);
@@ -124,6 +128,7 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
     const [latestNotes, setLatestNotes] = useState<Record<string, string>>({});
     const [hideDone, setHideDone] = useState(true);
     const [flaggingPriorityId, setFlaggingPriorityId] = useState<string | null>(null);
+    const [savingNote, setSavingNote] = useState<string | null>(null);
     // Optimistic overlay. Tasks on this table come from `sprint_task_index`, a materialised
     // copy that a Cloud Function re-mirrors from `tasks/{id}` after a write — so a status
     // change lands in Firestore but the row on screen keeps its old value until the trigger
@@ -328,6 +333,14 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
         else if (field === 'description') updates.description = val.trim();
         else if (field === 'acceptanceCriteria') {
             updates.acceptanceCriteria = val.split('\n').map((c) => c.trim()).filter(Boolean);
+        } else if (field === 'points') {
+            // Clamp to the entity's own ceiling and the 0.25 step, same as the edit modals —
+            // a raw number typed here would otherwise bypass every points rule in the app.
+            const parsed = parsePointsValue(val);
+            if (parsed == null) { setEditCell(null); setEditVal(''); return; }
+            updates.points = normalizePointsValue(parsed, {
+                max: type === 'story' ? STORY_POINTS_MAX : TASK_POINTS_MAX,
+            });
         }
         else if (field === 'status') updates.status = Number(val);
         else if (field === 'dueDate') updates.dueDate = parseDateMs(val);
@@ -346,6 +359,33 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
 
     const startEdit = (id: string, field: string, val: string) => { setEditCell({ id, field }); setEditVal(val); };
     const cancelEdit = () => { setEditCell(null); setEditVal(''); };
+
+    /** Notes are activity_stream entries, not fields on the doc, so they do not go through
+     *  commitEdit/saveItem — nothing on stories/{id} changes. */
+    const commitNote = async (item: Story | Task, type: RowType) => {
+        const text = editVal.trim();
+        setEditCell(null);
+        setEditVal('');
+        if (!text || !currentUser?.uid) return;
+        setSavingNote(item.id);
+        try {
+            await ActivityStreamService.addNote(
+                item.id,
+                type,
+                text,
+                currentUser.uid,
+                currentUser.email || undefined,
+                String((item as any).persona || 'personal'),
+                (item as any).ref || undefined,
+                'human',
+            );
+        } catch (err: any) {
+            console.error('[SprintTriageTable] add note failed', err);
+            alert(`Failed to add note: ${err?.message || 'permission denied'}`);
+        } finally {
+            setSavingNote(null);
+        }
+    };
 
     const handleConvert = async (task: Task) => {
         setConverting(task.id);
@@ -485,6 +525,23 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
         );
     };
 
+    /** Missing-data shading, same red as ModernStoriesTable's data-quality columns so the two
+     *  surfaces mean the same thing by the same colour. Applied per cell, not per row: the
+     *  point is to show WHICH field is missing at a glance. */
+    const missingBg = (isMissing: boolean, isHovered: boolean): string | undefined => {
+        if (!isMissing) return undefined;
+        return isHovered ? MISSING_INFO_CELL_BG_HOVER : MISSING_INFO_CELL_BG;
+    };
+
+    /** A story's parent is its goal; a task's is its story. Either way, unparented work is
+     *  work nothing will roll up — which is what the shading is flagging. */
+    const hasParent = (item: Story | Task, type: RowType): boolean => {
+        const id = type === 'story'
+            ? (item as any).goalId
+            : ((item as any).parentId || (item as any).storyId);
+        return String(id || '').trim().length > 0;
+    };
+
     /** Acceptance criteria are stored as string[] on stories (tasks carry them only when a
      *  writer has set the same field). Edited as one criterion per line, which is how they
      *  read, and stored back as the array the rest of the app expects. */
@@ -530,6 +587,11 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
         const raw = (item as any).status;
         const value = canonicalStatusValue(raw, type);
         const col = statusColor(value, type);
+        // In-progress renders as plain text rather than a filled chip. Most rows in an active
+        // sprint are in progress, so the chip was a wall of identical blue boxes carrying no
+        // information — the states worth spotting at a glance are Backlog and Done. Still a
+        // select, so it stays editable; the caret is what signals that. Per Jim, 2026-08-03.
+        const plain = laneFor(value, type) === 'in-progress';
         return (
             <select
                 className="form-select form-select-sm"
@@ -543,7 +605,13 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
                 title={statusLabel(raw, type)}
                 style={{
                     fontSize: 11, fontWeight: 600, padding: '2px 6px', width: 'auto', minWidth: 104,
-                    backgroundColor: col + '22', color: col, borderColor: col + '44',
+                    color: col,
+                    // Longhands, not `border: 'none'` — jsdom's CSS engine silently drops that
+                    // shorthand, so the style would be untestable (and the test that caught it
+                    // would have been asserting against a rule that never rendered).
+                    ...(plain
+                        ? { backgroundColor: 'transparent', borderWidth: 0, borderStyle: 'none', boxShadow: 'none', paddingLeft: 0 }
+                        : { backgroundColor: col + '22', borderColor: col + '44' }),
                 }}
             >
                 {statusOptions(type).map((o) => (
@@ -552,6 +620,92 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
             </select>
         );
     };
+
+    /**
+     * Criticality — the human-set `priority` field (4 Critical … 1 Low), not the AI's computed
+     * `aiCriticalityScore`, which is a 0–100 number the model owns and the AI column shows
+     * read-only. Stored values are a mix of ints, 'P1'-style strings and words, so the current
+     * value goes through normalizePriorityValue before it can select an option.
+     */
+    const PRIORITY_OPTIONS = [
+        { value: 4, label: 'Critical', color: '#dc3545' },
+        { value: 3, label: 'High', color: '#fd7e14' },
+        { value: 2, label: 'Medium', color: '#0d6efd' },
+        { value: 1, label: 'Low', color: themeVars.muted as string },
+        { value: 0, label: 'None', color: themeVars.muted as string },
+    ];
+
+    const inlinePriority = (item: Story | Task, type: RowType) => {
+        const value = normalizePriorityValue((item as any).priority);
+        const opt = PRIORITY_OPTIONS.find((o) => o.value === value) || PRIORITY_OPTIONS[4];
+        return (
+            <select
+                className="form-select form-select-sm"
+                value={opt.value}
+                disabled={saving.has(item.id)}
+                onChange={(e) => saveItem(item.id, type === 'story' ? 'stories' : 'tasks', { priority: Number(e.target.value) })}
+                title={`Criticality (priority): ${opt.label}`}
+                style={{
+                    fontSize: 11, fontWeight: 600, padding: '2px 6px', width: 'auto', minWidth: 92,
+                    backgroundColor: opt.color + '22', color: opt.color, borderColor: opt.color + '44',
+                }}
+            >
+                {PRIORITY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+        );
+    };
+
+    /** Points cap differs by entity — a task tops out at 8, a story at 13 (utils/points). */
+    const inlinePoints = (item: Story | Task, type: RowType) => {
+        const editing = editCell?.id === item.id && editCell?.field === 'points';
+        const raw = (item as any).points;
+        const display = raw == null || raw === '' ? '' : String(raw);
+        if (editing) {
+            return (
+                <input
+                    autoFocus
+                    type="number"
+                    min={0}
+                    max={type === 'story' ? STORY_POINTS_MAX : TASK_POINTS_MAX}
+                    step={POINTS_STEP}
+                    className="form-control form-control-sm"
+                    value={editVal}
+                    onChange={(e) => setEditVal(e.target.value)}
+                    onBlur={() => commitEdit(item, type)}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter') { e.preventDefault(); commitEdit(item, type); }
+                        if (e.key === 'Escape') cancelEdit();
+                    }}
+                    style={{ fontSize: 12, padding: '2px 4px', width: 64 }}
+                />
+            );
+        }
+        return (
+            <span
+                onClick={() => startEdit(item.id, 'points', display)}
+                style={{ cursor: 'text', display: 'block', fontSize: 12, fontWeight: 600 }}
+                title="Points"
+            >
+                {display || <span style={{ color: themeVars.muted as string, fontWeight: 400 }}>—</span>}
+            </span>
+        );
+    };
+
+    const inlineTimeOfDay = (item: Story | Task, type: RowType) => (
+        <select
+            className="form-select form-select-sm"
+            value={String((item as any).timeOfDay || '')}
+            disabled={saving.has(item.id)}
+            onChange={(e) => saveItem(item.id, type === 'story' ? 'stories' : 'tasks', { timeOfDay: e.target.value || null })}
+            title="Time of day — the planner uses this when placing calendar blocks"
+            style={{ fontSize: 11, padding: '2px 4px', width: 'auto', minWidth: 96 }}
+        >
+            <option value="">Any time</option>
+            <option value="morning">Morning</option>
+            <option value="afternoon">Afternoon</option>
+            <option value="evening">Evening</option>
+        </select>
+    );
 
     const inlineSprintSelect = (item: Story | Task, type: RowType) => (
         <select
@@ -700,6 +854,58 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
         }
     };
 
+    /**
+     * Last note, and a way to add one without leaving the table.
+     *
+     * Writes through ActivityStreamService.addNote rather than addDoc'ing activity_stream
+     * directly: that service sets `ownerUid` from userId (Firestore rules require it on create)
+     * and the `note_added` / `noteContent` shape this table's own listener queries for. A
+     * hand-rolled write that missed either would save without error and then never appear.
+     *
+     * No local state for the result — the existing activity_stream subscription picks the new
+     * note up and re-renders the cell.
+     */
+    const noteCell = (item: Story | Task, type: RowType) => {
+        const note = latestNotes[item.id];
+        const editing = editCell?.id === item.id && editCell?.field === 'note';
+
+        if (editing) {
+            return (
+                <textarea
+                    autoFocus
+                    rows={2}
+                    className="form-control form-control-sm"
+                    value={editVal}
+                    onChange={(e) => setEditVal(e.target.value)}
+                    onBlur={() => commitNote(item, type)}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); commitNote(item, type); }
+                        if (e.key === 'Escape') cancelEdit();
+                    }}
+                    placeholder="Add a note… ⌘/Ctrl+Enter to save"
+                    style={{ fontSize: 12, padding: '2px 6px', width: '100%' }}
+                />
+            );
+        }
+
+        return (
+            <div
+                onClick={() => startEdit(item.id, 'note', '')}
+                style={{ cursor: 'text', display: 'flex', alignItems: 'flex-start', gap: 4 }}
+                title={note || 'Add a note'}
+            >
+                {note ? (
+                    <span style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.35 }}>{note}</span>
+                ) : (
+                    <span style={{ color: themeVars.muted as string, display: 'inline-flex', alignItems: 'center', gap: 3, fontStyle: 'italic' }}>
+                        <MessageSquarePlus size={12} /> Add note
+                    </span>
+                )}
+                {savingNote === item.id && <Spinner animation="border" size="sm" style={{ width: 10, height: 10, flexShrink: 0 }} />}
+            </div>
+        );
+    };
+
     const actionCell = (item: Story | Task, type: RowType) => {
         const isConverting = converting === item.id;
         const isFlaggingPriority = flaggingPriorityId === item.id;
@@ -756,35 +962,41 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
     return (
         <>
             <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: '70vh' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: compactColumns ? 480 : 1320 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: compactColumns ? 480 : 1720 }}>
                     <thead>
                         <tr>
                             {!compactColumns && <TH label="Type" col="type" style={{ minWidth: 70 }} />}
                             {!compactColumns && <TH label="Ref" col="ref" style={{ minWidth: 80 }} />}
                             <TH label="Title" col="title" style={{ minWidth: 200 }} />
+                            {/* Parent sits directly after Title — what a row rolls up to is
+                                read together with what it is, not eight columns away. */}
+                            {!compactColumns && <TH label="Parent" style={{ minWidth: 180, cursor: 'default' }} />}
                             {!compactColumns && <TH label="Description" style={{ minWidth: 160, cursor: 'default' }} />}
                             {!compactColumns && <TH label="Acceptance criteria" style={{ minWidth: 220, cursor: 'default', whiteSpace: 'normal' }} />}
                             <TH label="Status" col="status" style={{ minWidth: 100 }} />
+                            {!compactColumns && <TH label="Criticality" style={{ minWidth: 100, cursor: 'default' }} />}
                             <TH label="AI" col="ai" style={{ minWidth: 50 }} />
+                            {!compactColumns && <TH label="Points" style={{ minWidth: 70, cursor: 'default' }} />}
                             {!compactColumns && <TH label="Due" col="dueDate" style={{ minWidth: 90 }} />}
+                            {!compactColumns && <TH label="Time of day" style={{ minWidth: 100, cursor: 'default' }} />}
                             {!compactColumns && <TH label="Sprint" style={{ minWidth: 130, cursor: 'default' }} />}
-                            {!compactColumns && <TH label="Parent" style={{ minWidth: 180, cursor: 'default' }} />}
-                            {!compactColumns && <TH label="Last note" style={{ minWidth: 160, cursor: 'default' }} />}
+                            {!compactColumns && <TH label="Last note" style={{ minWidth: 180, cursor: 'default' }} />}
                             <TH label="Actions" style={{ minWidth: 180, cursor: 'default' }} />
                         </tr>
                     </thead>
                     <tbody>
                         {rows.length === 0 && (
                             <tr>
-                                <td colSpan={compactColumns ? 4 : 12} style={{ padding: 32, textAlign: 'center', color: themeVars.muted as string, fontSize: 13 }}>
+                                <td colSpan={compactColumns ? 4 : 15} style={{ padding: 32, textAlign: 'center', color: themeVars.muted as string, fontSize: 13 }}>
                                     No stories or tasks in this sprint.
                                 </td>
                             </tr>
                         )}
                         {rows.map(({ item, rowType }) => {
-                            const bg = hovered === item.id ? (themeVars.card as string) : backgrounds.surface;
+                            const isHovered = hovered === item.id;
+                            const bg = isHovered ? (themeVars.card as string) : backgrounds.surface;
                             const aiScore = (item as any).aiCriticalityScore;
-                            const note = latestNotes[item.id];
+                            const hasAcceptanceCriteria = acceptanceCriteriaLines(item).length > 0;
                             return (
                                 <tr key={item.id}
                                     style={{ backgroundColor: bg, transition: 'background-color 0.1s', borderBottom: `1px solid ${themeVars.border}` }}
@@ -814,59 +1026,77 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
                                     </td>
                                     )}
                                     {/* Title — wrapped, so the whole thing is readable without
-                                        hovering for a tooltip. */}
-                                    <td style={{ ...TD, maxWidth: 320, fontWeight: 500, verticalAlign: 'top' }}>
+                                        hovering for a tooltip. Vertically centred: acceptance
+                                        criteria make rows tall, and a short title pinned to the
+                                        top of a five-line row reads as belonging to nothing. */}
+                                    <td style={{ ...TD, maxWidth: 320, fontWeight: 500, verticalAlign: 'middle' }}>
                                         {inlineText(item, rowType, 'title', item.title || '', false, true)}
                                     </td>
-                                    {/* Description */}
+                                    {/* Parent + progress — shaded when nothing parents this row,
+                                        because unparented work rolls up to nothing. */}
                                     {!compactColumns && (
-                                    <td style={{ ...TD, maxWidth: 240, color: themeVars.muted as string, verticalAlign: 'top' }}>
+                                    <td style={{ ...TD, minWidth: 180, verticalAlign: 'top', backgroundColor: missingBg(!hasParent(item, rowType), isHovered) }}>
+                                        {parentCell(item, rowType)}
+                                    </td>
+                                    )}
+                                    {/* Description — centred with the title, same reasoning. */}
+                                    {!compactColumns && (
+                                    <td style={{ ...TD, maxWidth: 240, color: themeVars.muted as string, verticalAlign: 'middle' }}>
                                         {inlineText(item, rowType, 'description', (item as any).description || '', true, true, 3)}
                                     </td>
                                     )}
                                     {/* Acceptance criteria — wrapped bullet list, click to edit
-                                        (one criterion per line). */}
+                                        (one criterion per line). Shaded when there are none. */}
                                     {!compactColumns && (
-                                    <td style={{ ...TD, maxWidth: 340, fontSize: 12, verticalAlign: 'top' }}>
+                                    <td style={{ ...TD, maxWidth: 340, fontSize: 12, verticalAlign: 'top', backgroundColor: missingBg(!hasAcceptanceCriteria, isHovered) }}>
                                         {acceptanceCriteriaCell(item, rowType)}
                                     </td>
                                     )}
                                     {/* Status */}
-                                    <td style={TD}>{inlineStatus(item, rowType)}</td>
+                                    <td style={{ ...TD, verticalAlign: 'top' }}>{inlineStatus(item, rowType)}</td>
+                                    {/* Criticality — the human-set priority, next to Status.
+                                        Distinct from the AI column, which is the model's
+                                        computed 0–100 score. */}
+                                    {!compactColumns && (
+                                    <td style={{ ...TD, verticalAlign: 'top' }}>{inlinePriority(item, rowType)}</td>
+                                    )}
                                     {/* AI score */}
-                                    <td style={{ ...TD, textAlign: 'center', minWidth: 50 }}>
+                                    <td style={{ ...TD, textAlign: 'center', minWidth: 50, verticalAlign: 'top' }}>
                                         {aiScore != null ? (
                                             <span style={{ fontSize: 12, fontWeight: 600, color: aiScore >= 70 ? '#dc3545' : aiScore >= 40 ? '#fd7e14' : themeVars.muted as string }}>
                                                 {aiScore}
                                             </span>
                                         ) : <span style={{ color: themeVars.muted as string, fontSize: 11 }}>—</span>}
                                     </td>
+                                    {/* Points */}
+                                    {!compactColumns && (
+                                    <td style={{ ...TD, minWidth: 70, verticalAlign: 'top' }}>
+                                        {inlinePoints(item, rowType)}
+                                    </td>
+                                    )}
                                     {/* Due */}
                                     {!compactColumns && (
-                                    <td style={{ ...TD, minWidth: 90 }}>
+                                    <td style={{ ...TD, minWidth: 90, verticalAlign: 'top' }}>
                                         {inlineText(item, rowType, 'dueDate', fmtDate((item as any).dueDate))}
+                                    </td>
+                                    )}
+                                    {/* Time of day */}
+                                    {!compactColumns && (
+                                    <td style={{ ...TD, minWidth: 100, verticalAlign: 'top' }}>
+                                        {inlineTimeOfDay(item, rowType)}
                                     </td>
                                     )}
                                     {/* Sprint */}
                                     {!compactColumns && (
-                                    <td style={{ ...TD, minWidth: 130 }}>
+                                    <td style={{ ...TD, minWidth: 130, verticalAlign: 'top' }}>
                                         {inlineSprintSelect(item, rowType)}
                                     </td>
                                     )}
-                                    {/* Parent + progress */}
+                                    {/* Last note — click to add one, written straight to the
+                                        activity stream. */}
                                     {!compactColumns && (
-                                    <td style={{ ...TD, minWidth: 180 }}>
-                                        {parentCell(item, rowType)}
-                                    </td>
-                                    )}
-                                    {/* Last note */}
-                                    {!compactColumns && (
-                                    <td style={{ ...TD, maxWidth: 200, color: themeVars.muted as string, fontSize: 12 }}>
-                                        {note ? (
-                                            <span title={note} style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                                {note}
-                                            </span>
-                                        ) : <span style={{ fontStyle: 'italic' }}>—</span>}
+                                    <td style={{ ...TD, maxWidth: 240, color: themeVars.muted as string, fontSize: 12, verticalAlign: 'top' }}>
+                                        {noteCell(item, rowType)}
                                     </td>
                                     )}
                                     {/* Actions */}
