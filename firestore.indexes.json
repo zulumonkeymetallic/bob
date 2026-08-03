@@ -2007,6 +2007,20 @@
           "order": "ASCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "monzo_transactions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "ownerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdISO",
+          "order": "ASCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": [
