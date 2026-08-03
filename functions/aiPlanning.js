@@ -1,6 +1,6 @@
-const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
+const { onDocumentWritten } = require('firebase-functions/v2/firestore');
 const { defineSecret } = require('firebase-functions/params');
 const { planSchedule } = require('./scheduler/engine');
 const { generateDailyDigest } = require('./dailyDigestGenerator');
@@ -370,9 +370,17 @@ async function saveScheduleToFirestore(db, userId, result) {
 /**
  * NEW: Trigger to Auto-Enrich Tasks
  */
-exports.onTaskWrite = functions.runWith({ secrets: ['OPENROUTER_API_KEY', 'BREVO_API_KEY'] }).firestore.document('tasks/{taskId}').onWrite(async (change, context) => {
-    const after = change.after.exists ? change.after.data() : null;
-    const before = change.before.exists ? change.before.data() : null;
+// Region is stated explicitly: index.js sets the v2 global default at ~line 470 but requires
+// this module well before that, so a v2 definition here would otherwise land in us-central1.
+exports.onTaskWrite = onDocumentWritten({
+    document: 'tasks/{taskId}',
+    region: 'europe-west2',
+    secrets: ['OPENROUTER_API_KEY', 'BREVO_API_KEY'],
+}, async (event) => {
+    // v2 nests the snapshots under event.data and either side can be undefined on
+    // create/delete, where v1's change.before/after were always present.
+    const after = event.data?.after?.exists ? event.data.after.data() : null;
+    const before = event.data?.before?.exists ? event.data.before.data() : null;
 
     if (!after) return; // Deleted
 

@@ -1,9 +1,39 @@
-const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const { google } = require('googleapis');
+const { onCall, HttpsError } = require('firebase-functions/v2/https');
+const { onDocumentWritten } = require('firebase-functions/v2/firestore');
+const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { loadThemesForUser, mapThemeIdToLabel, mapThemeLabelToId, getGoogleColorForThemeId, DEFAULT_THEMES } = require('./services/themeManager');
 const { buildAbsoluteUrl, buildEntityUrl } = require('./utils/urlHelpers');
 const { CALENDAR_VISIBILITY_DAYS } = require('./lib/planningHorizon');
+
+/**
+ * Region MUST be stated explicitly on every function in this file.
+ *
+ * index.js calls functionsV2.setGlobalOptions({ region: 'europe-west2' }) at line ~470, but
+ * requires this module at line ~136 — so these definitions are evaluated BEFORE the global
+ * default is set, and would silently deploy to us-central1. That is not a cosmetic difference:
+ * a callable's URL contains its region, so the web app would start calling functions that do
+ * not exist there. These were v1 functions using functions.region(...) until 2026-08-03, which
+ * is why the ordering never mattered before.
+ */
+const REGION = 'europe-west2';
+
+/**
+ * v1 → v2 callable shim.
+ *
+ * v2 hands the handler a single `request`; the bodies below were written against v1's
+ * `(data, context)` pair and are several hundred lines long. Destructuring the request back
+ * into the two names they already use converts the signature without touching the logic —
+ * rewriting every `data.x` and `context.auth` by hand across this file is how a behavioural
+ * change sneaks in during what should be a mechanical runtime migration.
+ *
+ * `context.auth` is the only context member any of these bodies touch.
+ */
+const v1CallableArgs = (request) => ({
+  data: request.data || {},
+  context: { auth: request.auth || null },
+});
 
 const MS_IN_DAY = 24 * 60 * 60 * 1000;
 const GCAL_PAST_DAYS = 14;
@@ -1024,20 +1054,16 @@ function getGoogleOAuthConfig() {
   const projectId = process.env.GCLOUD_PROJECT;
   const region = 'europe-west2';
   const env = process.env || {};
-  // functions.config() throws unconditionally when called from a Cloud Functions gen 2
-  // (v2) runtime — this only worked before because every existing caller of
-  // getCalendarClientForUser happened to be a v1 function. A v2 caller (e.g.
-  // dataIntegrityGuards.js's deleteGoogleCalendarEventsNow) hit this immediately, even
-  // though the client_id/secret lookups already preferred env vars — the unconditional
-  // redirect_uri lookup below was the one line still reaching for it unguarded.
-  let legacyConfig = {};
-  try {
-    legacyConfig = functions.config().google || {};
-  } catch { /* v2 runtime — config() unavailable; env vars / fallback below are authoritative */ }
-  const clientId = env.GOOGLE_OAUTH_CLIENT_ID || legacyConfig.client_id;
-  const clientSecret = env.GOOGLE_OAUTH_CLIENT_SECRET || legacyConfig.client_secret;
-  const redirectUri = legacyConfig.redirect_uri
-    || (projectId ? `https://${region}-${projectId}.cloudfunctions.net/oauthCallback` : undefined);
+  // The functions.config() fallback that used to sit here is gone. It never returned anything
+  // in this project — config() throws on every gen 2 runtime, and since 2026-08-03 every
+  // function in this file is gen 2 — so the try/catch around it was pure ceremony. It is also
+  // removed outright in firebase-functions v7, where the call would throw a TypeError instead
+  // of the HttpsError the old catch was written for. Env vars are, and were, authoritative.
+  const clientId = env.GOOGLE_OAUTH_CLIENT_ID;
+  const clientSecret = env.GOOGLE_OAUTH_CLIENT_SECRET;
+  const redirectUri = projectId
+    ? `https://${region}-${projectId}.cloudfunctions.net/oauthCallback`
+    : undefined;
   return { clientId, clientSecret, redirectUri };
 }
 
@@ -2059,9 +2085,10 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
   }
 }
 
-exports.repairDuplicateCalendarEvents = functions.https.onCall(async (data, context) => {
+exports.repairDuplicateCalendarEvents = onCall({ region: REGION }, async (request) => {
+  const { data, context } = v1CallableArgs(request);
   if (!context.auth) {
-    throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+    throw new HttpsError('unauthenticated', 'Must be authenticated');
   }
   const uid = context.auth.uid;
   const dryRun = data?.dryRun !== false;
@@ -2176,7 +2203,7 @@ exports.repairDuplicateCalendarEvents = functions.https.onCall(async (data, cont
       timeMax,
       error: error?.message || String(error),
     });
-    throw new functions.https.HttpsError('internal', error?.message || 'Failed to repair duplicate calendar events');
+    throw new HttpsError('internal', error?.message || 'Failed to repair duplicate calendar events');
   }
 });
 
@@ -2281,13 +2308,14 @@ exports._cleanupOrphanedCalendarEventsForAllUsers = async function(options = {})
   return { ok: true, results };
 };
 
-exports.cleanupOrphanedCalendarEventsNow = functions.https.onCall(async (data, context) => {
-  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+exports.cleanupOrphanedCalendarEventsNow = onCall({ region: REGION }, async (request) => {
+  const { data, context } = v1CallableArgs(request);
+  if (!context.auth) throw new HttpsError('unauthenticated', 'Must be authenticated');
   const dryRun = data?.dryRun === true;
   try {
     return await cleanupOrphanedCalendarEvents(context.auth.uid, { dryRun });
   } catch (error) {
-    throw new functions.https.HttpsError('internal', error?.message || 'Failed to clean up orphaned calendar events');
+    throw new HttpsError('internal', error?.message || 'Failed to clean up orphaned calendar events');
   }
 });
 
@@ -2346,8 +2374,9 @@ exports._pushPendingBlocksForAllUsers = async function() {
   return { ok: true, results };
 };
 
-exports.syncCalendarBlock = functions.https.onCall(async (data, context) => {
-  if (!context.auth) throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+exports.syncCalendarBlock = onCall({ region: REGION }, async (request) => {
+  const { data, context } = v1CallableArgs(request);
+  if (!context.auth) throw new HttpsError('unauthenticated', 'Must be authenticated');
   const { blockId, action } = data;
   const uid = context.auth.uid;
   try {
@@ -2369,15 +2398,17 @@ exports.syncCalendarBlock = functions.https.onCall(async (data, context) => {
     return result;
   } catch (error) {
     console.error('Error syncing calendar block:', error);
-    throw new functions.https.HttpsError('internal', error.message || 'Failed to sync calendar block');
+    throw new HttpsError('internal', error.message || 'Failed to sync calendar block');
   }
 });
 
 // Trigger to auto-sync changes to Google Calendar
-exports.onCalendarBlockWrite = functions.region('europe-west2').firestore.document('calendar_blocks/{blockId}').onWrite(async (change, context) => {
-  const blockId = context.params.blockId;
-  const before = change.before.exists ? change.before.data() : null;
-  const after = change.after.exists ? change.after.data() : null;
+exports.onCalendarBlockWrite = onDocumentWritten({ document: 'calendar_blocks/{blockId}', region: REGION }, async (event) => {
+  const blockId = event.params.blockId;
+  // v2 delivers the snapshots under event.data, and either side can be undefined on
+  // create/delete — v1's change.before/after were always present objects.
+  const before = event.data?.before?.exists ? event.data.before.data() : null;
+  const after = event.data?.after?.exists ? event.data.after.data() : null;
 
   if (!after) {
     // Delete
@@ -2901,9 +2932,10 @@ async function syncUserCalendar(uid, options = {}) {
 }
 
 // Sync Google Calendar changes back to Firestore (pull-only)
-exports.syncFromGoogleCalendar = functions.https.onCall(async (data, context) => {
+exports.syncFromGoogleCalendar = onCall({ region: REGION }, async (request) => {
+  const { data, context } = v1CallableArgs(request);
   if (!context.auth) {
-    throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+    throw new HttpsError('unauthenticated', 'Must be authenticated');
   }
 
   const uid = context.auth.uid;
@@ -2915,14 +2947,15 @@ exports.syncFromGoogleCalendar = functions.https.onCall(async (data, context) =>
     return { success: true, ...result };
   } catch (error) {
     console.error('Error syncing from Google Calendar:', error);
-    throw new functions.https.HttpsError('internal', 'Failed to sync from Google Calendar');
+    throw new HttpsError('internal', 'Failed to sync from Google Calendar');
   }
 });
 
 // Manual "sync now" callable (push + pull)
-exports.syncCalendarNow = functions.https.onCall(async (data, context) => {
+exports.syncCalendarNow = onCall({ region: REGION }, async (request) => {
+  const { data, context } = v1CallableArgs(request);
   if (!context.auth) {
-    throw new functions.https.HttpsError('unauthenticated', 'Must be authenticated');
+    throw new HttpsError('unauthenticated', 'Must be authenticated');
   }
   const uid = context.auth.uid;
   const windowStart = new Date(Date.now() - GCAL_PAST_DAYS * MS_IN_DAY);
@@ -2939,7 +2972,7 @@ exports.syncCalendarNow = functions.https.onCall(async (data, context) => {
       windowEnd: windowEnd.toISOString(),
       error: error?.message || String(error),
     });
-    throw new functions.https.HttpsError('internal', error.message || 'Failed to sync calendar');
+    throw new HttpsError('internal', error.message || 'Failed to sync calendar');
   }
 });
 
@@ -2949,7 +2982,7 @@ function getColorForTheme(theme, themes, eventColors) {
 }
 
 // Scheduled function to sync calendar blocks (runs every hour)
-exports.scheduledCalendarSync = functions.pubsub.schedule('every 1 hours').onRun(async () => {
+exports.scheduledCalendarSync = onSchedule({ schedule: 'every 1 hours', region: REGION }, async () => {
   console.log('Running scheduled calendar sync...');
 
   try {
@@ -2998,9 +3031,10 @@ exports.scheduledCalendarSync = functions.pubsub.schedule('every 1 hours').onRun
  *
  * Supports dryRun: true to preview matches without writing.
  */
-exports.gcalLinkUnlinkedEvents = functions.https.onCall(async (data, context) => {
+exports.gcalLinkUnlinkedEvents = onCall({ region: REGION }, async (request) => {
+  const { data, context } = v1CallableArgs(request);
   const uid = context.auth?.uid;
-  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Authentication required');
+  if (!uid) throw new HttpsError('unauthenticated', 'Authentication required');
 
   const db = admin.firestore();
   const dryRun = data?.dryRun === true;
@@ -3115,12 +3149,12 @@ exports.gcalLinkUnlinkedEvents = functions.https.onCall(async (data, context) =>
  * Automatically links newly created/renamed stories to existing Google-synced
  * calendar blocks that are still unlinked for the same user.
  */
-exports.onStoryCalendarAutoLink = functions.firestore.document('stories/{storyId}').onWrite(async (change, context) => {
-  const before = change.before.exists ? (change.before.data() || {}) : null;
-  const after = change.after.exists ? (change.after.data() || {}) : null;
+exports.onStoryCalendarAutoLink = onDocumentWritten({ document: 'stories/{storyId}', region: REGION }, async (event) => {
+  const before = event.data?.before?.exists ? (event.data.before.data() || {}) : null;
+  const after = event.data?.after?.exists ? (event.data.after.data() || {}) : null;
   if (!after) return;
 
-  const storyId = context.params.storyId;
+  const storyId = event.params.storyId;
   const uid = String(after.ownerUid || '').trim();
   if (!uid) return;
 
@@ -3210,15 +3244,16 @@ exports.onStoryCalendarAutoLink = functions.firestore.document('stories/{storyId
  * Manual override endpoint for correcting/clearing links between a Google event
  * and a calendar_block. Supports resolving by `blockId` or `eventId`.
  */
-exports.gcalOverrideEventLink = functions.https.onCall(async (data, context) => {
+exports.gcalOverrideEventLink = onCall({ region: REGION }, async (request) => {
+  const { data, context } = v1CallableArgs(request);
   const uid = context.auth?.uid;
-  if (!uid) throw new functions.https.HttpsError('unauthenticated', 'Authentication required');
+  if (!uid) throw new HttpsError('unauthenticated', 'Authentication required');
 
   const db = admin.firestore();
   const blockId = String(data?.blockId || '').trim();
   const eventId = String(data?.eventId || '').trim();
   if (!blockId && !eventId) {
-    throw new functions.https.HttpsError('invalid-argument', 'Either blockId or eventId is required');
+    throw new HttpsError('invalid-argument', 'Either blockId or eventId is required');
   }
 
   const desiredStoryId = data?.storyId ? String(data.storyId).trim() : '';
@@ -3227,14 +3262,14 @@ exports.gcalOverrideEventLink = functions.https.onCall(async (data, context) => 
   const note = String(data?.note || '').trim();
 
   if (desiredStoryId && desiredTaskId) {
-    throw new functions.https.HttpsError('invalid-argument', 'Provide storyId or taskId, not both');
+    throw new HttpsError('invalid-argument', 'Provide storyId or taskId, not both');
   }
 
   let blockSnap = null;
   if (blockId) {
     blockSnap = await db.collection('calendar_blocks').doc(blockId).get();
     if (!blockSnap.exists) {
-      throw new functions.https.HttpsError('not-found', 'Calendar block not found');
+      throw new HttpsError('not-found', 'Calendar block not found');
     }
   } else {
     const q = await db.collection('calendar_blocks')
@@ -3243,14 +3278,14 @@ exports.gcalOverrideEventLink = functions.https.onCall(async (data, context) => 
       .limit(1)
       .get();
     if (q.empty) {
-      throw new functions.https.HttpsError('not-found', 'No calendar block found for eventId');
+      throw new HttpsError('not-found', 'No calendar block found for eventId');
     }
     blockSnap = q.docs[0];
   }
 
   const block = blockSnap.data() || {};
   if (String(block.ownerUid || '') !== uid) {
-    throw new functions.https.HttpsError('permission-denied', 'Not allowed to modify this calendar block');
+    throw new HttpsError('permission-denied', 'Not allowed to modify this calendar block');
   }
 
   let resolvedGoalId = desiredGoalId || '';
@@ -3258,11 +3293,11 @@ exports.gcalOverrideEventLink = functions.https.onCall(async (data, context) => 
   if (desiredStoryId) {
     const storySnap = await db.collection('stories').doc(desiredStoryId).get();
     if (!storySnap.exists) {
-      throw new functions.https.HttpsError('not-found', 'Story not found');
+      throw new HttpsError('not-found', 'Story not found');
     }
     const story = storySnap.data() || {};
     if (story.ownerUid && story.ownerUid !== uid) {
-      throw new functions.https.HttpsError('permission-denied', 'Story is not owned by current user');
+      throw new HttpsError('permission-denied', 'Story is not owned by current user');
     }
     resolvedGoalId = resolvedGoalId || String(story.goalId || '');
   }
@@ -3270,11 +3305,11 @@ exports.gcalOverrideEventLink = functions.https.onCall(async (data, context) => 
   if (desiredTaskId) {
     const taskSnap = await db.collection('tasks').doc(desiredTaskId).get();
     if (!taskSnap.exists) {
-      throw new functions.https.HttpsError('not-found', 'Task not found');
+      throw new HttpsError('not-found', 'Task not found');
     }
     const task = taskSnap.data() || {};
     if (task.ownerUid && task.ownerUid !== uid) {
-      throw new functions.https.HttpsError('permission-denied', 'Task is not owned by current user');
+      throw new HttpsError('permission-denied', 'Task is not owned by current user');
     }
     resolvedGoalId = resolvedGoalId || String(task.goalId || '');
   }
