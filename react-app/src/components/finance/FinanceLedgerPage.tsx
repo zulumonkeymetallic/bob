@@ -46,6 +46,7 @@ const FinanceLedgerPage: React.FC = () => {
      */
     const [suggestions, setSuggestions] = useState<any[]>([]);
     const [suggestBusy, setSuggestBusy] = useState(false);
+    const [suggestRun, setSuggestRun] = useState(false);
 
     const toMonth = monthKeyFromDate(new Date());
     const fromMonth = monthKeyFromIndex(monthIndexOf(toMonth) - (MONTH_WINDOW - 1));
@@ -61,6 +62,7 @@ const FinanceLedgerPage: React.FC = () => {
             setSuggestions([]);
         } finally {
             setSuggestBusy(false);
+            setSuggestRun(true);
         }
     }, [isDemo]);
 
@@ -95,7 +97,6 @@ const FinanceLedgerPage: React.FC = () => {
     }, [currentUser, fromMonth, toMonth, isDemo]);
 
     useEffect(() => { load(); }, [load]);
-    useEffect(() => { loadSuggestions(); }, [loadSuggestions]);
 
     const setTab = (next: LedgerTab) => {
         const params = new URLSearchParams(searchParams);
@@ -235,6 +236,23 @@ const FinanceLedgerPage: React.FC = () => {
                     <Button size="sm" variant="outline-primary" onClick={runMigration} disabled={saving}>
                         Import them
                     </Button>
+                </Alert>
+            )}
+
+            {!suggestRun && (
+                <div className="mb-3 d-flex align-items-center gap-2 flex-wrap">
+                    <Button size="sm" variant="outline-primary" onClick={loadSuggestions} disabled={suggestBusy}>
+                        {suggestBusy ? 'Scanning…' : 'Find accounts of mine in my transactions'}
+                    </Button>
+                    <span className="small text-muted">
+                        Reads your full transaction history, so it is on request rather than on every visit.
+                    </span>
+                </div>
+            )}
+
+            {suggestRun && suggestions.length === 0 && (
+                <Alert variant="secondary" className="py-2 small">
+                    No unregistered accounts of yours found in your transactions.
                 </Alert>
             )}
 

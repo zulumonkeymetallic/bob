@@ -11,6 +11,7 @@ import ReactECharts from 'echarts-for-react';
 import TransactionsList from './TransactionsList';
 import { normalizeMerchantKey } from './financeInsights';
 import BucketDonut from './BucketDonut';
+import { cacheKey, getCached, setCached, invalidateFinanceCache } from '../../utils/financeCache';
 import { pieShareTooltip, stackedShareTooltip, barShareTooltip } from '../../utils/financeChartTooltips';
 import {
     TrendingUp,
@@ -281,8 +282,11 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const formatCurrency = (val: number) =>
         new Intl.NumberFormat('en-GB', { style: 'currency', currency: 'GBP' }).format(val || 0);
 
-    const fetchData = useCallback(async () => {
+    const fetchData = useCallback(async (force = false) => {
         if (!currentUser) return;
+        // A forced refresh follows a write, and a write changes every range, not just the
+        // one on screen — drop the lot rather than leave other tabs showing stale figures.
+        if (force) invalidateFinanceCache(currentUser.uid);
         setLoading(true);
         setError(null);
         try {
@@ -295,6 +299,12 @@ const FinanceDashboardAdvanced: React.FC = () => {
             }
 
             const { rangeStart, rangeEnd } = resolveDateRange(filter, startDate, endDate);
+
+            // Both callables read the whole transaction history and are cold-start bound
+            // (~9s and ~12s cold, ~1.6s warm on a real account), so revisiting a range that
+            // was already loaded should not pay for it twice. See utils/financeCache.ts.
+            const rangeKey = cacheKey([currentUser.uid, filter, rangeStart.toISOString(), rangeEnd.toISOString(), String(compareYoY)]);
+            const cached = force ? null : getCached<any>(rangeKey);
 
             const fetchDashboardData = httpsCallable(functions, 'fetchDashboardData');
             const fetchEnhancementData = httpsCallable(functions, 'fetchFinanceEnhancementData');
@@ -342,6 +352,15 @@ const FinanceDashboardAdvanced: React.FC = () => {
                 ) - 1;
             }
 
+            if (cached) {
+                setData(cached.data);
+                setEnhancementData(cached.enhancementData);
+                setYoyData(cached.yoyData);
+                setYoyEnhancementData(cached.yoyEnhancementData);
+                setLoading(false);
+                return;
+            }
+
             const settled = await Promise.allSettled(requests);
             const dashboardRes = settled[0];
             const enhancementRes = settled[1];
@@ -369,6 +388,16 @@ const FinanceDashboardAdvanced: React.FC = () => {
             } else {
                 setYoyEnhancementData(null);
             }
+
+            const dashboardPayload = ((dashboardRes.value.data as any)?.data || dashboardRes.value.data) as any;
+            setCached(rangeKey, {
+                data: dashboardPayload,
+                enhancementData: enhancementRes.status === 'fulfilled' ? ((enhancementRes.value.data as any) || null) : null,
+                yoyData: compareYoY && yoyRes && yoyRes.status === 'fulfilled'
+                    ? (((yoyRes.value.data as any)?.data || yoyRes.value.data) as any) : null,
+                yoyEnhancementData: compareYoY && yoyEnhancementRes && yoyEnhancementRes.status === 'fulfilled'
+                    ? ((yoyEnhancementRes.value.data as any) || null) : null,
+            });
         } catch (err: any) {
             console.error(err);
             setError(err?.message || 'Failed to load finance dashboard data');
@@ -384,7 +413,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
         (window as any).refreshMonzoData = async () => {
             const fn = httpsCallable(functions, 'syncMonzoNow');
             await fn({});
-            await fetchData();
+            await fetchData(true);
         };
     }, [fetchData]);
 
@@ -428,7 +457,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
         try {
             const fn = httpsCallable(functions, 'syncMonzoNow');
             await fn({});
-            await fetchData();
+            await fetchData(true);
             setOpsMessage('Monzo sync completed and dashboard refreshed.');
         } catch (e: any) {
             const message = String(e?.message || 'Sync failed');
@@ -466,7 +495,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                 const recomputeFn = httpsCallable(functions, 'recomputeMonzoAnalytics');
                 const importRes = (await importMonzoFn({ csv: csvText })).data as any;
                 await recomputeFn({});
-                await fetchData();
+                await fetchData(true);
                 const inserted = Number(importRes?.inserted || 0);
                 const skipped = Number(importRes?.skippedExisting || 0);
                 const start = importRes?.coverageStartISO ? new Date(importRes.coverageStartISO).toLocaleDateString('en-GB') : '—';
@@ -492,7 +521,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
             await debtFn({ ...target });
             await actionsFn({ source: importRes?.source || externalSource, maxActions: 12 });
 
-            await fetchData();
+            await fetchData(true);
 
             setOpsMessage(
                 `Imported ${importRes?.upserted || 0} rows, matched ${matchRes?.matched || 0}, and rebuilt debt/action insights.`
@@ -520,7 +549,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                 windowDays,
                 amountTolerancePence,
             })).data as any;
-            await fetchData();
+            await fetchData(true);
             setOpsMessage(`Matching complete: ${matchRes?.matched || 0} matched, ${matchRes?.unmatched || 0} unmatched.`);
         } catch (err: any) {
             console.error(err);
@@ -550,7 +579,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                     + `${res?.bySource?.llm_stored || 0} from stored AI results). Nothing written yet.`
                 );
             } else {
-                await fetchData();
+                await fetchData(true);
                 setOpsMessage(`Categorised ${n} transaction(s) from existing merchant rules.`);
             }
         } catch (err: any) {
@@ -574,7 +603,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
             const actionsFn = httpsCallable(functions, 'generateFinanceActionInsights');
             await debtFn(importAccountId ? { accountId: importAccountId } : { source: externalSource });
             const actionRes = (await actionsFn({ source: externalSource, maxActions: 12 })).data as any;
-            await fetchData();
+            await fetchData(true);
             setOpsMessage(`Generated ${Array.isArray(actionRes?.actions) ? actionRes.actions.length : 0} finance actions.`);
         } catch (err: any) {
             console.error(err);
@@ -592,7 +621,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
         try {
             const fn = httpsCallable(functions, 'convertFinanceActionToStory');
             const result = (await fn({ actionId })).data as any;
-            await fetchData();
+            await fetchData(true);
             setOpsMessage(`Action converted to story ${result?.storyId || ''}.`);
         } catch (err: any) {
             console.error(err);
@@ -611,7 +640,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
         setOpsMessage(null);
         try {
             await httpsCallable(functions, 'dismissFinanceAction')({ actionId });
-            await fetchData();
+            await fetchData(true);
             setOpsMessage('Suggestion dismissed — it will not come back.');
         } catch (err: any) {
             console.error(err);
@@ -656,7 +685,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                 currency: manualForm.currency,
                 balancePence: Math.round(balanceNum * 100),
             });
-            await fetchData();
+            await fetchData(true);
             setOpsMessage(editingManualAccountId ? 'Account updated.' : 'Account added.');
             resetManualForm();
         } catch (err: any) {
@@ -675,7 +704,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
         try {
             const deleteFn = httpsCallable(functions, 'deleteManualFinanceAccount');
             await deleteFn({ accountId });
-            await fetchData();
+            await fetchData(true);
             setOpsMessage('Account deleted.');
             if (editingManualAccountId === accountId) resetManualForm();
         } catch (err: any) {
@@ -3275,9 +3304,11 @@ const FinanceDashboardAdvanced: React.FC = () => {
             )}
 
             {/* Superseded by /finance/ledger, which adds the month axis, APR, and
-                contributed-vs-value. Kept read-only for one phase so the pre-migration
-                figures stay visible and finance_manual_accounts remains the rollback
-                path — deleting it is the last step of the migration, not the first. */}
+                contributed-vs-value. finance_manual_accounts is the rollback path for the
+                migration, so the code stays — but it is hidden when there is nothing in it.
+                Showing an empty "legacy register" alongside an empty ledger was two screens
+                arguing about no data. It reappears by itself if any legacy record exists. */}
+            {manualAccounts.length > 0 && (<>
             <Alert variant="secondary" className="d-flex flex-wrap justify-content-between align-items-center gap-2">
                 <span>
                     <strong>Legacy register.</strong> A single current balance per account, with no
@@ -3441,6 +3472,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                     </PremiumCard>
                 </Col>
             </Row>
+            </>)}
         </>
     );
 
