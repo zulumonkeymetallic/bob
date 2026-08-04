@@ -112,11 +112,26 @@ function isUserGcalEvent(block) {
 // displacement in smart mode. Deliberately narrower than isFitnessBlock below: a casual
 // "Walk" or "Meditate" GCal entry should NOT match this, because those ARE meant to be
 // movable/deletable to make room for a pinned item (per Jim, 2026-07-21) — only real
-// training sessions (run, swim, strength training, crossfit, gym) are off-limits.
+// training sessions are off-limits.
+//
+// Now keyed off the canonical activity rather than a substring list. The old list missed
+// climbing and hiking entirely, and matched "training" in any title — a "Training budget
+// review" was protected from displacement. `activity` is written on the block by the
+// scheduler; a title fallback stays for blocks created before it existed and for external
+// Google events, which carry no activity of their own.
+const {
+  activityFromSport,
+  isProtectedTrainingActivity,
+} = require('../utils/activityTaxonomy');
+
 function isProtectedTrainingEvent(block) {
+  if (block?.activity) return isProtectedTrainingActivity(block.activity);
   const label = String(block?.title || block?.theme || block?.category || '').toLowerCase();
-  return label.includes('run') || label.includes('swim') || label.includes('strength')
-    || label.includes('crossfit') || label.includes('gym') || label.includes('training');
+  const inferred = activityFromSport(label);
+  if (inferred !== 'other') return isProtectedTrainingActivity(inferred);
+  // Not an activity we recognise: keep the one keyword that named a session rather than
+  // a sport, and accept that it is a guess.
+  return label.includes('training');
 }
 
 // Appointment-shaped events (dentist, doctor, etc.) are protected too, but by a different

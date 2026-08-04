@@ -13679,13 +13679,25 @@ async function resolveUserMaxHr(uid) {
   return { maxHr: 190, source: 'default' };
 }
 
+/**
+ * Zone boundaries as percentages of max HR.
+ *
+ * Zone 1 starts at zero, not at 50% of max. It used to have a 50% floor, and a reading
+ * below that floor matched no zone at all — `findIndex` returned -1, and the if/else
+ * chain in `enrichActivityHr` ended in a bare `else` that credited it to **Zone 5**. So
+ * every warm-up, cool-down, traffic-light stop and dropped-sensor moment under 93bpm was
+ * recorded as maximal effort. Zone 5 was the second-largest band in the 90-day totals,
+ * and a good deal of it was standing still.
+ *
+ * There is no band beneath Zone 1, so nothing should ever fall outside the set.
+ */
 function hrZonesFromMax(maxHr) {
   return [
-    { name: 'Z1', min: 0.50 * maxHr, max: 0.60 * maxHr },
+    { name: 'Z1', min: 0, max: 0.60 * maxHr },
     { name: 'Z2', min: 0.60 * maxHr, max: 0.70 * maxHr },
     { name: 'Z3', min: 0.70 * maxHr, max: 0.80 * maxHr },
     { name: 'Z4', min: 0.80 * maxHr, max: 0.90 * maxHr },
-    { name: 'Z5', min: 0.90 * maxHr, max: 1.00 * maxHr + 1 },
+    { name: 'Z5', min: 0.90 * maxHr, max: Infinity },
   ];
 }
 
@@ -13750,15 +13762,18 @@ async function enrichActivityHr(uid, activityId, options = {}) {
 
   const zones = hrZonesFromMax(maxHr);
   const totals = { z1Time_s: 0, z2Time_s: 0, z3Time_s: 0, z4Time_s: 0, z5Time_s: 0 };
+  // A gap longer than this is a sensor dropout, not time spent at that heart rate.
+  // Crediting a three-minute silence to whatever was last seen invents intensity.
+  const MAX_GAP_S = 30;
   for (let i = 1; i < tm.length; i++) {
-    const dt = Math.max(1, (tm[i] - tm[i - 1]));
+    const dt = Math.min(Math.max(1, tm[i] - tm[i - 1]), MAX_GAP_S);
     const h = hr[Math.min(i, hr.length - 1)];
     const zIdx = zones.findIndex(z => h >= z.min && h < z.max);
-    if (zIdx === 0) totals.z1Time_s += dt;
-    else if (zIdx === 1) totals.z2Time_s += dt;
-    else if (zIdx === 2) totals.z3Time_s += dt;
-    else if (zIdx === 3) totals.z4Time_s += dt;
-    else totals.z5Time_s += dt;
+    // With Z1 starting at zero and Z5 unbounded above, every reading matches a zone —
+    // but index defensively rather than falling through to Z5, which is what used to
+    // happen to anything below Z1's old 50% floor.
+    const key = ['z1Time_s', 'z2Time_s', 'z3Time_s', 'z4Time_s', 'z5Time_s'][zIdx] || 'z1Time_s';
+    totals[key] += dt;
   }
   const patch = {
     hrZones: totals,

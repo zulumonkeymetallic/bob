@@ -8,6 +8,7 @@ const { DateTime, Interval } = require('luxon');
 const { ensureFirestore, resolveTimezone } = require('./lib/reporting');
 const { makeRefCandidate } = require('./lib/refGenerator');
 const { clampTaskPoints } = require('./utils/taskPoints');
+const { activityFromSport, groupFor } = require('./utils/activityTaxonomy');
 const { rejectGenericCriteria } = require('./utils/acceptanceCriteria');
 const { buildAbsoluteUrl, buildEntityUrl } = require('./utils/urlHelpers');
 const { coerceZone, toDateTime, toMillis } = require('./lib/time');
@@ -2082,11 +2083,16 @@ async function materializePlannerThemeBlocks({
       rationale: `Weekly theme plan: ${themeLabel}`,
       // Link fitness blocks to the user's fitness focus goal
       goalId: kind === 'health' && fitnessGoalId ? fitnessGoalId : null,
-      activityType: kind === 'health' ? (rawLabel.toLowerCase().includes('swim') ? 'swim'
-        : rawLabel.toLowerCase().includes('run') ? 'run'
-        : rawLabel.toLowerCase().includes('cycl') || rawLabel.toLowerCase().includes('bike') ? 'cycle'
-        : rawLabel.toLowerCase().includes('gym') || rawLabel.toLowerCase().includes('cross') ? 'gym'
-        : 'fitness') : null,
+      // Canonical activity — see functions/utils/activityTaxonomy.js. This was a sixth
+      // independent taxonomy (swim/run/cycle/gym/fitness, matched on label substrings),
+      // which meant a health block could not express a walk, a hike, a climb or the
+      // difference between an indoor and an outdoor ride.
+      //
+      // `activityType` is retained alongside for the surfaces still reading it; `activity`
+      // is the canonical one and the field the scheduler and the protected-training check
+      // read.
+      activity: kind === 'health' ? activityFromSport(rawLabel) : null,
+      activityType: kind === 'health' ? groupFor(activityFromSport(rawLabel)) : null,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
