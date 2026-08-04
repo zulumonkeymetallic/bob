@@ -144,3 +144,79 @@ describe('buildPotFlows', () => {
     expect(totals.outPence).toBe(2000);
   });
 });
+
+describe('account transfers (the generic replacement for hardcoding merchants)', () => {
+  const {
+    buildTransferAccountIndex,
+    resolveAccountTransfer,
+    TRANSFER_ACCOUNT_KINDS,
+  } = require('./bucketResolver');
+
+  const ACCOUNTS = [
+    { accountId: 'gia1', name: 'Fundment', kind: 'gia' },
+    { accountId: 'isa1', name: 'Seccl ISA', provider: 'Seccl', kind: 'isa' },
+    { accountId: 'cur1', name: 'James Donnelly', kind: 'current' },
+    { accountId: 'card1', name: 'Barclaycard', kind: 'credit_card' },
+    { accountId: 'gone', name: 'Old Vanguard', kind: 'gia', archived: true },
+  ];
+  const accountIndex = buildTransferAccountIndex(ACCOUNTS);
+
+  test('only asset-side accounts are indexed', () => {
+    expect(accountIndex.has('fundment')).toBe(true);
+    expect(accountIndex.has('james donnelly')).toBe(true);
+    // Paying a card down is debt servicing, not a neutral transfer.
+    expect(accountIndex.has('barclaycard')).toBe(false);
+    expect(TRANSFER_ACCOUNT_KINDS).not.toContain('credit_card');
+  });
+
+  test('archived accounts drop out', () => {
+    expect(accountIndex.has('old vanguard')).toBe(false);
+  });
+
+  test('a contribution is excluded from spend and named', () => {
+    const resolved = resolveTransactionCategory(
+      { description: 'FUNDMENT LTD', amountMinor: -40000, defaultCategoryType: 'savings' },
+      { categoryIndex, transferAccountIndex: accountIndex },
+    );
+    expect(resolved.bucket).toBe('bank_transfer');
+    expect(resolved.categoryKey).toBe('account_transfer');
+    expect(resolved.categoryLabel).toBe('Transfer to Fundment');
+  });
+
+  test('money coming back out is direction "from", so it nets off', () => {
+    const back = resolveAccountTransfer({ description: 'FUNDMENT LTD', amountMinor: 25000 }, accountIndex);
+    expect(back.direction).toBe('from');
+  });
+
+  test('the longest matching term wins', () => {
+    const index = buildTransferAccountIndex([
+      { accountId: 'a', name: 'Halifax', kind: 'current' },
+      { accountId: 'b', name: 'Halifax Savings', kind: 'savings' },
+    ]);
+    expect(resolveAccountTransfer({ description: 'TFR HALIFAX SAVINGS' }, index).accountId).toBe('b');
+  });
+
+  test('a user with no registered accounts is completely unaffected', () => {
+    const empty = buildTransferAccountIndex([]);
+    expect(resolveAccountTransfer({ description: 'FUNDMENT LTD', amountMinor: -40000 }, empty)).toBeNull();
+    const resolved = resolveTransactionCategory(
+      { description: 'FUNDMENT LTD', amountMinor: -40000, defaultCategoryType: 'savings' },
+      { categoryIndex, transferAccountIndex: empty },
+    );
+    expect(resolved.bucket).not.toBe('bank_transfer');
+  });
+
+  test('buildPotFlows nets withdrawals off contributions per platform', () => {
+    const txs = [
+      { description: 'FUNDMENT LTD', amountMinor: -40000 },
+      { description: 'FUNDMENT LTD', amountMinor: -20000 },
+      { description: 'FUNDMENT LTD', amountMinor: 15000 },
+    ];
+    const { accounts, accountTotals } = buildPotFlows(txs, [], potIndex, categoryIndex, accountIndex);
+    const fundment = accounts.find((a) => a.name === 'Fundment');
+    expect(fundment.inPence).toBe(60000);
+    expect(fundment.outPence).toBe(15000);
+    expect(fundment.netPence).toBe(45000);
+    expect(accountTotals.netPence).toBe(45000);
+  });
+});

@@ -5779,8 +5779,10 @@ exports.fetchDashboardData = httpsV2.onCall({ memory: '1GiB' }, async (req) => {
     txQuery = txQuery.where('createdISO', '<', endBoundary.toISOString());
   }
 
-  // Fetch transactions, goals, pots, and budget settings in parallel
-  const [txSnap, goalsSnap, potsSnap, budgetSnap] = await Promise.all([
+  // Fetch transactions, goals, pots, budget settings and the account register in parallel.
+  // The register is what makes transfers to the user's OWN savings/investment accounts
+  // recognisable without hardcoding any provider name.
+  const [txSnap, goalsSnap, potsSnap, budgetSnap, ledgerSnap] = await Promise.all([
     txQuery.get(),
     db.collection('goals')
       .where('ownerUid', '==', uid)
@@ -5788,16 +5790,22 @@ exports.fetchDashboardData = httpsV2.onCall({ memory: '1GiB' }, async (req) => {
     db.collection('monzo_pots')
       .where('ownerUid', '==', uid)
       .get(),
-    db.collection('finance_budgets_v2').doc(uid).get()
+    db.collection('finance_budgets_v2').doc(uid).get(),
+    db.collection('finance_ledger_accounts')
+      .where('ownerUid', '==', uid)
+      .get()
   ]);
 
   const transactions = txSnap.docs.map(d => d.data());
   const goals = goalsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
   const pots = potsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
   const budgetSettings = budgetSnap.exists ? budgetSnap.data() : null;
+  const ledgerAccounts = ledgerSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
   const { buildDashboardData } = require('./finance/dashboard');
-  const agg = buildDashboardData(transactions, goals, pots, budgetSettings, { startDate, endDate });
+  const agg = buildDashboardData(
+    transactions, goals, pots, budgetSettings, { startDate, endDate }, undefined, ledgerAccounts,
+  );
 
   return { ok: true, data: agg };
 });

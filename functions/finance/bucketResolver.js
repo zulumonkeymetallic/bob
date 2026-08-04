@@ -180,6 +180,83 @@ function resolvePotTransfer(tx, potIndex) {
   return { potId, potName, direction: isToPot ? 'to' : 'from' };
 }
 
+/**
+ * Account kinds that money can be MOVED to rather than spent at.
+ *
+ * Credit cards, loans and mortgages are deliberately absent: paying those down is debt
+ * servicing, which recomputeDebtServiceBreakdown already models, and treating it as a
+ * neutral transfer would erase real obligations from the picture.
+ */
+const TRANSFER_ACCOUNT_KINDS = [
+  'current',
+  'savings',
+  'isa',
+  'gia',
+  'pension_workplace',
+  'pension_personal',
+];
+
+function transferTermsFor(account) {
+  const explicit = Array.isArray(account.paymentMatchTerms) ? account.paymentMatchTerms : [];
+  return [...explicit, account.name, account.provider]
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter((value) => value.length >= 3);
+}
+
+/**
+ * Index the user's own savings/investment accounts by the terms that identify them in a
+ * Monzo description. This is the generic replacement for hardcoding merchant names: a user
+ * registers "Fundment" or "Vanguard" on /finance/ledger and their contributions stop being
+ * counted as spend. Nothing about any particular provider lives in code.
+ */
+function buildTransferAccountIndex(accounts) {
+  const index = new Map();
+  (accounts || []).forEach((raw) => {
+    const account = raw && typeof raw.data === 'function' ? raw.data() : raw;
+    if (!account) return;
+    if (account.deleted === true || account.archived === true) return;
+    if (!TRANSFER_ACCOUNT_KINDS.includes(String(account.kind || '').toLowerCase())) return;
+    transferTermsFor(account).forEach((term) => {
+      if (!index.has(term)) index.set(term, account);
+    });
+  });
+  return index;
+}
+
+/**
+ * Detect a transfer to or from one of the user's own registered accounts.
+ *
+ * Longest term wins, so "halifax savings" beats a bare "halifax" when both are registered
+ * and the description names the more specific one.
+ */
+function resolveAccountTransfer(tx, accountIndex) {
+  if (!accountIndex || accountIndex.size === 0) return null;
+  const haystack = [
+    tx && tx.description,
+    tx && tx.merchant && tx.merchant.name,
+    tx && tx.counterparty && tx.counterparty.name,
+    tx && tx.merchantKey,
+  ].map((value) => String(value || '').toLowerCase()).join(' | ');
+  if (!haystack.trim()) return null;
+
+  let best = null;
+  accountIndex.forEach((account, term) => {
+    if (!haystack.includes(term)) return;
+    if (!best || term.length > best.term.length) best = { term, account };
+  });
+  if (!best) return null;
+
+  const amount = amountOf(tx);
+  return {
+    accountId: best.account.accountId || best.account.id || null,
+    accountName: best.account.name || 'Your account',
+    accountKind: best.account.kind || 'other',
+    // Money leaving the current account goes INTO the platform; money arriving is a
+    // withdrawal, which must reduce the running total rather than count as income.
+    direction: amount < 0 ? 'to' : 'from',
+  };
+}
+
 /** Signed amount in pounds. Tolerates the three shapes on monzo_transactions. */
 function amountOf(tx) {
   if (!tx) return 0;
@@ -210,7 +287,7 @@ function amountOf(tx) {
  * `bucketSource` is what lets the UI explain why a transaction sits where it does.
  */
 function resolveTransactionCategory(tx, options = {}) {
-  const { categoryIndex = null, potIndex = null } = options;
+  const { categoryIndex = null, potIndex = null, transferAccountIndex = null } = options;
   const data = tx || {};
 
   const potTransfer = resolvePotTransfer(data, potIndex);
@@ -224,6 +301,25 @@ function resolveTransactionCategory(tx, options = {}) {
       bucketPrecision: 'exact',
       isPotTransfer: true,
       potTransfer,
+      accountTransfer: null,
+    };
+  }
+
+  // Moving money to your own ISA/GIA/pension/savings is not spend, for the same reason a
+  // pot transfer is not: you still have it. Only registered accounts count — see
+  // buildTransferAccountIndex — so this never guesses at a merchant name.
+  const accountTransfer = resolveAccountTransfer(data, transferAccountIndex);
+  if (accountTransfer) {
+    return {
+      bucket: 'bank_transfer',
+      bucketV4: null,
+      categoryKey: 'account_transfer',
+      categoryLabel: `Transfer ${accountTransfer.direction} ${accountTransfer.accountName}`,
+      bucketSource: 'account',
+      bucketPrecision: 'exact',
+      isPotTransfer: false,
+      potTransfer: null,
+      accountTransfer,
     };
   }
 
@@ -289,6 +385,7 @@ function resolveTransactionCategory(tx, options = {}) {
     bucketPrecision: hit && hit.coarse ? 'coarse' : 'exact',
     isPotTransfer: false,
     potTransfer: null,
+    accountTransfer: null,
   };
 }
 
@@ -318,6 +415,9 @@ module.exports = {
   isCoarseWidening,
   buildCategoryIndex,
   buildPotIndex,
+  buildTransferAccountIndex,
+  resolveAccountTransfer,
+  TRANSFER_ACCOUNT_KINDS,
   normalisePotName,
   resolvePotTransfer,
   resolveTransactionCategory,

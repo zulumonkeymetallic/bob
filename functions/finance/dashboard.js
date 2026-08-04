@@ -11,7 +11,12 @@
 //   - createdAt (timestamp) – Firestore timestamp or Date
 //   - needsClassification (boolean) – ignored here (already classified)
 
-const { resolveTransactionCategory, buildCategoryIndex, buildPotIndex } = require('./bucketResolver');
+const {
+    resolveTransactionCategory,
+    buildCategoryIndex,
+    buildPotIndex,
+    buildTransferAccountIndex,
+} = require('./bucketResolver');
 const { DEFAULT_FINANCE_CATEGORIES } = require('./categories');
 
 // Callers that have the user's own catalogue should pass an index built from it;
@@ -85,7 +90,7 @@ function toAmountMinor(tx) {
  * Aggregate an array of transactions into the structures required by the dashboard.
  * Supports optional date filtering (startDate, endDate).
  */
-function aggregateTransactions(transactions, startDate, endDate, categoryIndex = DEFAULT_CATEGORY_INDEX, potIndex = null) {
+function aggregateTransactions(transactions, startDate, endDate, categoryIndex = DEFAULT_CATEGORY_INDEX, potIndex = null, transferAccountIndex = null) {
   const result = {
     totalSpend: 0,
     spendByBucket: {},
@@ -118,7 +123,7 @@ function aggregateTransactions(transactions, startDate, endDate, categoryIndex =
         // a hand-written precedence chain plus a partial fold that only handled
         // `optional`, so net_salary and income reported as two separate buckets and
         // debt_repayment never rolled into mandatory.
-        const resolved = resolveTransactionCategory(tx, { categoryIndex, potIndex });
+        const resolved = resolveTransactionCategory(tx, { categoryIndex, potIndex, transferAccountIndex });
         const bucketNormalized = resolved.bucket;
 
         // Exclude bank transfers from all aggregates. Unclassified spend stays IN:
@@ -210,34 +215,36 @@ function aggregateTransactions(transactions, startDate, endDate, categoryIndex =
  * All figures are integer pence and `inPence`/`outPence` are magnitudes; `netPence` is
  * signed, positive meaning the pot grew over the range.
  */
-function buildPotFlows(transactionsInRange, pots, potIndex, categoryIndex) {
+function buildPotFlows(transactionsInRange, pots, potIndex, categoryIndex, transferAccountIndex = null) {
     const rows = new Map();
+    const accountRows = new Map();
     const keyFor = (potId, potName) => String(potId || potName || 'unknown').toLowerCase();
 
-    const ensure = (potId, potName) => {
-        const key = keyFor(potId, potName);
-        if (!rows.has(key)) {
-            rows.set(key, {
+    const makeRow = (map, key, name, extra = {}) => {
+        if (!map.has(key)) {
+            map.set(key, {
                 key,
-                potId: potId || null,
-                name: potName || 'Savings pot',
+                name: name || 'Savings pot',
                 inPence: 0,
                 outPence: 0,
                 netPence: 0,
                 transactions: 0,
                 balancePence: null,
                 deleted: false,
+                ...extra,
             });
         }
-        return rows.get(key);
+        return map.get(key);
     };
 
-    (transactionsInRange || []).forEach((tx) => {
-        const resolved = resolveTransactionCategory(tx, { categoryIndex, potIndex });
-        if (!resolved.isPotTransfer || !resolved.potTransfer) return;
-        const { potId, potName, direction } = resolved.potTransfer;
-        const row = ensure(potId, potName);
-        const amountMinor = toAmountMinor(tx);
+    const ensure = (potId, potName) => makeRow(rows, keyFor(potId, potName), potName, { potId: potId || null });
+
+    /**
+     * In and out are tracked separately and netted, so money taken back out of a platform
+     * reduces what you are shown as having put in. A running "total contributed" that only
+     * ever went up would overstate every savings figure downstream of it.
+     */
+    const applyFlow = (row, direction, amountMinor) => {
         const magnitude = Math.abs(amountMinor);
         if (direction === 'to') {
             row.inPence += magnitude;
@@ -247,6 +254,28 @@ function buildPotFlows(transactionsInRange, pots, potIndex, categoryIndex) {
             row.netPence -= magnitude;
         }
         row.transactions += 1;
+    };
+
+    (transactionsInRange || []).forEach((tx) => {
+        const resolved = resolveTransactionCategory(tx, { categoryIndex, potIndex, transferAccountIndex });
+        const amountMinor = toAmountMinor(tx);
+
+        if (resolved.isPotTransfer && resolved.potTransfer) {
+            const { potId, potName, direction } = resolved.potTransfer;
+            applyFlow(ensure(potId, potName), direction, amountMinor);
+            return;
+        }
+
+        if (resolved.accountTransfer) {
+            const { accountId, accountName, accountKind, direction } = resolved.accountTransfer;
+            const row = makeRow(
+                accountRows,
+                String(accountId || accountName).toLowerCase(),
+                accountName,
+                { accountId: accountId || null, kind: accountKind || 'other' },
+            );
+            applyFlow(row, direction, amountMinor);
+        }
     });
 
     // Join the live balance. monzo_pots.balance is minor units already — do not scale it.
@@ -270,7 +299,11 @@ function buildPotFlows(transactionsInRange, pots, potIndex, categoryIndex) {
         .filter((row) => row.transactions > 0 || (row.balancePence || 0) > 0)
         .sort((a, b) => (b.balancePence || 0) - (a.balancePence || 0) || b.inPence - a.inPence);
 
-    const totals = list.reduce((acc, row) => {
+    const accountList = Array.from(accountRows.values())
+        .filter((row) => row.transactions > 0)
+        .sort((a, b) => b.netPence - a.netPence || b.inPence - a.inPence);
+
+    const sum = (items) => items.reduce((acc, row) => {
         acc.inPence += row.inPence;
         acc.outPence += row.outPence;
         acc.netPence += row.netPence;
@@ -278,18 +311,27 @@ function buildPotFlows(transactionsInRange, pots, potIndex, categoryIndex) {
         return acc;
     }, { inPence: 0, outPence: 0, netPence: 0, balancePence: 0 });
 
-    return { pots: list, totals };
+    return {
+        pots: list,
+        accounts: accountList,
+        totals: sum(list),
+        accountTotals: sum(accountList),
+        combinedTotals: sum([...list, ...accountList]),
+    };
 }
 
 /**
  * Combine transactions, goals, pots, and budget settings to build the full dashboard payload.
  */
-function buildDashboardData(transactions, goals, pots, budgetSettings, filter, categoryIndex = DEFAULT_CATEGORY_INDEX) {
+function buildDashboardData(transactions, goals, pots, budgetSettings, filter, categoryIndex = DEFAULT_CATEGORY_INDEX, ledgerAccounts = []) {
     const { startDate, endDate } = filter || {};
     // Pots are already loaded by the caller; indexing them here is what lets a transfer be
     // named "Holiday" instead of "pot_00009qOFyM5FPX8Gam20ZO".
     const potIndex = buildPotIndex(pots);
-    const aggregation = aggregateTransactions(transactions, startDate, endDate, categoryIndex, potIndex);
+    // Registered savings/investment accounts — see buildTransferAccountIndex. Empty for a
+    // user who has registered none, in which case nothing changes for them.
+    const transferAccountIndex = buildTransferAccountIndex(ledgerAccounts);
+    const aggregation = aggregateTransactions(transactions, startDate, endDate, categoryIndex, potIndex, transferAccountIndex);
     const start = startDate ? new Date(startDate) : null;
     const end = endDate ? new Date(endDate) : null;
     const endBoundary = end ? new Date(end.getTime() + 24 * 60 * 60 * 1000) : null;
@@ -304,7 +346,7 @@ function buildDashboardData(transactions, goals, pots, budgetSettings, filter, c
         const amountMinor = toAmountMinor(tx);
         if (amountMinor >= 0) return summary;
 
-        const resolved = resolveTransactionCategory(tx, { categoryIndex, potIndex });
+        const resolved = resolveTransactionCategory(tx, { categoryIndex, potIndex, transferAccountIndex });
         if (resolved.bucket === 'bank_transfer') return summary;
         if (['net_salary', 'irregular_income'].includes(resolved.bucket)) return summary;
 
@@ -373,7 +415,7 @@ function buildDashboardData(transactions, goals, pots, budgetSettings, filter, c
 
     return {
         ...aggregation,
-        potFlows: buildPotFlows(transactionsInRange, pots, potIndex, categoryIndex),
+        potFlows: buildPotFlows(transactionsInRange, pots, potIndex, categoryIndex, transferAccountIndex),
         classifiableTransactionCount: uncategorizedSummary.classifiableTransactionCount,
         uncategorizedCount: uncategorizedSummary.uncategorizedCount,
         uncategorizedPct,

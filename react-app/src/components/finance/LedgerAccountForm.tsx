@@ -21,6 +21,13 @@ export interface LedgerAccountDraft {
     includeInNetWorth: boolean;
     includeInFire: boolean;
     autoSeedFromMonzo: boolean;
+    /**
+     * Words that identify this account in a Monzo description ("fundment", "hlam ltd").
+     * Transfers matching one stop counting as spend and are tracked in/out against this
+     * account instead. Provider behaviour is data, not code — this is the field that makes
+     * a new bank or platform work without a release.
+     */
+    paymentMatchTerms: string[];
     notes: string | null;
 }
 
@@ -48,6 +55,7 @@ const emptyDraft = (): LedgerAccountDraft => ({
     includeInNetWorth: true,
     includeInFire: true,
     autoSeedFromMonzo: false,
+    paymentMatchTerms: [],
     notes: null,
 });
 
@@ -61,6 +69,7 @@ const LedgerAccountForm: React.FC<Props> = ({ show, account, saving = false, onC
     const [minPaymentText, setMinPaymentText] = useState('');
     const [contributionText, setContributionText] = useState('');
     const [employerText, setEmployerText] = useState('');
+    const [matchTermsText, setMatchTermsText] = useState('');
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
@@ -80,8 +89,10 @@ const LedgerAccountForm: React.FC<Props> = ({ show, account, saving = false, onC
                 includeInNetWorth: account.includeInNetWorth !== false,
                 includeInFire: account.includeInFire !== false,
                 autoSeedFromMonzo: account.autoSeedFromMonzo === true,
+                paymentMatchTerms: Array.isArray(account.paymentMatchTerms) ? account.paymentMatchTerms : [],
                 notes: account.notes ?? null,
             });
+            setMatchTermsText((account.paymentMatchTerms || []).join(', '));
             setAprText(account.apr === null || account.apr === undefined ? '' : String(account.apr));
             setCreditLimitText(penceToInput(account.creditLimitPence));
             setMinPaymentText(penceToInput(account.minPaymentPence));
@@ -89,6 +100,7 @@ const LedgerAccountForm: React.FC<Props> = ({ show, account, saving = false, onC
             setEmployerText(penceToInput(account.employerContributionPence));
         } else {
             setDraft(emptyDraft());
+            setMatchTermsText('');
             setAprText('');
             setCreditLimitText('');
             setMinPaymentText('');
@@ -123,6 +135,10 @@ const LedgerAccountForm: React.FC<Props> = ({ show, account, saving = false, onC
                 minPaymentPence: parsePenceInput(minPaymentText),
                 monthlyContributionPence: parsePenceInput(contributionText),
                 employerContributionPence: parsePenceInput(employerText),
+                paymentMatchTerms: matchTermsText
+                    .split(',')
+                    .map((term) => term.trim())
+                    .filter((term) => term.length >= 2),
             });
         } catch (err) {
             setError((err as Error)?.message || 'Could not save the account.');
@@ -242,6 +258,22 @@ const LedgerAccountForm: React.FC<Props> = ({ show, account, saving = false, onC
                                 </Col>
                             </>
                         )}
+
+                        <Col md={12}>
+                            <Form.Label>Matches in Monzo</Form.Label>
+                            <Form.Control
+                                type="text"
+                                value={matchTermsText}
+                                placeholder={isDebt ? 'e.g. barclaycard, barclays' : 'e.g. fundment, hlam ltd'}
+                                onChange={(e) => setMatchTermsText(e.target.value)}
+                            />
+                            <Form.Text className="text-muted">
+                                {isDebt
+                                    ? 'Words that identify this card’s repayment in Monzo. Used to separate interest from principal.'
+                                    : 'Words that identify transfers to this account in Monzo. Matching transfers stop counting as spend and are tracked in and out here instead.'}
+                                {' '}The account name and provider are always matched too — only add terms when Monzo names it differently.
+                            </Form.Text>
+                        </Col>
 
                         <Col md={12}>
                             <Form.Label>Notes</Form.Label>

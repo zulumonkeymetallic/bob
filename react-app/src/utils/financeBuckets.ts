@@ -16,6 +16,7 @@ export type { CategoryBucket } from './financeCategories';
 /** Where the resolved bucket came from. Surfaced in the UI so a wrong bucket is diagnosable. */
 export type BucketSource =
     | 'pot'
+    | 'account'
     | 'user_key'
     | 'user_type'
     | 'ai_bucket'
@@ -190,11 +191,78 @@ export interface ResolvedCategory {
     bucketPrecision: 'exact' | 'coarse';
     isPotTransfer: boolean;
     potTransfer: PotTransfer | null;
+    accountTransfer: AccountTransfer | null;
 }
 
 export interface ResolveOptions {
     categoryIndex?: CategoryIndex | null;
     potIndex?: Map<string, any> | null;
+    transferAccountIndex?: Map<string, any> | null;
+}
+
+/**
+ * Account kinds money can be MOVED to rather than spent at. Credit cards, loans and
+ * mortgages are deliberately absent — paying those down is debt servicing, not a transfer.
+ * Mirrors functions/finance/bucketResolver.js.
+ */
+export const TRANSFER_ACCOUNT_KINDS = [
+    'current',
+    'savings',
+    'isa',
+    'gia',
+    'pension_workplace',
+    'pension_personal',
+];
+
+export interface AccountTransfer {
+    accountId: string | null;
+    accountName: string;
+    accountKind: string;
+    direction: 'to' | 'from';
+}
+
+/** Index the user's own savings/investment accounts by the terms that name them in Monzo. */
+export function buildTransferAccountIndex(accounts: any[]): Map<string, any> {
+    const index = new Map<string, any>();
+    (accounts || []).forEach((account) => {
+        if (!account || account.deleted === true || account.archived === true) return;
+        if (!TRANSFER_ACCOUNT_KINDS.includes(String(account.kind || '').toLowerCase())) return;
+        const terms = [
+            ...(Array.isArray(account.paymentMatchTerms) ? account.paymentMatchTerms : []),
+            account.name,
+            account.provider,
+        ]
+            .map((value: unknown) => String(value || '').trim().toLowerCase())
+            .filter((value: string) => value.length >= 3);
+        terms.forEach((term: string) => {
+            if (!index.has(term)) index.set(term, account);
+        });
+    });
+    return index;
+}
+
+/** Longest matching term wins, so a specific account beats a generic provider name. */
+export function resolveAccountTransfer(tx: any, accountIndex?: Map<string, any> | null): AccountTransfer | null {
+    if (!accountIndex || accountIndex.size === 0) return null;
+    const haystack = [tx?.description, tx?.merchant?.name, tx?.counterparty?.name, tx?.merchantKey]
+        .map((value) => String(value || '').toLowerCase())
+        .join(' | ');
+    if (!haystack.trim()) return null;
+
+    let best: { term: string; account: any } | null = null;
+    accountIndex.forEach((account, term) => {
+        if (!haystack.includes(term)) return;
+        if (!best || term.length > best.term.length) best = { term, account };
+    });
+    if (!best) return null;
+    const match: { term: string; account: any } = best;
+
+    return {
+        accountId: match.account.accountId || match.account.id || null,
+        accountName: match.account.name || 'Your account',
+        accountKind: match.account.kind || 'other',
+        direction: amountOf(tx) < 0 ? 'to' : 'from',
+    };
 }
 
 function bucketFromKey(categoryIndex: CategoryIndex | null, key: unknown): CategoryBucket | null {
@@ -222,7 +290,7 @@ function firstNonEmpty(...values: unknown[]): string | null {
  * rewritten from merchant_mappings on every sync and is therefore a rule.
  */
 export function resolveTransactionCategory(tx: any, options: ResolveOptions = {}): ResolvedCategory {
-    const { categoryIndex = null, potIndex = null } = options;
+    const { categoryIndex = null, potIndex = null, transferAccountIndex = null } = options;
     const data = tx || {};
 
     const potTransfer = resolvePotTransfer(data, potIndex);
@@ -236,6 +304,24 @@ export function resolveTransactionCategory(tx: any, options: ResolveOptions = {}
             bucketPrecision: 'exact',
             isPotTransfer: true,
             potTransfer,
+            accountTransfer: null,
+        };
+    }
+
+    // Moving money to your own ISA/GIA/pension/savings is not spend, for the same reason a
+    // pot transfer is not: you still have it. Registered accounts only — never a guess.
+    const accountTransfer = resolveAccountTransfer(data, transferAccountIndex);
+    if (accountTransfer) {
+        return {
+            bucket: 'bank_transfer',
+            bucketV4: null,
+            categoryKey: 'account_transfer',
+            categoryLabel: `Transfer ${accountTransfer.direction} ${accountTransfer.accountName}`,
+            bucketSource: 'account',
+            bucketPrecision: 'exact',
+            isPotTransfer: false,
+            potTransfer: null,
+            accountTransfer,
         };
     }
 
@@ -276,5 +362,6 @@ export function resolveTransactionCategory(tx: any, options: ResolveOptions = {}
         bucketPrecision: hit?.coarse ? 'coarse' : 'exact',
         isPotTransfer: false,
         potTransfer: null,
+        accountTransfer: null,
     };
 }
