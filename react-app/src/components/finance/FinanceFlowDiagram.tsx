@@ -6,6 +6,7 @@ import { functions } from '../../firebase';
 import { Calendar, RefreshCw, Activity, TrendingUp, PieChart } from 'lucide-react';
 import { PremiumCard } from '../common/PremiumCard';
 import ReactECharts from 'echarts-for-react';
+import IncomeFlowSankey, { FinanceFlow } from './IncomeFlowSankey';
 import { normalizeMerchantKey } from './financeInsights';
 
 type FilterWindow = '7d' | '30d' | '60d' | '90d' | '6m' | 'year' | 'all' | 'custom';
@@ -19,6 +20,7 @@ const FinanceFlowDiagram: React.FC = () => {
   const { currentUser } = useAuth();
   const [data, setData] = useState<any>(null);
   const [analysisRows, setAnalysisRows] = useState<any[]>([]);
+  const [financeFlow, setFinanceFlow] = useState<FinanceFlow | null>(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterWindow>('30d');
   const [startDate, setStartDate] = useState<string>(() => {
@@ -81,6 +83,7 @@ const FinanceFlowDiagram: React.FC = () => {
       setData((dashboardRes.data as any).data);
       const enhancement = (enhancementRes.data as any) || {};
       setAnalysisRows(Array.isArray(enhancement.analysisRows) ? enhancement.analysisRows : []);
+      setFinanceFlow(enhancement.financeFlow || null);
       const keys = Array.isArray(enhancement.actions)
         ? enhancement.actions
             .map((action: any) => normalizeMerchantKey(action.merchantKey || action.merchantName || ''))
@@ -468,6 +471,19 @@ const FinanceFlowDiagram: React.FC = () => {
             <option value="with">With action</option>
             <option value="without">Without action</option>
           </Form.Select>
+        </Col>
+      </Row>
+
+      {/* Whole picture first: income in, everything it funds out — including money
+          moved into pots, which the spend-only diagram below excludes entirely. */}
+      <Row className="g-4 mb-1">
+        <Col lg={12}>
+          <PremiumCard title="Money Flow (Income → Take-home → Everything)" icon={Activity} className="position-relative">
+            <div className="small text-muted mb-2">
+              Every income source and where it goes, including transfers into savings pots.
+            </div>
+            <IncomeFlowSankey flow={financeFlow} height={520} />
+          </PremiumCard>
         </Col>
       </Row>
 

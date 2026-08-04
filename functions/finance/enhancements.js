@@ -1415,6 +1415,14 @@ const fetchFinanceEnhancementData = httpsV2.onCall({ region: FUNCTION_REGION, me
   const categoryIndex = buildCategoryIndex(categoriesMerged);
 
   const monthly = {};
+  // Income / outflow / pot accumulators for the flow Sankey (see the loop below).
+  const flowIncome = {};
+  const flowOutflow = {};
+  const flowPots = {};
+  const flowTotals = { incomePence: 0, outflowPence: 0, potTransferPence: 0 };
+  const potIndex = new Map(
+    potsSnap.docs.map((d) => [String((d.data() || {}).potId), (d.data() || {}).name || 'Pot'])
+  );
   const optionalMerchants = new Map();
   const categorySpendInRange = {};
   const analysisRows = [];
@@ -1492,6 +1500,39 @@ const fetchFinanceEnhancementData = httpsV2.onCall({ region: FUNCTION_REGION, me
 
     if (dateMs < rangeStartMs || dateMs > rangeEndMs) return;
     inRangeCount += 1;
+
+    // Full-flow model for the income Sankey.
+    //
+    // analysisRows below deliberately drops income (`bucket !== 'income'`) and the
+    // guard after this drops transfers, so neither is available to chart. Money
+    // moved into a pot is not spend, but it is absolutely part of "where did it all
+    // go" — leaving it out is why the old diagram could only show the spend half.
+    const flowAmount = Math.abs(amountMinor);
+    if (flowAmount > 0) {
+      if (destinationPotId || sourcePotId) {
+        const potId = destinationPotId || sourcePotId;
+        const potName = potIndex.get(String(potId)) || 'Savings pot';
+        // Only money moving INTO a pot is a destination; withdrawals are a return
+        // of funds and would double-count against income.
+        if (destinationPotId && amountMinor < 0) {
+          flowPots[potName] = (flowPots[potName] || 0) + flowAmount;
+          flowTotals.potTransferPence += flowAmount;
+        }
+      } else if (amountMinor > 0) {
+        const key = resolved.categoryKey || 'other_income';
+        if (!flowIncome[key]) flowIncome[key] = { key, label: categoryLabel || key, pence: 0 };
+        flowIncome[key].pence += flowAmount;
+        flowTotals.incomePence += flowAmount;
+      } else if (bucket !== 'unknown') {
+        const k = `${bucket}||${categoryKey}`;
+        if (!flowOutflow[k]) {
+          flowOutflow[k] = { bucket, categoryKey, categoryLabel: categoryLabel || categoryKey, pence: 0 };
+        }
+        flowOutflow[k].pence += flowAmount;
+        flowTotals.outflowPence += flowAmount;
+      }
+    }
+
     if (bucket === 'bank_transfer' || bucket === 'unknown') return;
 
     const entry = ensureMonth(month);
@@ -1801,6 +1842,22 @@ const fetchFinanceEnhancementData = httpsV2.onCall({ region: FUNCTION_REGION, me
     range: {
       startDateISO: new Date(rangeStartMs).toISOString(),
       endDateISO: new Date(rangeEndMs).toISOString(),
+    },
+    // Whole-picture flow: income sources in, everything they fund out, including
+    // money moved into pots. Aggregated server-side rather than shipping every
+    // row, since the client only ever draws totals.
+    financeFlow: {
+      income: Object.values(flowIncome).sort((a, b) => b.pence - a.pence),
+      outflow: Object.values(flowOutflow).sort((a, b) => b.pence - a.pence),
+      pots: Object.entries(flowPots)
+        .map(([name, pence]) => ({ name, pence }))
+        .sort((a, b) => b.pence - a.pence),
+      totals: {
+        ...flowTotals,
+        // What is left after outflows and pot transfers — negative means the
+        // period was funded from savings or an earlier balance.
+        unallocatedPence: flowTotals.incomePence - flowTotals.outflowPence - flowTotals.potTransferPence,
+      },
     },
     coverage: {
       monzoCoverageStartISO: coverageStartMs ? new Date(coverageStartMs).toISOString() : null,
