@@ -6,6 +6,48 @@
 
 ---
 
+## 0. Implementation status — 2026-08-04
+
+| Req | State | Where |
+|---|---|---|
+| R1 — one workouts collection | **Done** | `bob` fb89b3cb, `bob-ios` 64f9018 |
+| R2 — canonical taxonomy | **Done** | `bob` fda00aea, `bob-ios` 64f9018 |
+| R3 — HealthKit zones | **Done** | `bob-ios` 64f9018 |
+| R4.1/4.2 — max HR entry, re-enrichment | **Done** | `bob` fb89b3cb |
+| R4.3 — history backfill | **Blocked on deploy** | needs `enrichStravaHR` live |
+| R5 — readiness | **Done** | `bob` fb89b3cb |
+| R6 — server-side KPI resolution | **Not started** | the resolver port itself |
+| R6.5 — populate `metric_values` | **Done** | `bob` 901ecd1b |
+| R7 — Strava sync verification | **Diagnosed, not fixed** | see below |
+
+Branches: `bob` → `docs/fitness-coach-requirements-2026-08`,
+`bob-ios` → `fix/fitness-data-spine`. Neither merged; nothing deployed.
+
+### Two findings from the live data, 2026-08-04
+
+**The fallback max HR was 190, not `220 - age`.** Every enriched workout records
+`maxHrUsed: 190`, so the stored zone boundaries are Z1 95–114, Z2 114–133,
+Z3 133–152, Z4 152–171, Z5 171+. Against the true max of 186 they should be
+Z2 112–130, Z3 130–149, Z4 149–167, Z5 167+ — **lower**, so time currently
+counted as Z3 partly belongs in Z4, and Z4 partly in Z5. That pushes the Z4/Z5
+share up.
+
+Pulling the other way, the Zone 5 floor bug (§ R3 commit) credited *everything*
+below 95bpm to Zone 5. Removing that takes a chunk out. The net direction cannot
+be known without re-running the enrichment, which is the point of R4.3.
+
+**Strava is authorised and current; the training gap is real.** The access token
+expired on 2026-08-03 (normal — `getStravaAccessToken` refreshes on demand), the
+token document is intact, and the newest activity Strava holds is the 1.37km run
+of 27 June. So the five-week gap is not a broken pipe on the Strava side. What
+*was* broken is HealthKit: any Watch session in that window was written to a
+collection that rejects writes, and discarded.
+
+Also visible in the live data: a 1.74km **Walk** on 21 June, which under the old
+taxonomy was counted as running distance. The bug in §2.4 is not hypothetical.
+
+---
+
 ## 1. Why this exists
 
 Every downstream feature Jim asked for — zone charts, KPI progress, a coach that
