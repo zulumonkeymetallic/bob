@@ -36,7 +36,7 @@ import './FinanceDashboardAdvanced.css';
 
 type DateFilter = '7d' | '30d' | '60d' | '90d' | '6m' | 'year' | 'all' | 'custom';
 type ViewMode = 'category' | 'bucket' | 'merchant';
-type FinanceView = 'overview' | 'analyst' | 'spend' | 'discretionary' | 'actions' | 'sources' | 'assets';
+type FinanceView = 'overview' | 'analyst' | 'spend' | 'actions' | 'sources' | 'assets';
 // Providers with built-in presets, plus any slug a user registers on /finance/ledger.
 type ExternalSource = 'barclays' | 'halifax' | 'paypal' | 'other' | 'monzo_csv' | (string & {});
 type AnalysisDimension = 'bucket' | 'category' | 'merchant';
@@ -152,7 +152,10 @@ const parseFinanceView = (tab: string | null): FinanceView | null => {
     if (tab === 'overview') return 'overview';
     if (tab === 'analyst' || tab === 'budget-analyst') return 'analyst';
     if (tab === 'spend') return 'spend';
-    if (tab === 'discretionary') return 'discretionary';
+    // Retired: the card grid duplicated the merchant toggles, and its one unique piece —
+    // recurring vs ad-hoc per merchant — is now the evidence under each action. Old links
+    // land on the overview with the discretionary filter applied (see the effect below).
+    if (tab === 'discretionary') return 'overview';
     if (tab === 'actions') return 'actions';
     if (tab === 'sources') return 'sources';
     if (tab === 'assets') return 'assets';
@@ -397,6 +400,19 @@ const FinanceDashboardAdvanced: React.FC = () => {
             setChartFilter({ type: null, value: null });
         }
     }, [chartFilter.type, viewMode]);
+
+    /**
+     * ?tab=discretionary is retired. Rather than dropping such links on a generic overview,
+     * land them on the thing the tab was for — the discretionary transactions — and rewrite
+     * the URL so the redirect happens once rather than fighting the user's next click.
+     */
+    useEffect(() => {
+        if (searchParams.get('tab') !== 'discretionary') return;
+        setCardFilter('discretionary');
+        const nextParams = new URLSearchParams(searchParams);
+        nextParams.delete('tab');
+        setSearchParams(nextParams, { replace: true });
+    }, [searchParams, setSearchParams]);
 
     const handleViewChange = useCallback((nextView: FinanceView) => {
         setActiveView(nextView);
@@ -1227,6 +1243,17 @@ const FinanceDashboardAdvanced: React.FC = () => {
         __merchantName: toText(action.merchantName || action.merchantKey, 'Unknown merchant'),
         __merchantKey: toKeyText(action.merchantKey || action.merchantName, 'unknown'),
     }));
+    /**
+     * Recurrence evidence keyed by merchant. The Actions table asserted "cancel this"
+     * while the numbers behind it sat on a different tab; joining them here is why that
+     * tab could go.
+     */
+    const optionalSpendByMerchant = useMemo(() => {
+        const map = new Map<string, any>();
+        optionalSpendCards.forEach((card: any) => map.set(card.__merchantKey, card));
+        return map;
+    }, [optionalSpendCards]);
+
     const externalSummary = enhancementData?.externalSummary ?? EMPTY_LIST;
     const matchSummary = enhancementData?.matchSummary ?? EMPTY_LIST;
     const debtService = enhancementData?.debtService?.totals || null;
@@ -2657,43 +2684,6 @@ const FinanceDashboardAdvanced: React.FC = () => {
         );
     };
 
-    const renderOptionalSpend = () => (
-        <>
-            <Row className="g-4 mb-4">
-                {optionalSpendCards.length === 0 && (
-                    <Col>
-                        <Alert variant="secondary" className="mb-0">No optional spend cards available for this range.</Alert>
-                    </Col>
-                )}
-                {optionalSpendCards.map((item: any) => (
-                    <Col key={item.__merchantKey} xl={3} lg={4} md={6}>
-                        <PremiumCard title={item.__merchantName} icon={Layers} className="finance-optional-card">
-                            <div className="d-flex justify-content-between small text-muted mb-2">
-                                <span>Monthly avg</span>
-                                <strong>{formatCurrency(toPounds(item.avgMonthlySpendPence || 0))}</strong>
-                            </div>
-                            <div className="d-flex justify-content-between small text-muted mb-2">
-                                <span>Total spend</span>
-                                <strong>{formatCurrency(toPounds(item.totalSpendPence || 0))}</strong>
-                            </div>
-                            <div className="d-flex justify-content-between small text-muted mb-3">
-                                <span>Transactions</span>
-                                <strong>{item.transactions || 0}</strong>
-                            </div>
-                            <div>
-                                {item.recurring ? (
-                                    <Badge bg="warning" text="dark">Recurring ({item.activeMonths} months)</Badge>
-                                ) : (
-                                    <Badge bg="secondary">Ad-hoc spend</Badge>
-                                )}
-                            </div>
-                        </PremiumCard>
-                    </Col>
-                ))}
-            </Row>
-        </>
-    );
-
     const renderActions = () => (
         <>
             <Row className="g-4 mb-4">
@@ -2753,6 +2743,24 @@ const FinanceDashboardAdvanced: React.FC = () => {
                                             <td>
                                                 <div className="fw-semibold">{action.__title}</div>
                                                 <div className="small text-muted">{action.__reason}</div>
+                                                {/* The recurrence numbers that used to live on their own tab.
+                                                    A cancellation suggestion is only credible next to them. */}
+                                                {(() => {
+                                                    const evidence = optionalSpendByMerchant.get(action.__merchantKey);
+                                                    if (!evidence) return null;
+                                                    return (
+                                                        <div className="small text-muted mt-1 d-flex flex-wrap gap-2 align-items-center">
+                                                            {evidence.recurring ? (
+                                                                <Badge bg="warning" text="dark">Recurring · {evidence.activeMonths} months</Badge>
+                                                            ) : (
+                                                                <Badge bg="secondary">Ad-hoc</Badge>
+                                                            )}
+                                                            <span>{formatCurrency(toPounds(evidence.avgMonthlySpendPence || 0))}/month</span>
+                                                            <span>·</span>
+                                                            <span>{formatCurrency(toPounds(evidence.totalSpendPence || 0))} over {evidence.transactions || 0} txns</span>
+                                                        </div>
+                                                    );
+                                                })()}
                                             </td>
                                             <td>
                                                 <Badge bg="light" text="dark" className="border text-uppercase">{action.type || 'review'}</Badge>
@@ -3405,7 +3413,6 @@ const FinanceDashboardAdvanced: React.FC = () => {
         { key: 'overview', label: 'Overview' },
         { key: 'analyst', label: 'AI Budget Analyst' },
         { key: 'spend', label: 'Spend analysis + Forecast' },
-        { key: 'discretionary', label: 'Discretionary spend' },
         { key: 'actions', label: 'Actions' },
         { key: 'sources', label: 'Data sources' },
         { key: 'assets', label: 'Assets & Debts' },
@@ -3520,7 +3527,6 @@ const FinanceDashboardAdvanced: React.FC = () => {
             {activeView === 'overview' && renderOverview()}
             {activeView === 'analyst' && renderBudgetAnalyst()}
             {activeView === 'spend' && renderSpendAnalysis()}
-            {activeView === 'discretionary' && renderOptionalSpend()}
             {activeView === 'actions' && renderActions()}
             {activeView === 'sources' && renderDataSources()}
             {activeView === 'assets' && renderAssets()}
