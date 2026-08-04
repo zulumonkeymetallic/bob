@@ -5146,7 +5146,15 @@ exports.stravaOAuthCallback = httpsV2.onRequest({ secrets: [STRAVA_CLIENT_ID, ST
 });
 
 // ===== Monzo OAuth Start
-exports.monzoOAuthStart = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID], invoker: 'public' }, async (req, res) => {
+// memory: index.js is ~22k lines and every function in it loads the whole module
+// tree at cold start, which alone reaches the 256MiB default. monzoOAuthCallback
+// was confirmed dying with 'Memory limit of 256 MiB exceeded with 256 MiB used'
+// mid-OAuth, so the exchange never happened and the browser got a bare 500.
+exports.monzoOAuthStart = httpsV2.onRequest({
+  secrets: [MONZO_CLIENT_ID],
+  invoker: 'public',
+  memory: '512MiB',
+}, async (req, res) => {
   try {
     const sessionId = String(req.query.session || "").trim();
     if (!sessionId) return res.status(400).send("Missing session");
@@ -5184,7 +5192,13 @@ exports.monzoOAuthStart = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID], invoke
 });
 
 // ===== Monzo OAuth Callback
-exports.monzoOAuthCallback = httpsV2.onRequest({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET], invoker: 'public' }, async (req, res) => {
+exports.monzoOAuthCallback = httpsV2.onRequest({
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET],
+  invoker: 'public',
+  // See monzoOAuthStart. A failure here costs the user a whole re-authorisation,
+  // because Monzo authorisation codes are single-use.
+  memory: '512MiB',
+}, async (req, res) => {
   try {
     const code = String(req.query.code || "");
     const state = stateDecode(req.query.state);
