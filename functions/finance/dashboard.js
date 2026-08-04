@@ -11,7 +11,7 @@
 //   - createdAt (timestamp) – Firestore timestamp or Date
 //   - needsClassification (boolean) – ignored here (already classified)
 
-const { resolveTransactionCategory, buildCategoryIndex } = require('./bucketResolver');
+const { resolveTransactionCategory, buildCategoryIndex, buildPotIndex } = require('./bucketResolver');
 const { DEFAULT_FINANCE_CATEGORIES } = require('./categories');
 
 // Callers that have the user's own catalogue should pass an index built from it;
@@ -85,7 +85,7 @@ function toAmountMinor(tx) {
  * Aggregate an array of transactions into the structures required by the dashboard.
  * Supports optional date filtering (startDate, endDate).
  */
-function aggregateTransactions(transactions, startDate, endDate, categoryIndex = DEFAULT_CATEGORY_INDEX) {
+function aggregateTransactions(transactions, startDate, endDate, categoryIndex = DEFAULT_CATEGORY_INDEX, potIndex = null) {
   const result = {
     totalSpend: 0,
     spendByBucket: {},
@@ -118,7 +118,7 @@ function aggregateTransactions(transactions, startDate, endDate, categoryIndex =
         // a hand-written precedence chain plus a partial fold that only handled
         // `optional`, so net_salary and income reported as two separate buckets and
         // debt_repayment never rolled into mandatory.
-        const resolved = resolveTransactionCategory(tx, { categoryIndex });
+        const resolved = resolveTransactionCategory(tx, { categoryIndex, potIndex });
         const bucketNormalized = resolved.bucket;
 
         // Exclude bank transfers from all aggregates. Unclassified spend stays IN:
@@ -200,11 +200,96 @@ function aggregateTransactions(transactions, startDate, endDate, categoryIndex =
 }
 
 /**
+ * Per-pot flows for the selected range, joined to the pot's current balance.
+ *
+ * Pot movements are excluded from spend (they are transfers, not consumption) but they are
+ * not nothing: they are the savings rate. Excluding them from spend without surfacing them
+ * anywhere would just hide the money. Each row carries what went IN, what came back OUT,
+ * the net for the range, and the balance sitting there now.
+ *
+ * All figures are integer pence and `inPence`/`outPence` are magnitudes; `netPence` is
+ * signed, positive meaning the pot grew over the range.
+ */
+function buildPotFlows(transactionsInRange, pots, potIndex, categoryIndex) {
+    const rows = new Map();
+    const keyFor = (potId, potName) => String(potId || potName || 'unknown').toLowerCase();
+
+    const ensure = (potId, potName) => {
+        const key = keyFor(potId, potName);
+        if (!rows.has(key)) {
+            rows.set(key, {
+                key,
+                potId: potId || null,
+                name: potName || 'Savings pot',
+                inPence: 0,
+                outPence: 0,
+                netPence: 0,
+                transactions: 0,
+                balancePence: null,
+                deleted: false,
+            });
+        }
+        return rows.get(key);
+    };
+
+    (transactionsInRange || []).forEach((tx) => {
+        const resolved = resolveTransactionCategory(tx, { categoryIndex, potIndex });
+        if (!resolved.isPotTransfer || !resolved.potTransfer) return;
+        const { potId, potName, direction } = resolved.potTransfer;
+        const row = ensure(potId, potName);
+        const amountMinor = toAmountMinor(tx);
+        const magnitude = Math.abs(amountMinor);
+        if (direction === 'to') {
+            row.inPence += magnitude;
+            row.netPence += magnitude;
+        } else {
+            row.outPence += magnitude;
+            row.netPence -= magnitude;
+        }
+        row.transactions += 1;
+    });
+
+    // Join the live balance. monzo_pots.balance is minor units already — do not scale it.
+    (pots || []).forEach((pot) => {
+        if (!pot) return;
+        const row = rows.get(keyFor(pot.potId || pot.id, pot.name || pot.title));
+        const balance = Number(pot.balance);
+        if (row) {
+            row.balancePence = Number.isFinite(balance) ? Math.round(balance) : null;
+            row.deleted = pot.deleted === true;
+            if (pot.name || pot.title) row.name = pot.name || pot.title;
+        } else if (Number.isFinite(balance) && balance > 0 && pot.deleted !== true) {
+            // A pot with a balance but no movement in this range still belongs on the list —
+            // otherwise a pot you stopped paying into silently disappears.
+            const created = ensure(pot.potId || pot.id, pot.name || pot.title);
+            created.balancePence = Math.round(balance);
+        }
+    });
+
+    const list = Array.from(rows.values())
+        .filter((row) => row.transactions > 0 || (row.balancePence || 0) > 0)
+        .sort((a, b) => (b.balancePence || 0) - (a.balancePence || 0) || b.inPence - a.inPence);
+
+    const totals = list.reduce((acc, row) => {
+        acc.inPence += row.inPence;
+        acc.outPence += row.outPence;
+        acc.netPence += row.netPence;
+        acc.balancePence += row.balancePence || 0;
+        return acc;
+    }, { inPence: 0, outPence: 0, netPence: 0, balancePence: 0 });
+
+    return { pots: list, totals };
+}
+
+/**
  * Combine transactions, goals, pots, and budget settings to build the full dashboard payload.
  */
 function buildDashboardData(transactions, goals, pots, budgetSettings, filter, categoryIndex = DEFAULT_CATEGORY_INDEX) {
     const { startDate, endDate } = filter || {};
-    const aggregation = aggregateTransactions(transactions, startDate, endDate, categoryIndex);
+    // Pots are already loaded by the caller; indexing them here is what lets a transfer be
+    // named "Holiday" instead of "pot_00009qOFyM5FPX8Gam20ZO".
+    const potIndex = buildPotIndex(pots);
+    const aggregation = aggregateTransactions(transactions, startDate, endDate, categoryIndex, potIndex);
     const start = startDate ? new Date(startDate) : null;
     const end = endDate ? new Date(endDate) : null;
     const endBoundary = end ? new Date(end.getTime() + 24 * 60 * 60 * 1000) : null;
@@ -219,7 +304,7 @@ function buildDashboardData(transactions, goals, pots, budgetSettings, filter, c
         const amountMinor = toAmountMinor(tx);
         if (amountMinor >= 0) return summary;
 
-        const resolved = resolveTransactionCategory(tx, { categoryIndex });
+        const resolved = resolveTransactionCategory(tx, { categoryIndex, potIndex });
         if (resolved.bucket === 'bank_transfer') return summary;
         if (['net_salary', 'irregular_income'].includes(resolved.bucket)) return summary;
 
@@ -288,6 +373,7 @@ function buildDashboardData(transactions, goals, pots, budgetSettings, filter, c
 
     return {
         ...aggregation,
+        potFlows: buildPotFlows(transactionsInRange, pots, potIndex, categoryIndex),
         classifiableTransactionCount: uncategorizedSummary.classifiableTransactionCount,
         uncategorizedCount: uncategorizedSummary.uncategorizedCount,
         uncategorizedPct,
@@ -364,4 +450,4 @@ function buildDashboardData(transactions, goals, pots, budgetSettings, filter, c
     };
 }
 
-module.exports = { aggregateTransactions, buildDashboardData, CATEGORY_THEME_MAP };
+module.exports = { aggregateTransactions, buildDashboardData, buildPotFlows, CATEGORY_THEME_MAP };

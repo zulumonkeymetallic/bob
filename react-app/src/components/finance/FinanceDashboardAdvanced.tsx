@@ -1650,6 +1650,15 @@ const FinanceDashboardAdvanced: React.FC = () => {
      * spend that cannot exceed 100% by construction. Recompute locally whenever the
      * denominator is local, so numerator and denominator always describe the same rows.
      */
+    /** Per-pot flows joined to live balances — see functions/finance/dashboard.js. */
+    const potFlows = useMemo(() => {
+        const raw = (data as any)?.potFlows;
+        return {
+            pots: Array.isArray(raw?.pots) ? raw.pots : [],
+            totals: raw?.totals || { inPence: 0, outPence: 0, netPence: 0, balancePence: 0 },
+        };
+    }, [data]);
+
     const serverDiscretionarySpend = Math.abs(Number(data?.totalDiscretionarySpend) || 0) / 100;
     const localDiscretionarySpend = useMemo(
         () => spendTransactions.reduce((sum: number, tx: any) => (
@@ -3148,6 +3157,68 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
     const renderAssets = () => (
         <>
+            {/* Pot transfers are excluded from spend because they are transfers, not
+                consumption — but excluding them without showing them would just hide the
+                money. This is where it went. */}
+            {potFlows.pots.length > 0 && (
+                <PremiumCard title="Monzo pots" icon={Layers} className="mb-4">
+                    <div className="d-flex flex-wrap gap-4 mb-3">
+                        <div>
+                            <div className="small text-muted">Held in pots now</div>
+                            <div className="fs-4 fw-bold">{formatCurrency(toPounds(potFlows.totals.balancePence))}</div>
+                        </div>
+                        <div>
+                            <div className="small text-muted">Paid in ({rangeLabel.toLowerCase()})</div>
+                            <div className="fs-5 fw-semibold" style={{ color: colors.success }}>
+                                {formatCurrency(toPounds(potFlows.totals.inPence))}
+                            </div>
+                        </div>
+                        <div>
+                            <div className="small text-muted">Taken back out</div>
+                            <div className="fs-5 fw-semibold" style={{ color: colors.danger }}>
+                                {formatCurrency(toPounds(potFlows.totals.outPence))}
+                            </div>
+                        </div>
+                        <div>
+                            <div className="small text-muted">Net saved</div>
+                            <div
+                                className="fs-5 fw-semibold"
+                                style={{ color: potFlows.totals.netPence >= 0 ? colors.success : colors.danger }}
+                            >
+                                {potFlows.totals.netPence < 0 ? '−' : ''}
+                                {formatCurrency(Math.abs(toPounds(potFlows.totals.netPence)))}
+                            </div>
+                        </div>
+                    </div>
+                    <div className="table-responsive">
+                        <table className="table table-sm align-middle mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Pot</th>
+                                    <th className="text-end">Balance</th>
+                                    <th className="text-end">In</th>
+                                    <th className="text-end">Out</th>
+                                    <th className="text-end">Net</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {potFlows.pots.map((pot: any) => (
+                                    <tr key={pot.key}>
+                                        <td>{pot.name}</td>
+                                        <td className="text-end fw-semibold">{formatCurrency(toPounds(pot.balancePence || 0))}</td>
+                                        <td className="text-end text-muted">{pot.inPence ? formatCurrency(toPounds(pot.inPence)) : '—'}</td>
+                                        <td className="text-end text-muted">{pot.outPence ? formatCurrency(toPounds(pot.outPence)) : '—'}</td>
+                                        <td className="text-end" style={{ color: pot.netPence >= 0 ? colors.success : colors.danger }}>
+                                            {pot.netPence === 0 ? '—' : `${pot.netPence < 0 ? '−' : ''}${formatCurrency(Math.abs(toPounds(pot.netPence)))}`}
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </PremiumCard>
+            )}
+
             {/* Superseded by /finance/ledger, which adds the month axis, APR, and
                 contributed-vs-value. Kept read-only for one phase so the pre-migration
                 figures stay visible and finance_manual_accounts remains the rollback

@@ -100,19 +100,82 @@ function lookupCategory(categoryIndex, key) {
   return categoryIndex.get(String(key).trim().toLowerCase()) || null;
 }
 
+/** Strip the trailing "Pot" that Monzo's CSV export appends to the pot's own name. */
+function normalisePotName(value) {
+  return String(value || '')
+    .trim()
+    .replace(/\s+pot$/i, '')
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
+/**
+ * Build the lookup `resolvePotTransfer` needs: pots keyed by id AND by normalised name,
+ * because CSV-imported transfers carry no pot id and can only be matched on the name.
+ *
+ * Live pots win over deleted ones — the register holds several same-named pots ("Holiday"
+ * exists four times, three of them closed), and naming a transfer after a dead pot loses
+ * the link to the balance that is actually still there.
+ */
+function buildPotIndex(pots) {
+  const index = new Map();
+  const put = (key, pot) => {
+    if (!key) return;
+    const existing = index.get(key);
+    if (existing && existing.deleted !== true && pot.deleted === true) return;
+    index.set(key, pot);
+  };
+  (pots || []).forEach((raw) => {
+    const pot = raw && typeof raw.data === 'function' ? raw.data() : raw;
+    if (!pot) return;
+    put(String(pot.potId || pot.id || '').toLowerCase(), pot);
+    put(normalisePotName(pot.name || pot.title), pot);
+  });
+  return index;
+}
+
 /**
  * Detect a Monzo pot transfer. Pot movements are not spend and must never land
  * in a spend bucket — every caller excludes bank_transfer from its aggregates.
- * potIndex is an optional Map of lowercased potId -> pot doc, used only to name
- * the transfer.
+ *
+ * Two populations exist and only one was handled. Transactions from the Monzo API carry
+ * `metadata.pot_id`; transactions from a CSV backfill carry no id at all, only
+ * `metadata.csvType === 'Pot transfer'` and a description like "Holiday Pot". On this
+ * account that was 562 of 3,477 — so 2,915 pot transfers were classified as SPEND,
+ * inflating it by £41,008 and making up the bulk of the "uncategorised" count.
+ *
+ * potIndex (see buildPotIndex) resolves the display name from either an id or a name.
  */
 function resolvePotTransfer(tx, potIndex) {
   const metadata = (tx && tx.metadata) || {};
-  const potId = metadata.pot_id || metadata.destination_pot_id || metadata.source_pot_id || null;
-  if (!potId) return null;
-  const pot = potIndex ? potIndex.get(String(potId).toLowerCase()) : null;
-  const potName = (pot && (pot.name || pot.title)) || potId;
+  const explicitPotId = metadata.pot_id || metadata.destination_pot_id || metadata.source_pot_id || null;
+
+  const describedName = (tx && (tx.description || (tx.merchant && tx.merchant.name))) || '';
+  // `uk_retail_pot` is Monzo's own scheme for a pot movement; csvType is the export's
+  // label for the same event. Either is a positive identification, not a guess.
+  const looksLikePotTransfer = String(metadata.csvType || '').toLowerCase() === 'pot transfer'
+    || String(tx && tx.scheme || '').toLowerCase() === 'uk_retail_pot'
+    || /\bpot$/i.test(String(describedName).trim());
+
+  if (!explicitPotId && !looksLikePotTransfer) return null;
+
+  const pot = potIndex
+    ? (explicitPotId ? potIndex.get(String(explicitPotId).toLowerCase()) : null)
+      || potIndex.get(normalisePotName(describedName))
+      || null
+    : null;
+
+  // Prefer the pot's real name; fall back to the description, and only then to the raw id —
+  // an id like "pot_00009qOFyM5FPX8Gam20ZO" is not a label anyone can read.
+  const potName = (pot && (pot.name || pot.title))
+    || (describedName ? String(describedName).trim().replace(/\s+pot$/i, '') : '')
+    || explicitPotId
+    || 'Savings pot';
+
+  const potId = (pot && (pot.potId || pot.id)) || explicitPotId || null;
+
   const amount = amountOf(tx);
+  // Money leaving the current account goes INTO the pot; money arriving comes back OUT.
   const isToPot = !!metadata.destination_pot_id || (!metadata.source_pot_id && amount < 0);
   return { potId, potName, direction: isToPot ? 'to' : 'from' };
 }
@@ -254,6 +317,8 @@ module.exports = {
   narrowToV4,
   isCoarseWidening,
   buildCategoryIndex,
+  buildPotIndex,
+  normalisePotName,
   resolvePotTransfer,
   resolveTransactionCategory,
   amountOf,

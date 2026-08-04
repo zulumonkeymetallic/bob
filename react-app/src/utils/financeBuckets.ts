@@ -117,12 +117,66 @@ export function amountOf(tx: any): number {
     return Number.isFinite(raw) ? raw / 100 : 0;
 }
 
+/** Strip the trailing "Pot" that Monzo's CSV export appends to the pot's own name. */
+export function normalisePotName(value: unknown): string {
+    return String(value || '')
+        .trim()
+        .replace(/\s+pot$/i, '')
+        .replace(/\s+/g, ' ')
+        .toLowerCase();
+}
+
+/**
+ * Build the lookup `resolvePotTransfer` needs: pots keyed by id AND by normalised name,
+ * because CSV-imported transfers carry no pot id and can only be matched on the name.
+ * Live pots win over deleted ones — several same-named pots exist, most of them closed.
+ */
+export function buildPotIndex(pots: any[]): Map<string, any> {
+    const index = new Map<string, any>();
+    const put = (key: string, pot: any) => {
+        if (!key) return;
+        const existing = index.get(key);
+        if (existing && existing.deleted !== true && pot.deleted === true) return;
+        index.set(key, pot);
+    };
+    (pots || []).forEach((pot) => {
+        if (!pot) return;
+        put(String(pot.potId || pot.id || '').toLowerCase(), pot);
+        put(normalisePotName(pot.name || pot.title), pot);
+    });
+    return index;
+}
+
+/**
+ * Mirrors functions/finance/bucketResolver.js:resolvePotTransfer — see the rationale there.
+ * Transfers from the Monzo API carry `metadata.pot_id`; CSV-backfilled ones carry only
+ * `metadata.csvType === 'Pot transfer'` and a description like "Holiday Pot", and were
+ * therefore counted as spend.
+ */
 export function resolvePotTransfer(tx: any, potIndex?: Map<string, any> | null): PotTransfer | null {
     const metadata = tx?.metadata || {};
-    const potId = metadata.pot_id || metadata.destination_pot_id || metadata.source_pot_id || null;
-    if (!potId) return null;
-    const pot = potIndex ? potIndex.get(String(potId).toLowerCase()) : null;
-    const potName = pot?.name || pot?.title || potId;
+    const explicitPotId = metadata.pot_id || metadata.destination_pot_id || metadata.source_pot_id || null;
+
+    const describedName = tx?.description || tx?.merchant?.name || '';
+    const looksLikePotTransfer = String(metadata.csvType || '').toLowerCase() === 'pot transfer'
+        || String(tx?.scheme || '').toLowerCase() === 'uk_retail_pot'
+        || /\bpot$/i.test(String(describedName).trim());
+
+    if (!explicitPotId && !looksLikePotTransfer) return null;
+
+    const pot = potIndex
+        ? (explicitPotId ? potIndex.get(String(explicitPotId).toLowerCase()) : null)
+            || potIndex.get(normalisePotName(describedName))
+            || null
+        : null;
+
+    const potName = pot?.name
+        || pot?.title
+        || (describedName ? String(describedName).trim().replace(/\s+pot$/i, '') : '')
+        || explicitPotId
+        || 'Savings pot';
+    const potId = pot?.potId || pot?.id || explicitPotId || null;
+
     const isToPot = !!metadata.destination_pot_id || (!metadata.source_pot_id && amountOf(tx) < 0);
     return { potId, potName, direction: isToPot ? 'to' : 'from' };
 }
