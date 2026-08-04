@@ -1599,6 +1599,22 @@ const FinanceDashboardAdvanced: React.FC = () => {
      * so when the cap bites.
      */
     const discretionarySpendForCap = Math.abs(Number(data?.totalDiscretionarySpend) || 0) / 100;
+    /** Discretionary as a share of spend — the headline question, not a raw £ figure. */
+    const discretionaryShare = filteredTotalSpend > 0
+        ? Math.round((discretionarySpendForCap / filteredTotalSpend) * 100)
+        : null;
+
+    const rangeLabel = ({
+        '7d': 'Last 7 days',
+        '30d': 'Last 30 days',
+        '60d': 'Last 60 days',
+        '90d': 'Last 90 days',
+        '6m': 'Last 6 months',
+        year: 'This year',
+        all: 'All history',
+        custom: 'Custom range',
+    } as Record<string, string>)[filter] || 'Selected range';
+
     const cappedActionSavings = discretionarySpendForCap > 0
         ? Math.min(totalActionSavings, discretionarySpendForCap)
         : totalActionSavings;
@@ -1609,6 +1625,50 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const classifiableCount = Math.max(0, Number(data?.classifiableTransactionCount || 0));
     const uncategorizedCount = Math.max(0, Number(data?.uncategorizedCount || 0));
     const uncategorizedPct = classifiableCount > 0 ? Number(data?.uncategorizedPct || 0) : 0;
+
+    /**
+     * Secondary metrics. Each one is a filter into the transaction table rather
+     * than a headline, so they render as a compact strip. Uncategorised has its
+     * own banner above when it is high enough to distort everything else.
+     */
+    const overviewDrilldowns = [
+        {
+            key: 'subscriptions',
+            label: 'Subscriptions',
+            value: formatCurrency(Math.abs(Number(data?.totalSubscriptionSpend) || 0) / 100),
+            sub: 'recurring costs',
+            filter: 'subscriptions',
+            hint: 'Show only subscription transactions',
+            tone: undefined as string | undefined,
+        },
+        {
+            key: 'actions',
+            label: 'Savings found',
+            value: formatCurrency(cappedActionSavings),
+            sub: `${actions.length} suggestion${actions.length === 1 ? '' : 's'}`,
+            view: 'actions',
+            hint: 'Open the actions list',
+            tone: colors.success,
+        },
+        {
+            key: 'uncategorised',
+            label: 'Uncategorised',
+            value: `${(data?.uncategorizedCount ?? 0).toLocaleString()}`,
+            sub: `${uncategorizedPct.toFixed(0)}% of ${classifiableCount.toLocaleString()} tx`,
+            filter: 'missingCategory',
+            hint: 'Show only transactions with no category',
+            tone: uncategorizedPct >= 15 ? colors.warning : undefined,
+        },
+        {
+            key: 'anomalies',
+            label: 'Anomalies',
+            value: `${anomalyCount.toLocaleString()}`,
+            sub: 'unusually large charges',
+            filter: 'anomaly',
+            hint: 'Show only flagged transactions',
+            tone: anomalyCount > 0 ? colors.danger : undefined,
+        },
+    ];
 
     const analystModel = useMemo(() => {
         const months = Math.max(1, cashflowSeries.length || 1);
@@ -1792,212 +1852,120 @@ const FinanceDashboardAdvanced: React.FC = () => {
                 </div>
             )}
 
+            {/* HEADLINE — three numbers, not ten competing cards.
+                Previously this was a six-card row plus a four-card row, in which
+                "Total Spend" and "Actual Spend" were the same quantity computed two
+                different ways and disagreed on screen. Everything that is a
+                drill-down rather than a headline moved to the strip below. */}
             <Row className="g-3 mb-3">
-                <Col xxl={2} xl={3} lg={4} md={6}>
+                <Col md={4}>
                     <div
                         className={`finance-dashboard-clickable-card${cardFilter === 'all' && !chartFilter.type ? ' is-active' : ''}`}
                         role="button"
                         tabIndex={0}
                         onClick={clearChartFilter}
-                        onKeyDown={(event) => {
-                            if (event.key === 'Enter' || event.key === ' ') {
-                                event.preventDefault();
-                                clearChartFilter();
-                            }
-                        }}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); clearChartFilter(); } }}
                     >
-                        <PremiumCard icon={DollarSign} title="Total Spend" className="finance-summary-card">
+                        <PremiumCard icon={DollarSign} title="Spend" className="finance-summary-card">
                             <div className="finance-summary-value" style={{ color: colors.danger }}>
                                 {formatCurrency(filteredTotalSpend)}
                             </div>
-                            <p className="text-muted mb-0 mt-1 finance-summary-caption">View excludes bank transfers</p>
+                            <p className="text-muted mb-0 mt-1 finance-summary-caption">
+                                {rangeLabel} · excludes transfers between your own accounts
+                            </p>
                         </PremiumCard>
                     </div>
                 </Col>
-                <Col xxl={2} xl={3} lg={4} md={6}>
+
+                <Col md={4}>
                     <div
                         className={`finance-dashboard-clickable-card${cardFilter === 'discretionary' ? ' is-active' : ''}`}
                         role="button"
                         tabIndex={0}
                         onClick={() => handleCardFilter('discretionary')}
-                        onKeyDown={(event) => {
-                            if (event.key === 'Enter' || event.key === ' ') {
-                                event.preventDefault();
-                                handleCardFilter('discretionary');
-                            }
-                        }}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleCardFilter('discretionary'); } }}
+                        title="Show only discretionary transactions"
                     >
                         <PremiumCard icon={CreditCard} title="Discretionary" className="finance-summary-card">
                             <div className="finance-summary-value" style={{ color: colors.info }}>
-                                {formatCurrency(Math.abs(data?.totalDiscretionarySpend || 0) / 100)}
-                            </div>
-                            <p className="text-muted mb-0 mt-1 finance-summary-caption">Optional day-to-day spend</p>
-                        </PremiumCard>
-                    </div>
-                </Col>
-                <Col xxl={2} xl={3} lg={4} md={6}>
-                    <div
-                        className={`finance-dashboard-clickable-card${cardFilter === 'subscriptions' ? ' is-active' : ''}`}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => handleCardFilter('subscriptions')}
-                        onKeyDown={(event) => {
-                            if (event.key === 'Enter' || event.key === ' ') {
-                                event.preventDefault();
-                                handleCardFilter('subscriptions');
-                            }
-                        }}
-                    >
-                        <PremiumCard icon={Layers} title="Subscriptions" className="finance-summary-card">
-                            <div className="finance-summary-value" style={{ color: colors.warning }}>
-                                {formatCurrency(Math.abs(data?.totalSubscriptionSpend || 0) / 100)}
-                            </div>
-                            <p className="text-muted mb-0 mt-1 finance-summary-caption">Recurring costs</p>
-                        </PremiumCard>
-                    </div>
-                </Col>
-                <Col xxl={2} xl={3} lg={4} md={6}>
-                    <div
-                        className={`finance-dashboard-clickable-card${activeView === 'actions' ? ' is-active' : ''}`}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => handleViewChange('actions')}
-                        onKeyDown={(event) => {
-                            if (event.key === 'Enter' || event.key === ' ') {
-                                event.preventDefault();
-                                handleViewChange('actions');
-                            }
-                        }}
-                        title="View all actions"
-                    >
-                        <PremiumCard icon={Sparkles} title="Actions Potential" className="finance-summary-card">
-                            <div className="finance-summary-value" style={{ color: colors.success }}>
-                                {formatCurrency(cappedActionSavings)}
+                                {formatCurrency(discretionarySpendForCap)}
+                                {discretionaryShare !== null && (
+                                    <span className="fs-6 text-muted ms-2">{discretionaryShare}%</span>
+                                )}
                             </div>
                             <p className="text-muted mb-0 mt-1 finance-summary-caption">
-                                {actionSavingsWereCapped
-                                    ? `Capped at discretionary spend (${actions.length} actions)`
-                                    : `Estimated monthly savings (${actions.length} actions)`}
+                                {discretionaryShare !== null
+                                    ? `of spend is optional — the rest is mandatory`
+                                    : 'Optional day-to-day spend'}
                             </p>
                         </PremiumCard>
                     </div>
                 </Col>
-                <Col xxl={2} xl={3} lg={4} md={6}>
+
+                <Col md={4}>
                     <div
-                        className={`finance-dashboard-clickable-card finance-dashboard-clickable-card--small${cardFilter === 'missingCategory' ? ' is-active' : ''}`}
+                        className="finance-dashboard-clickable-card"
                         role="button"
                         tabIndex={0}
-                        onClick={() => handleCardFilter('missingCategory')}
-                        onKeyDown={(event) => {
-                            if (event.key === 'Enter' || event.key === ' ') {
-                                event.preventDefault();
-                                handleCardFilter('missingCategory');
-                            }
-                        }}
+                        onClick={() => handleViewChange('analyst')}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleViewChange('analyst'); } }}
+                        title="Open the budget analyst"
                     >
-                        <PremiumCard icon={AlertTriangle} title="Uncategorized" className="finance-summary-card finance-summary-card--tight">
-                            <div className="d-flex justify-content-between align-items-end">
-                                <div className="finance-summary-subvalue" style={{ color: uncategorizedCount > 0 ? colors.warning : colors.success }}>
-                                    {uncategorizedCount}
-                                </div>
-                                <span className="small text-muted">{uncategorizedPct.toFixed(1)}%</span>
-                            </div>
-                            <p className="text-muted mb-0 mt-1 finance-summary-caption">
-                                {classifiableCount.toLocaleString()} classifiable tx in range
-                            </p>
-                        </PremiumCard>
-                    </div>
-                </Col>
-                <Col xxl={2} xl={3} lg={4} md={6}>
-                    <div
-                        className={`finance-dashboard-clickable-card finance-dashboard-clickable-card--small${cardFilter === 'anomaly' ? ' is-active' : ''}`}
-                        role="button"
-                        tabIndex={0}
-                        onClick={() => handleCardFilter('anomaly')}
-                        onKeyDown={(event) => {
-                            if (event.key === 'Enter' || event.key === ' ') {
-                                event.preventDefault();
-                                handleCardFilter('anomaly');
-                            }
-                        }}
-                    >
-                        <PremiumCard icon={Activity} title="Spend Anomalies" className="finance-summary-card finance-summary-card--tight">
-                            <div className="d-flex justify-content-between align-items-end">
-                                <div className="finance-summary-subvalue" style={{ color: colors.warning }}>{anomalyCount}</div>
-                                <span className="small text-muted">{formatCurrency(toPounds(anomalySpend))}</span>
-                            </div>
-                            <p className="text-muted mb-0 mt-1 finance-summary-caption">Flagged transactions in range</p>
+                        <PremiumCard icon={Target} title="Budget" className="finance-summary-card">
+                            {budgetHealth ? (
+                                <>
+                                    <div
+                                        className="finance-summary-value"
+                                        style={{ color: Number(budgetHealth.utilizationPct || 0) > 100 ? colors.danger : colors.success }}
+                                    >
+                                        {Number(budgetHealth.utilizationPct || 0).toFixed(0)}%
+                                    </div>
+                                    {/* Set, actual and variance were three separate cards. They are
+                                        one sentence, and only meaningful together. */}
+                                    <p className="text-muted mb-0 mt-1 finance-summary-caption">
+                                        {formatCurrency(toPounds(budgetHealth.totalActualPence || 0))} of
+                                        {' '}{formatCurrency(toPounds(budgetHealth.totalBudgetPence || 0))} used ·
+                                        {' '}{formatCurrency(Math.abs(toPounds((budgetHealth.totalBudgetPence || 0) - (budgetHealth.totalActualPence || 0))))}
+                                        {' '}{(budgetHealth.totalBudgetPence || 0) >= (budgetHealth.totalActualPence || 0) ? 'left' : 'over'}
+                                    </p>
+                                </>
+                            ) : (
+                                <>
+                                    <div className="finance-summary-value text-muted">—</div>
+                                    <p className="text-muted mb-0 mt-1 finance-summary-caption">No budget configured yet</p>
+                                </>
+                            )}
                         </PremiumCard>
                     </div>
                 </Col>
             </Row>
 
-            {budgetHealth && (
-                <Row className="g-3 mb-3">
-                    <Col md={3}>
+            {/* DRILL-DOWNS — these are filters, not headline numbers, so they read as
+                a compact strip rather than six more full-size cards. */}
+            <Row className="g-2 mb-4">
+                {overviewDrilldowns.map((chip) => (
+                    <Col key={chip.key} xs={6} md={3}>
                         <div
-                            className="finance-dashboard-clickable-card finance-dashboard-clickable-card--small"
+                            className={`finance-drilldown-chip${cardFilter === chip.filter ? ' is-active' : ''}`}
                             role="button"
                             tabIndex={0}
-                            onClick={() => handleViewChange('spend')}
-                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleViewChange('spend'); } }}
-                            title="View spend analysis"
+                            onClick={() => (chip.filter ? handleCardFilter(chip.filter as any) : handleViewChange(chip.view as any))}
+                            onKeyDown={(e) => {
+                                if (e.key !== 'Enter' && e.key !== ' ') return;
+                                e.preventDefault();
+                                if (chip.filter) handleCardFilter(chip.filter as any); else handleViewChange(chip.view as any);
+                            }}
+                            title={chip.hint}
                         >
-                            <PremiumCard icon={Wallet} title="Budget Set" className="finance-summary-card finance-summary-card--tight">
-                                <div className="finance-summary-subvalue">{formatCurrency(toPounds(budgetHealth.totalBudgetPence || 0))}</div>
-                                <p className="text-muted mb-0 mt-1 finance-summary-caption">Configured category budget</p>
-                            </PremiumCard>
+                            <div className="finance-drilldown-label">{chip.label}</div>
+                            <div className="finance-drilldown-value" style={chip.tone ? { color: chip.tone } : undefined}>
+                                {chip.value}
+                            </div>
+                            <div className="finance-drilldown-sub">{chip.sub}</div>
                         </div>
                     </Col>
-                    <Col md={3}>
-                        <div
-                            className="finance-dashboard-clickable-card finance-dashboard-clickable-card--small"
-                            role="button"
-                            tabIndex={0}
-                            onClick={() => handleCardFilter('all')}
-                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleCardFilter('all'); } }}
-                            title="Show all transactions"
-                        >
-                            <PremiumCard icon={Activity} title="Actual Spend" className="finance-summary-card finance-summary-card--tight">
-                                <div className="finance-summary-subvalue" style={{ color: colors.danger }}>{formatCurrency(toPounds(budgetHealth.totalActualPence || 0))}</div>
-                                <p className="text-muted mb-0 mt-1 finance-summary-caption">In selected date range</p>
-                            </PremiumCard>
-                        </div>
-                    </Col>
-                    <Col md={3}>
-                        <div
-                            className="finance-dashboard-clickable-card finance-dashboard-clickable-card--small"
-                            role="button"
-                            tabIndex={0}
-                            onClick={() => handleViewChange('analyst')}
-                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleViewChange('analyst'); } }}
-                            title="View budget analysis"
-                        >
-                            <PremiumCard icon={TrendingUp} title="Variance" className="finance-summary-card finance-summary-card--tight">
-                                <div className="finance-summary-subvalue" style={{ color: (budgetHealth.variancePence || 0) >= 0 ? colors.success : colors.warning }}>
-                                    {formatCurrency(toPounds(budgetHealth.variancePence || 0))}
-                                </div>
-                                <p className="text-muted mb-0 mt-1 finance-summary-caption">Budget minus actual</p>
-                            </PremiumCard>
-                        </div>
-                    </Col>
-                    <Col md={3}>
-                        <div
-                            className="finance-dashboard-clickable-card finance-dashboard-clickable-card--small"
-                            role="button"
-                            tabIndex={0}
-                            onClick={() => handleViewChange('spend')}
-                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleViewChange('spend'); } }}
-                            title="View spend breakdown"
-                        >
-                            <PremiumCard icon={Target} title="Budget Used" className="finance-summary-card finance-summary-card--tight">
-                                <div className="finance-summary-subvalue">{Number(budgetHealth.utilizationPct || 0).toFixed(1)}%</div>
-                                <p className="text-muted mb-0 mt-1 finance-summary-caption">Utilization against set budget</p>
-                            </PremiumCard>
-                        </div>
-                    </Col>
-                </Row>
-            )}
+                ))}
+            </Row>
 
             {/* Mandatory vs discretionary. The two donuts elsewhere on this page are
                 merchant/category distributions — neither answers "how much of my
