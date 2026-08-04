@@ -675,6 +675,29 @@ function* iterateNextDays(startDate, count) {
 // Simple wrapper so frontends can trigger a full Monzo refresh + analytics
 async function refreshMonzoData(uid) {
   const summary = await syncMonzoDataForUser(uid, { fullRefresh: true });
+
+  // Stamp lastSyncAt here, not only in the backstop and job paths.
+  //
+  // This is the function behind syncMonzoHourly and syncMonzoTwiceDaily — the
+  // paths that do most of the actual syncing — and it never recorded that a sync
+  // had happened. The only writers were monzoBackstopSync and processMonzoSyncJob,
+  // and the backstop line sits AFTER its syncMonzoDataForUser call, so any throw
+  // there (it was OOMing at 256MiB) skipped the stamp entirely. Net effect:
+  // integration_status.lastSyncAt read 2026-03-25 while transactions were landing
+  // daily through to 26 July, so "last synced" was useless as a health signal.
+  try {
+    await updateMonzoIntegrationStatus(uid, {
+      ...buildTimestampPatch('lastSyncAt'),
+      lastSyncStatus: 'success',
+      lastSyncSource: 'refresh',
+      lastSyncSummary: summary || null,
+      lastErrorMessage: admin.firestore.FieldValue.delete(),
+      lastErrorAt: admin.firestore.FieldValue.delete(),
+    });
+  } catch (err) {
+    console.warn('[refreshMonzoData] status update failed', err?.message || err);
+  }
+
   try {
     await runMonzoAnalytics(uid, { reason: 'manual_refresh' });
   } catch (err) {
@@ -4983,7 +5006,7 @@ async function getMonzoAccessToken(uid) {
 }
 
 // ===== Monzo: list accounts and store basics
-exports.monzoListAccounts = httpsV2.onCall({
+exports.monzoListAccounts = httpsV2.onCall({ memory: '512MiB',
   secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
 }, async (req) => {
   const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
@@ -5075,7 +5098,7 @@ exports.monzoCreatePot = httpsV2.onCall({
 });
 
 // ===== Monzo: sync transactions for account
-exports.monzoSyncTransactions = httpsV2.onCall({
+exports.monzoSyncTransactions = httpsV2.onCall({ memory: '512MiB',
   secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
 }, async (req) => {
   const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
@@ -5747,7 +5770,7 @@ exports.fetchDashboardData = httpsV2.onCall({ memory: '1GiB' }, async (req) => {
 
 
 // 15-min backstop transaction sync
-exports.monzoBackstopSync = schedulerV2.onSchedule('every 15 minutes', async () => {
+exports.monzoBackstopSync = schedulerV2.onSchedule({ schedule: 'every 15 minutes', memory: '512MiB' }, async () => {
   const db = admin.firestore();
   const tokens = await db.collection('tokens').where('provider', '==', 'monzo').get();
   for (const t of tokens.docs) {
@@ -5932,6 +5955,7 @@ exports.monzoTransferPlan = httpsV2.onCall({
 
 exports.processMonzoSyncJob = firestoreV2.onDocumentCreated('monzo_sync_jobs/{jobId}', {
   secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
+  memory: '512MiB',
 }, async (event) => {
   const jobRef = event?.data?.ref;
   const initialData = event?.data?.data() || {};
@@ -5991,7 +6015,7 @@ exports.processMonzoSyncJob = firestoreV2.onDocumentCreated('monzo_sync_jobs/{jo
   }
 });
 
-exports.syncMonzo = httpsV2.onCall({
+exports.syncMonzo = httpsV2.onCall({ memory: '512MiB',
   secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
 }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
@@ -6109,7 +6133,7 @@ exports.updateMonzoTransactionCategory = httpsV2.onCall({
   return { ok: true };
 });
 
-exports.recomputeMonzoAnalytics = httpsV2.onCall({
+exports.recomputeMonzoAnalytics = httpsV2.onCall({ memory: '512MiB',
   secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
 }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
@@ -6421,7 +6445,7 @@ exports.importMerchantMappingsCsv = httpsV2.onCall({
 });
 
 // Explicit apply (all or one merchant)
-exports.applyMerchantMappings = httpsV2.onCall({
+exports.applyMerchantMappings = httpsV2.onCall({ memory: '512MiB',
   secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
 }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
@@ -6475,7 +6499,7 @@ exports.backfillMerchantKeys = httpsV2.onCall({
   return { ok: true, updated };
 });
 
-exports.generateMonzoAuditReport = httpsV2.onCall({
+exports.generateMonzoAuditReport = httpsV2.onCall({ memory: '512MiB',
   secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
 }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
@@ -6531,7 +6555,7 @@ exports.generateMonzoAuditReport = httpsV2.onCall({
 });
 
 // Nightly analytics refresh for all users with Monzo connected
-exports.nightlyMonzoAnalytics = schedulerV2.onSchedule('every day 02:30', async () => {
+exports.nightlyMonzoAnalytics = schedulerV2.onSchedule({ schedule: 'every day 02:30', memory: '512MiB' }, async () => {
   const db = admin.firestore();
   const tokens = await db.collection('tokens').where('provider', '==', 'monzo').get();
   let ok = 0, fail = 0;
@@ -7243,7 +7267,7 @@ exports.monzoAiCategorizationSweep = schedulerV2.onSchedule({
   }
 });
 
-exports.backfillMonzoAiCategorization = httpsV2.onCall(async (req) => {
+exports.backfillMonzoAiCategorization = httpsV2.onCall({ memory: '512MiB' }, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const days = Math.max(7, Math.min(Number(req.data?.days || 365), 3650));
@@ -7653,7 +7677,7 @@ async function syncMonzoDataForUser(uid, { since, fullRefresh } = {}) {
 }
 
 // ===== Manual Monzo Sync (User-triggered)
-exports.syncMonzoNow = httpsV2.onCall({
+exports.syncMonzoNow = httpsV2.onCall({ memory: '512MiB',
   secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
 }, async (req) => {
   const uid = req.auth?.uid;
@@ -7741,7 +7765,10 @@ exports.syncMonzoNow = httpsV2.onCall({
 });
 
 // ===== Scheduled Monzo Sync (twice daily, full history)
-exports.syncMonzoTwiceDaily = schedulerV2.onSchedule("every 12 hours", async (event) => {
+exports.syncMonzoTwiceDaily = schedulerV2.onSchedule({
+  schedule: "every 12 hours",
+  memory: "512MiB",
+}, async (event) => {
   const db = admin.firestore();
   const connected = await db.collection('profiles').where('monzoConnected', '==', true).get();
   console.log(`[syncMonzoTwiceDaily] found ${connected.size} connected profiles`);
@@ -7773,7 +7800,7 @@ exports.syncMonzoTwiceDaily = schedulerV2.onSchedule("every 12 hours", async (ev
 });
 
 // ===== Hourly Monzo Sync (Scheduled)
-exports.syncMonzoHourly = schedulerV2.onSchedule({
+exports.syncMonzoHourly = schedulerV2.onSchedule({ memory: '512MiB',
   schedule: 'every 1 hours',
   timeZone: 'UTC',
   secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY]
