@@ -673,6 +673,31 @@ function* iterateNextDays(startDate, count) {
 }
 
 // Simple wrapper so frontends can trigger a full Monzo refresh + analytics
+/**
+ * Make a value safe for the Firebase callable JSON encoder.
+ *
+ * firebase-functions throws 'Data cannot be encoded in JSON: NaN' on any
+ * non-finite number, and it throws while encoding the RESPONSE — after the
+ * handler has already done its work. That is exactly what happened to
+ * syncMonzoNow: 69 transactions and four account balances were written
+ * successfully, then the call returned a bare 500 because one nested figure in
+ * the summary was NaN. The user sees a failed sync that actually succeeded.
+ *
+ * Non-finite numbers become null, which is honest ("not computable") rather than
+ * a fabricated zero.
+ */
+function jsonSafe(value, seen = new WeakSet()) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (value === null || typeof value !== 'object') return value;
+  if (value instanceof Date) return value.toISOString();
+  if (seen.has(value)) return null;
+  seen.add(value);
+  if (Array.isArray(value)) return value.map((v) => jsonSafe(v, seen));
+  const out = {};
+  for (const [k, v] of Object.entries(value)) out[k] = jsonSafe(v, seen);
+  return out;
+}
+
 async function refreshMonzoData(uid, { fullRefresh = false } = {}) {
   // fullRefresh defaults FALSE now. It used to be hardcoded true, which made every
   // hourly and twice-daily run page back to 2018 — and Monzo now rejects that with
@@ -7713,7 +7738,7 @@ exports.syncMonzoNow = httpsV2.onCall({ memory: '512MiB',
       timestamp: admin.firestore.FieldValue.serverTimestamp()
     });
 
-    return { success: true, summary: result };
+    return jsonSafe({ success: true, summary: result });
   } catch (error) {
     const normalizedError = error instanceof httpsV2.HttpsError ? error : null;
     const errorCode = normalizedError?.code || 'internal';
