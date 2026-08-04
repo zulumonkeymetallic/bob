@@ -673,8 +673,17 @@ function* iterateNextDays(startDate, count) {
 }
 
 // Simple wrapper so frontends can trigger a full Monzo refresh + analytics
-async function refreshMonzoData(uid) {
-  const summary = await syncMonzoDataForUser(uid, { fullRefresh: true });
+async function refreshMonzoData(uid, { fullRefresh = false } = {}) {
+  // fullRefresh defaults FALSE now. It used to be hardcoded true, which made every
+  // hourly and twice-daily run page back to 2018 — and Monzo now rejects that with
+  // 'HTTP 400: The time range you have requested is too large, please use the
+  // `since` and `before` parameters to request smaller ranges'. That broke
+  // syncMonzoNow, syncMonzoHourly and syncMonzoTwiceDaily outright.
+  //
+  // Incremental is also simply correct for a recurring job: it resumes from the
+  // monzo_sync_state cursor and fetches only what is new. A full refresh is a
+  // backfill operation and needs date windowing before it can be used again.
+  const summary = await syncMonzoDataForUser(uid, { fullRefresh });
 
   // Stamp lastSyncAt here, not only in the backstop and job paths.
   //
