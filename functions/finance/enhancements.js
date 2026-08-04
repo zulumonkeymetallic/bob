@@ -6,19 +6,48 @@ const { normaliseMerchantName, inferDefaultCategoryType, inferDefaultCategoryLab
 const { mergeFinanceCategories } = require('./categories');
 const { resolveTransactionCategory, buildCategoryIndex, narrowToV4 } = require('./bucketResolver');
 const { callLLM } = require('../utils/llmHelper');
+const {
+  normalizeExternalSource,
+  resolveSourceConfig,
+  buildTermMatcher,
+  classifyStatementRow,
+  fileIsUnsigned,
+} = require('./externalSources');
 
 const OPENROUTER_API_KEY_SECRET = defineSecret('OPENROUTER_API_KEY');
 const FUNCTION_REGION = 'europe-west2';
-const EXTERNAL_SOURCES = new Set(['barclays', 'paypal', 'other']);
 const MANUAL_ACCOUNT_TYPES = new Set(['asset', 'debt', 'investment', 'cash', 'savings']);
 const DAY_MS = 24 * 60 * 60 * 1000;
+const LEDGER_ACCOUNTS = 'finance_ledger_accounts';
 
-function normalizeExternalSource(raw) {
-  const source = String(raw || 'other').trim().toLowerCase();
-  if (source === 'barclaycard' || source === 'barclay') return 'barclays';
-  if (source === 'pay_pal') return 'paypal';
-  if (EXTERNAL_SOURCES.has(source)) return source;
-  return 'other';
+/**
+ * Resolve the import/match configuration from the user's own account register so provider
+ * behaviour is data, not code. Accepts either an accountId (preferred — the account the
+ * user registered on /finance/ledger) or a bare source slug for the legacy call shape.
+ */
+async function loadSourceConfig(db, uid, { accountId, source } = {}) {
+  let account = null;
+  if (accountId) {
+    const snap = await db.collection(LEDGER_ACCOUNTS).doc(`${uid}_${accountId}`).get();
+    if (snap.exists) {
+      const data = snap.data() || {};
+      if (data.ownerUid !== uid) {
+        throw new httpsV2.HttpsError('permission-denied', 'Not your account');
+      }
+      account = data;
+    }
+  }
+  if (!account && source) {
+    // No explicit account: adopt one registered against this source, if there is exactly
+    // one, so an import against 'halifax' still picks up that card's APR and match terms.
+    const bySource = await db.collection(LEDGER_ACCOUNTS)
+      .where('ownerUid', '==', uid)
+      .where('externalSource', '==', normalizeExternalSource(source))
+      .get();
+    const live = bySource.docs.map((d) => d.data() || {}).filter((d) => !d.deleted && !d.archived);
+    if (live.length === 1) [account] = live;
+  }
+  return resolveSourceConfig({ source, account });
 }
 
 function normalizeManualAccountType(rawType) {
@@ -208,50 +237,76 @@ function buildExternalRowsFromCsv(csvText, source) {
     }
 
     let amountMinor = null;
+    // A debit/credit column PAIR states the direction explicitly; a single amount column
+    // may or may not carry signs, which is decided for the file as a whole further down.
+    let signIsExplicit = false;
     const debitMinor = debitIdx >= 0 ? parseMoneyMinor(row[debitIdx]) : null;
     const creditMinor = creditIdx >= 0 ? parseMoneyMinor(row[creditIdx]) : null;
     const amountMinorRaw = amountIdx >= 0 ? parseMoneyMinor(row[amountIdx]) : null;
-    if (Number.isFinite(debitMinor) && debitMinor !== 0) amountMinor = -Math.abs(debitMinor);
-    else if (Number.isFinite(creditMinor) && creditMinor !== 0) amountMinor = Math.abs(creditMinor);
-    else if (Number.isFinite(amountMinorRaw)) amountMinor = amountMinorRaw;
+    if (Number.isFinite(debitMinor) && debitMinor !== 0) {
+      amountMinor = -Math.abs(debitMinor);
+      signIsExplicit = true;
+    } else if (Number.isFinite(creditMinor) && creditMinor !== 0) {
+      amountMinor = Math.abs(creditMinor);
+      signIsExplicit = true;
+    } else if (Number.isFinite(amountMinorRaw)) {
+      amountMinor = amountMinorRaw;
+    }
     if (!Number.isFinite(amountMinor) || amountMinor === 0) return;
 
     const description = String(descIdx >= 0 ? row[descIdx] : row[1] || row[0] || '').trim();
-    const descLower = description.toLowerCase();
-    if ((source === 'barclays' || source === 'paypal') && amountMinor > 0) {
-      const keepPositive = /refund|reversal|credit|cashback|payment received|deposit|received/.test(descLower);
-      if (!keepPositive) amountMinor = -Math.abs(amountMinor);
-    }
 
     const merchantName = source === 'paypal'
       ? (extractPayPalMerchant(description) || description.split(/[-*|]/)[0].trim() || `${source}-${index + 1}`)
       : (description.split(/[-*|]/)[0].trim() || description || `${source}-${index + 1}`);
     const merchantKey = normaliseMerchantName(merchantName);
     const externalRef = idIdx >= 0 ? String(row[idIdx] || '').trim() : '';
-    const fingerprint = `${source}|${externalRef || `${dateMs}|${amountMinor}|${description}|${index}`}`;
-    const externalId = crypto.createHash('sha1').update(fingerprint).digest('hex').slice(0, 24);
     // Tag rows that the PayPal CSV itself marks as reversed so the collapse pass can also catch them
     const lifecycleStatus = source === 'paypal' && statusIdx >= 0
       && String(row[statusIdx] || '').toLowerCase().trim() === 'reversed' ? 'reversed' : null;
     result.push({
       source,
-      externalId,
       externalRef: externalRef || null,
       postedDateISO: new Date(dateMs).toISOString(),
       postedDateMs: dateMs,
       amountMinor,
-      amount: amountMinor / 100,
+      signIsExplicit,
       currency: 'GBP',
       description: description || merchantName,
       merchantName,
       merchantKey,
       lifecycleStatus,
+      rawIndex: index,
       rawRow: row,
     });
   });
+
+  // Sign is a property of the FILE, not of a row. Statements come in two shapes: signed
+  // (Barclaycard: purchases negative) and unsigned (every figure positive, direction implied
+  // by the description). Flipping per-row against a keyword list, as this did before,
+  // destroyed the sign on already-signed files — payments and refunds silently became spend.
+  const applyUnsignedFallback = !result.some((row) => row.signIsExplicit)
+    && fileIsUnsigned(result.map((row) => row.amountMinor));
+  const finalised = result.map((row) => {
+    let { amountMinor } = row;
+    if (applyUnsignedFallback && amountMinor > 0) {
+      const keepPositive = /refund|reversal|cashback|payment received|payment - thank you|deposit|received|credit adjustment/
+        .test(row.description.toLowerCase());
+      if (!keepPositive) amountMinor = -Math.abs(amountMinor);
+    }
+    const fingerprint = `${source}|${row.externalRef || `${row.postedDateMs}|${amountMinor}|${row.description}|${row.rawIndex}`}`;
+    const { signIsExplicit: _sign, rawIndex: _idx, ...rest } = row;
+    return {
+      ...rest,
+      externalId: crypto.createHash('sha1').update(fingerprint).digest('hex').slice(0, 24),
+      amountMinor,
+      amount: amountMinor / 100,
+    };
+  });
+
   // For PayPal, run a reversal-collapse pass before returning so paired rows are excluded from matching
-  if (source === 'paypal') return collapsePayPalReversals(result);
-  return result;
+  if (source === 'paypal') return collapsePayPalReversals(finalised);
+  return finalised;
 }
 
 function normalizeMonzoCategoryKey(value) {
@@ -540,16 +595,19 @@ async function callGeminiActionRefinement({ uid, actions }) {
 const importExternalFinanceTransactions = httpsV2.onCall({ region: FUNCTION_REGION }, async (req) => {
   if (!req?.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
-  const source = normalizeExternalSource(req.data?.source);
   const csvText = String(req.data?.csv || '').trim();
   if (!csvText) throw new httpsV2.HttpsError('invalid-argument', 'csv is required');
+
+  const db = admin.firestore();
+  const accountId = String(req.data?.accountId || '').trim() || null;
+  const config = await loadSourceConfig(db, uid, { accountId, source: req.data?.source });
+  const { source } = config;
 
   const parsedRows = buildExternalRowsFromCsv(csvText, source);
   if (!parsedRows.length) {
     return { ok: true, source, parsed: 0, upserted: 0, skipped: 0, message: 'No valid rows detected in CSV.' };
   }
 
-  const db = admin.firestore();
   let batch = db.batch();
   let ops = 0;
   let upserted = 0;
@@ -560,6 +618,7 @@ const importExternalFinanceTransactions = httpsV2.onCall({ region: FUNCTION_REGI
     batch.set(docRef, {
       ownerUid: uid,
       source,
+      accountId: config.accountId,
       externalId: row.externalId,
       externalRef: row.externalRef || null,
       postedDateISO: row.postedDateISO,
@@ -588,6 +647,8 @@ const importExternalFinanceTransactions = httpsV2.onCall({ region: FUNCTION_REGI
   return {
     ok: true,
     source,
+    accountId: config.accountId,
+    accountLabel: config.label,
     parsed: parsedRows.length,
     upserted,
     skipped: Math.max(0, parseCsvRows(csvText).length - parsedRows.length),
@@ -705,11 +766,16 @@ const importMonzoTransactionsCsv = httpsV2.onCall({ region: FUNCTION_REGION }, a
 const matchExternalToMonzoTransactions = httpsV2.onCall({ region: FUNCTION_REGION }, async (req) => {
   if (!req?.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
-  const source = req.data?.source ? normalizeExternalSource(req.data?.source) : null;
   const windowDays = Math.max(1, Math.min(Number(req.data?.windowDays || 5), 30));
   const amountTolerancePence = Math.max(1, Math.min(Number(req.data?.amountTolerancePence || 150), 2_000));
 
   const db = admin.firestore();
+  const accountId = String(req.data?.accountId || '').trim() || null;
+  const config = req.data?.source || accountId
+    ? await loadSourceConfig(db, uid, { accountId, source: req.data?.source })
+    : null;
+  const source = config?.source || null;
+
   const [externalSnap, monzoSnap] = await Promise.all([
     db.collection('finance_external_transactions').where('ownerUid', '==', uid).get(),
     db.collection('monzo_transactions').where('ownerUid', '==', uid).get(),
@@ -717,7 +783,9 @@ const matchExternalToMonzoTransactions = httpsV2.onCall({ region: FUNCTION_REGIO
 
   const externalRows = externalSnap.docs
     .map((d) => ({ id: d.id, ref: d.ref, ...(d.data() || {}) }))
-    .filter((row) => !source || row.source === source)
+    // An accountId narrows to one registered card; a bare source still matches the whole
+    // provider, including rows imported before accounts were linked.
+    .filter((row) => (accountId ? row.accountId === accountId : (!source || row.source === source)))
     // Exclude lifecycle-excluded rows: pending (not settled) and reversed pairs (net zero)
     .filter((row) => row.lifecycleStatus !== 'reversed_pair' && row.lifecycleStatus !== 'pending');
   if (!externalRows.length) {
@@ -755,15 +823,27 @@ const matchExternalToMonzoTransactions = httpsV2.onCall({ region: FUNCTION_REGIO
   const maxBatch = 350;
   const bySource = {};
 
+  // Rows can span providers when matching without a source filter, so resolve the shift per
+  // row — from the account's own override where the row belongs to the resolved account,
+  // otherwise from that provider's preset. Memoised: this runs once per external row.
+  const shiftCache = new Map();
+  const shiftDaysFor = (ext) => {
+    if (config?.accountId && ext.accountId === config.accountId) return config.dateShiftDays;
+    const key = ext.source || 'other';
+    if (!shiftCache.has(key)) shiftCache.set(key, resolveSourceConfig({ source: key }).dateShiftDays);
+    return shiftCache.get(key);
+  };
+
   for (const ext of externalRows) {
     const extDateMs = timestampToMs(ext.postedAt, ext.postedDateISO);
     const extAmountMinor = Math.abs(normalizeAmountMinor(ext));
     const extTokens = tokenize(`${ext.merchantName || ''} ${ext.description || ''}`);
     if (!extDateMs || !extAmountMinor) continue;
 
-    // PayPal records the order date; Monzo sees settlement 1–2 days later. Shift the
-    // external date forward by one day so the window is centred on the actual Monzo post date.
-    const extDateMsForComp = ext.source === 'paypal' ? extDateMs + DAY_MS : extDateMs;
+    // Settlement lag differs per provider (PayPal records the ORDER date and Monzo sees
+    // settlement 1–2 days later), so the shift comes from the resolved source config and is
+    // overridable per account rather than hardcoded to one provider.
+    const extDateMsForComp = extDateMs + (shiftDaysFor(ext) * DAY_MS);
     let best = null;
     for (const monzo of monzoRows) {
       if (usedMonzo.has(monzo.docId)) continue;
@@ -791,6 +871,7 @@ const matchExternalToMonzoTransactions = httpsV2.onCall({ region: FUNCTION_REGIO
       batch.set(matchRef, {
         ownerUid: uid,
         source: ext.source || 'other',
+        accountId: ext.accountId || null,
         externalDocId: ext.id,
         externalId: ext.externalId || null,
         externalRef: ext.externalRef || null,
@@ -821,6 +902,7 @@ const matchExternalToMonzoTransactions = httpsV2.onCall({ region: FUNCTION_REGIO
       batch.set(matchRef, {
         ownerUid: uid,
         source: ext.source || 'other',
+        accountId: ext.accountId || null,
         externalDocId: ext.id,
         externalId: ext.externalId || null,
         externalRef: ext.externalRef || null,
@@ -856,8 +938,13 @@ const matchExternalToMonzoTransactions = httpsV2.onCall({ region: FUNCTION_REGIO
 const recomputeDebtServiceBreakdown = httpsV2.onCall({ region: FUNCTION_REGION }, async (req) => {
   if (!req?.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
-  const source = normalizeExternalSource(req.data?.source || 'barclays');
   const db = admin.firestore();
+  const accountId = String(req.data?.accountId || '').trim() || null;
+  const config = await loadSourceConfig(db, uid, {
+    accountId,
+    source: accountId ? null : (req.data?.source || 'barclays'),
+  });
+  const { source } = config;
 
   const [externalSnap, monzoSnap] = await Promise.all([
     db.collection('finance_external_transactions').where('ownerUid', '==', uid).get(),
@@ -866,7 +953,7 @@ const recomputeDebtServiceBreakdown = httpsV2.onCall({ region: FUNCTION_REGION }
 
   const sourceRows = externalSnap.docs
     .map((d) => ({ id: d.id, ...(d.data() || {}) }))
-    .filter((row) => row.source === source);
+    .filter((row) => (accountId ? row.accountId === accountId : row.source === source));
 
   const monthMap = {};
   const ensureMonth = (month) => {
@@ -891,26 +978,29 @@ const recomputeDebtServiceBreakdown = httpsV2.onCall({ region: FUNCTION_REGION }
     if (!entry) continue;
     const amountMinor = normalizeAmountMinor(row);
     const absAmount = Math.abs(amountMinor);
-    const desc = String(row.description || row.merchantName || '').toLowerCase();
-    const isInterest = /interest|finance charge|service charge|late fee|fee charge/.test(desc);
-    const isRefund = /refund|chargeback|reversal|dispute|credit/.test(desc);
-    const isPayment = /payment|direct debit|dd payment|balance transfer|paid/.test(desc) || amountMinor > 0;
+    const description = String(row.description || row.merchantName || '');
 
-    if (isInterest) entry.explicitInterestPence += absAmount;
-    if (isRefund) entry.refundsPence += absAmount;
-    if (isPayment) entry.statementPaymentsPence += absAmount;
-    if (amountMinor < 0 && !isPayment && !isRefund) entry.statementSpendPence += absAmount;
+    // Exactly one bucket per row. These used to be three independent `if`s, so an interest
+    // charge landed in explicitInterest AND in statementSpend — inflating statement spend
+    // and, via (monzoPayments - statementSpend), understating the interest estimate.
+    switch (classifyStatementRow({ amountMinor, description, config })) {
+      case 'payment': entry.statementPaymentsPence += absAmount; break;
+      case 'interest': entry.explicitInterestPence += absAmount; break;
+      case 'refund': entry.refundsPence += absAmount; break;
+      default: entry.statementSpendPence += absAmount; break;
+    }
   }
 
-  const paymentRegex = source === 'paypal'
-    ? /paypal/i
-    : /barclay|barclays|barclaycard/i;
+  // The provider's repayment vocabulary comes from the registered account (its name,
+  // provider and any match terms the user added) and falls back to the preset, so a card
+  // the user registers themselves needs no code change to be recognised.
+  const isProviderPayment = buildTermMatcher(config.monzoPaymentTerms);
   for (const doc of monzoSnap.docs) {
     const data = doc.data() || {};
     const amountMinor = normalizeAmountMinor(data);
     if (amountMinor >= 0) continue;
-    const text = `${data.merchant?.name || ''} ${data.counterparty?.name || ''} ${data.description || ''}`.toLowerCase();
-    if (!paymentRegex.test(text)) continue;
+    const text = `${data.merchant?.name || ''} ${data.counterparty?.name || ''} ${data.description || ''}`;
+    if (!isProviderPayment(text)) continue;
     const dateMs = timestampToMs(data.createdAt, data.createdISO);
     const month = monthKeyFromMs(dateMs);
     const entry = ensureMonth(month);
@@ -921,11 +1011,15 @@ const recomputeDebtServiceBreakdown = httpsV2.onCall({ region: FUNCTION_REGION }
   const perMonth = Object.values(monthMap)
     .sort((a, b) => a.month.localeCompare(b.month))
     .map((entry) => {
-      const interestFromPaymentDelta = Math.max(entry.monzoPaymentsPence - entry.statementSpendPence, 0);
+      // Refunds are money back on the card: they reduce what was actually consumed. They
+      // were previously tallied and then never used in any derived figure.
+      const netStatementSpendPence = Math.max(entry.statementSpendPence - entry.refundsPence, 0);
+      const interestFromPaymentDelta = Math.max(entry.monzoPaymentsPence - netStatementSpendPence, 0);
       const estimatedInterestPence = Math.max(entry.explicitInterestPence, interestFromPaymentDelta);
       const principalRepaymentPence = Math.max(entry.monzoPaymentsPence - estimatedInterestPence, 0);
       return {
         ...entry,
+        netStatementSpendPence,
         estimatedInterestPence,
         principalRepaymentPence,
       };
@@ -936,6 +1030,7 @@ const recomputeDebtServiceBreakdown = httpsV2.onCall({ region: FUNCTION_REGION }
     acc.statementPaymentsPence += item.statementPaymentsPence;
     acc.explicitInterestPence += item.explicitInterestPence;
     acc.refundsPence += item.refundsPence;
+    acc.netStatementSpendPence += item.netStatementSpendPence;
     acc.monzoPaymentsPence += item.monzoPaymentsPence;
     acc.estimatedInterestPence += item.estimatedInterestPence;
     acc.principalRepaymentPence += item.principalRepaymentPence;
@@ -945,20 +1040,57 @@ const recomputeDebtServiceBreakdown = httpsV2.onCall({ region: FUNCTION_REGION }
     statementPaymentsPence: 0,
     explicitInterestPence: 0,
     refundsPence: 0,
+    netStatementSpendPence: 0,
     monzoPaymentsPence: 0,
     estimatedInterestPence: 0,
     principalRepaymentPence: 0,
   });
 
-  await db.collection('finance_debt_service').doc(uid).set({
+  // One doc per card. The uid-keyed doc used to be the only one, so importing Halifax
+  // after Barclaycard silently replaced the Barclaycard breakdown.
+  const scopeKey = config.accountId || source;
+  await db.collection('finance_debt_service').doc(`${uid}_${scopeKey}`).set({
     ownerUid: uid,
     source,
+    accountId: config.accountId,
+    accountLabel: config.label,
     perMonth,
     totals,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   }, { merge: true });
 
-  return { ok: true, source, perMonth, totals };
+  // The uid-keyed doc stays as the all-cards aggregate: generateFinanceActionInsights and
+  // the dashboard both read it, and debt service is a household figure, not a per-card one.
+  const scopedSnap = await db.collection('finance_debt_service').where('ownerUid', '==', uid).get();
+  const scopedDocs = scopedSnap.docs.filter((d) => d.id !== uid);
+  const aggregateMonths = {};
+  const aggregateTotals = { ...totals };
+  Object.keys(aggregateTotals).forEach((key) => { aggregateTotals[key] = 0; });
+  scopedDocs.forEach((d) => {
+    const data = d.data() || {};
+    (data.perMonth || []).forEach((item) => {
+      const month = item.month;
+      if (!month) return;
+      if (!aggregateMonths[month]) aggregateMonths[month] = { month, ...Object.fromEntries(Object.keys(aggregateTotals).map((k) => [k, 0])) };
+      Object.keys(aggregateTotals).forEach((key) => {
+        aggregateMonths[month][key] += Number(item[key]) || 0;
+      });
+    });
+    Object.keys(aggregateTotals).forEach((key) => {
+      aggregateTotals[key] += Number(data.totals?.[key]) || 0;
+    });
+  });
+
+  await db.collection('finance_debt_service').doc(uid).set({
+    ownerUid: uid,
+    source: 'all',
+    sources: scopedDocs.map((d) => ({ source: d.data()?.source || null, accountId: d.data()?.accountId || null, label: d.data()?.accountLabel || null })),
+    perMonth: Object.values(aggregateMonths).sort((a, b) => a.month.localeCompare(b.month)),
+    totals: aggregateTotals,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  return { ok: true, source, accountId: config.accountId, perMonth, totals };
 });
 
 const generateFinanceActionInsights = httpsV2.onCall({
@@ -1689,11 +1821,22 @@ const fetchFinanceEnhancementData = httpsV2.onCall({ region: FUNCTION_REGION, me
     row.utilizationPct = row.budgetPence > 0 ? Number(((row.actualPence / row.budgetPence) * 100).toFixed(2)) : 0;
   });
 
-  const totalBudgetPence = categoryBudgetRows.reduce((sum, row) => sum + row.budgetPence, 0);
+  const monthlyBudgetPence = categoryBudgetRows.reduce((sum, row) => sum + row.budgetPence, 0);
   const totalActualPence = categoryBudgetRows.reduce((sum, row) => sum + row.actualPence, 0);
+
+  /**
+   * Budgets are set PER MONTH; actuals are summed over the selected range. Comparing them
+   * directly reported 217% on a 90-day view and 1,425% on all history — a utilisation
+   * figure that said nothing about overspending, only about how long the window was.
+   * Scale the budget to the window instead, and expose the factor so the UI can say so.
+   */
+  const rangeMonths = Math.max(1, (rangeEndMs - rangeStartMs) / (365.25 / 12 * 24 * 60 * 60 * 1000));
+  const totalBudgetPence = Math.round(monthlyBudgetPence * rangeMonths);
   const budgetHealth = {
     mode,
     monthlyIncomePence,
+    monthlyBudgetPence,
+    rangeMonths: Number(rangeMonths.toFixed(2)),
     totalBudgetPence,
     totalActualPence,
     variancePence: totalBudgetPence - totalActualPence,

@@ -35,6 +35,7 @@ const {
 } = require('./ledgerMath');
 const { resolveTransactionCategory, buildCategoryIndex } = require('./bucketResolver');
 const { mergeFinanceCategories } = require('./categories');
+const { normalizeExternalSource, cleanTerms } = require('./externalSources');
 
 const FUNCTION_REGION = 'europe-west2';
 const MAX_BATCH = 400;
@@ -243,7 +244,19 @@ const upsertFinanceLedgerAccount = httpsV2.onCall({ region: FUNCTION_REGION }, a
 
     monzoAccountId: text(req.data?.monzoAccountId),
     monzoPotId: text(req.data?.monzoPotId),
-    externalSource: ['barclays', 'paypal', 'other'].includes(req.data?.externalSource) ? req.data.externalSource : null,
+    // Any provider slug, not a fixed enum: the statement importer resolves behaviour from
+    // this account rather than from hardcoded per-provider branches, so registering a card
+    // here is all that a new provider needs.
+    externalSource: req.data?.externalSource ? normalizeExternalSource(req.data.externalSource) : null,
+    // Free-text terms that identify this card's repayment in Monzo ("BARCLAYCARD",
+    // "HALIFAX CC"). Empty is fine — the account name, provider and preset are used too.
+    paymentMatchTerms: cleanTerms(req.data?.paymentMatchTerms),
+    statementPaymentTerms: cleanTerms(req.data?.statementPaymentTerms),
+    interestTerms: cleanTerms(req.data?.interestTerms),
+    refundTerms: cleanTerms(req.data?.refundTerms),
+    matchDateShiftDays: Number.isFinite(Number(req.data?.matchDateShiftDays))
+      ? Math.max(-10, Math.min(Math.round(Number(req.data.matchDateShiftDays)), 10))
+      : null,
     linkedGoalId: text(req.data?.linkedGoalId),
 
     includeInNetWorth: req.data?.includeInNetWorth !== false,

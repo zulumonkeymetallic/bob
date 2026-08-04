@@ -11,6 +11,7 @@ import ReactECharts from 'echarts-for-react';
 import TransactionsList from './TransactionsList';
 import { normalizeMerchantKey } from './financeInsights';
 import BucketDonut from './BucketDonut';
+import { pieShareTooltip, stackedShareTooltip, barShareTooltip } from '../../utils/financeChartTooltips';
 import {
     TrendingUp,
     PieChart as PieIcon,
@@ -36,7 +37,8 @@ import './FinanceDashboardAdvanced.css';
 type DateFilter = '7d' | '30d' | '60d' | '90d' | '6m' | 'year' | 'all' | 'custom';
 type ViewMode = 'category' | 'bucket' | 'merchant';
 type FinanceView = 'overview' | 'analyst' | 'spend' | 'discretionary' | 'actions' | 'sources' | 'assets';
-type ExternalSource = 'barclays' | 'paypal' | 'other' | 'monzo_csv';
+// Providers with built-in presets, plus any slug a user registers on /finance/ledger.
+type ExternalSource = 'barclays' | 'halifax' | 'paypal' | 'other' | 'monzo_csv' | (string & {});
 type AnalysisDimension = 'bucket' | 'category' | 'merchant';
 type AnalysisChartType = 'trend' | 'pie' | 'breakdown';
 type AnalysisActionFilter = 'all' | 'with' | 'without';
@@ -220,6 +222,13 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const [activeView, setActiveView] = useState<FinanceView>(() => parseFinanceView(searchParams.get('tab')) || 'overview');
 
     const [externalSource, setExternalSource] = useState<ExternalSource>('barclays');
+    /**
+     * Cards/providers the user registered on /finance/ledger. Importing against one of
+     * these carries its APR, statement day and repayment match terms, so a new provider
+     * needs no code change — which is what kept Halifax out of the pipeline entirely.
+     */
+    const [ledgerAccounts, setLedgerAccounts] = useState<any[]>([]);
+    const [importAccountId, setImportAccountId] = useState<string>('');
     const [csvText, setCsvText] = useState('');
     const [csvFileName, setCsvFileName] = useState('');
     const [windowDays, setWindowDays] = useState(5);
@@ -286,6 +295,14 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
             const fetchDashboardData = httpsCallable(functions, 'fetchDashboardData');
             const fetchEnhancementData = httpsCallable(functions, 'fetchFinanceEnhancementData');
+
+            // Non-blocking: the import panel degrades to the provider presets without it.
+            httpsCallable(functions, 'fetchFinanceLedger')({ months: 1 })
+                .then((res: any) => {
+                    const accounts = (res?.data?.accounts || []) as any[];
+                    setLedgerAccounts(accounts.filter((a) => !a.deleted && !a.archived));
+                })
+                .catch(() => setLedgerAccounts([]));
 
             const requests: Array<Promise<any>> = [];
             requests.push(
@@ -447,14 +464,17 @@ const FinanceDashboardAdvanced: React.FC = () => {
             const debtFn = httpsCallable(functions, 'recomputeDebtServiceBreakdown');
             const actionsFn = httpsCallable(functions, 'generateFinanceActionInsights');
 
-            const importRes = (await importFn({ source: externalSource, csv: csvText })).data as any;
+            const target = importAccountId
+                ? { accountId: importAccountId }
+                : { source: externalSource };
+            const importRes = (await importFn({ ...target, csv: csvText })).data as any;
             const matchRes = (await matchFn({
-                source: externalSource,
+                ...target,
                 windowDays,
                 amountTolerancePence,
             })).data as any;
-            await debtFn({ source: externalSource });
-            await actionsFn({ source: externalSource, maxActions: 12 });
+            await debtFn({ ...target });
+            await actionsFn({ source: importRes?.source || externalSource, maxActions: 12 });
 
             await fetchData();
 
@@ -480,7 +500,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
         try {
             const matchFn = httpsCallable(functions, 'matchExternalToMonzoTransactions');
             const matchRes = (await matchFn({
-                source: externalSource,
+                ...(importAccountId ? { accountId: importAccountId } : { source: externalSource }),
                 windowDays,
                 amountTolerancePence,
             })).data as any;
@@ -505,7 +525,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
         try {
             const debtFn = httpsCallable(functions, 'recomputeDebtServiceBreakdown');
             const actionsFn = httpsCallable(functions, 'generateFinanceActionInsights');
-            await debtFn({ source: externalSource });
+            await debtFn(importAccountId ? { accountId: importAccountId } : { source: externalSource });
             const actionRes = (await actionsFn({ source: externalSource, maxActions: 12 })).data as any;
             await fetchData();
             setOpsMessage(`Generated ${Array.isArray(actionRes?.actions) ? actionRes.actions.length : 0} finance actions.`);
@@ -823,7 +843,11 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
     const trendOption = viewMode === 'merchant'
         ? {
-            tooltip: { trigger: 'axis', valueFormatter: (v: number) => `£${v.toFixed(2)}` },
+            tooltip: barShareTooltip(
+                merchantDataEarly.reduce((sum, m) => sum + Math.abs(Number(m.value) || 0), 0),
+                formatCurrency,
+                'of the merchants shown',
+            ),
             grid: { left: 150, right: 20, top: 10, bottom: 30 },
             xAxis: { type: 'value', axisLabel: { formatter: (v: number) => `£${v}` } },
             yAxis: { type: 'category', data: merchantDataEarly.map((m) => m.name) },
@@ -835,8 +859,8 @@ const FinanceDashboardAdvanced: React.FC = () => {
             }],
         }
         : {
-            tooltip: { trigger: 'axis' },
-            legend: { data: activeKeys },
+            tooltip: stackedShareTooltip(formatCurrency, 'Month total'),
+            legend: { type: 'scroll', data: activeKeys },
             grid: { left: 50, right: 10, top: 30, bottom: 50 },
             xAxis: { type: 'category', data: trendData.map((r: any) => r.month) },
             yAxis: { type: 'value', axisLabel: { formatter: (v: number) => `£${v}` } },
@@ -895,13 +919,30 @@ const FinanceDashboardAdvanced: React.FC = () => {
     }, [distributionTop10Total, filteredTotalSpend]);
 
     const distributionOption = {
-        tooltip: { trigger: 'item', valueFormatter: (v: number) => `£${v}` },
-        legend: { orient: 'horizontal', bottom: 0 },
+        tooltip: pieShareTooltip(
+            formatCurrency,
+            distributionCoveragePct !== null && distributionCoveragePct < 100
+                ? `of the ring (which is ${distributionCoveragePct}% of range spend)`
+                : 'of range spend',
+        ),
+        // A 10-slice legend of long category names wraps to three rows. ECharts lays the
+        // legend out independently of the series, so without reserving space here the pie
+        // stayed centred at 50% and the legend was drawn straight over it. `scroll` caps
+        // the rows; the series `center` below lifts the ring clear of them.
+        legend: {
+            type: 'scroll',
+            orient: 'horizontal',
+            bottom: 0,
+            icon: 'circle',
+            itemWidth: 8,
+            itemHeight: 8,
+            textStyle: { fontSize: 11 },
+        },
         graphic: [
             {
                 type: 'text',
                 left: 'center',
-                top: '38%',
+                top: '30%',
                 style: {
                     text: distributionCenterValue,
                     textAlign: 'center',
@@ -913,7 +954,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
             {
                 type: 'text',
                 left: 'center',
-                top: '49%',
+                top: '41%',
                 style: {
                     // The centre now shows the range total, so the caption has to
                     // say how much of it the ring actually accounts for.
@@ -930,7 +971,10 @@ const FinanceDashboardAdvanced: React.FC = () => {
         series: [
             {
                 type: 'pie',
-                radius: ['62%', '82%'],
+                radius: ['55%', '76%'],
+                // Lifted off dead centre so the wrapped legend below has room. Matches
+                // categoryDonutOption, which already did this and renders correctly.
+                center: ['50%', '42%'],
                 avoidLabelOverlap: false,
                 itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
                 label: { show: false },
@@ -980,10 +1024,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
             : top;
 
         return {
-            tooltip: {
-                trigger: 'item',
-                formatter: (params: any) => `${params.name}<br/>${formatCurrency(params.value)} (${params.percent}%)`,
-            },
+            tooltip: pieShareTooltip(formatCurrency, 'of categorised spend'),
             legend: { bottom: 0, icon: 'circle', itemWidth: 8, itemHeight: 8, textStyle: { fontSize: 11 } },
             series: [{
                 type: 'pie',
@@ -1209,8 +1250,8 @@ const FinanceDashboardAdvanced: React.FC = () => {
     }, [matchSummary]);
 
     const spendTrackingOption = {
-        tooltip: { trigger: 'axis' },
-        legend: { data: ['Mandatory', 'Discretionary', 'Savings', 'Income'] },
+        tooltip: stackedShareTooltip(formatCurrency, 'Month total'),
+        legend: { type: 'scroll', data: ['Mandatory', 'Discretionary', 'Savings', 'Income'] },
         grid: { left: 50, right: 15, top: 30, bottom: 30 },
         xAxis: {
             type: 'category',
@@ -1489,8 +1530,8 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const analysisPieOption = useMemo(() => {
         const groups = analysisGrouped.groups.slice(0, 10);
         return {
-            tooltip: { trigger: 'item', valueFormatter: (v: number) => `£${v}` },
-            legend: { orient: 'horizontal', bottom: 0 },
+            tooltip: pieShareTooltip(formatCurrency, 'of shown total'),
+            legend: { type: 'scroll', orient: 'horizontal', bottom: 0 },
             series: [
                 {
                     type: 'pie',
@@ -1504,12 +1545,13 @@ const FinanceDashboardAdvanced: React.FC = () => {
                 },
             ],
         };
-    }, [analysisGrouped]);
+    }, [analysisGrouped, formatCurrency]);
 
     const analysisBreakdownOption = useMemo(() => {
         const groups = analysisGrouped.groups.slice(0, 20);
+        const shownTotal = groups.reduce((sum, group) => sum + Math.abs(toPounds(group.amountPence) || 0), 0);
         return {
-            tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+            tooltip: barShareTooltip(shownTotal, formatCurrency, 'of the groups shown'),
             grid: { left: 180, right: 20, top: 20, bottom: 20 },
             xAxis: {
                 type: 'value',
@@ -1529,7 +1571,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
                 },
             ],
         };
-    }, [analysisGrouped]);
+    }, [analysisGrouped, formatCurrency]);
 
     const budgetBucketOption = useMemo(() => {
         const rows = budgetHealth?.byBucket || [];
@@ -1598,10 +1640,29 @@ const FinanceDashboardAdvanced: React.FC = () => {
      * You cannot save more than you discretionarily spend, so cap it there and say
      * so when the cap bites.
      */
-    const discretionarySpendForCap = Math.abs(Number(data?.totalDiscretionarySpend) || 0) / 100;
+    /**
+     * Discretionary must be measured on the SAME basis as the Spend card beside it.
+     *
+     * `filteredTotalSpend` switches basis: the server's range total normally, but the local
+     * sum of the loaded rows once a drill-down is active. The server's
+     * `totalDiscretionarySpend` never switches, so dividing one by the other compared an
+     * all-range numerator against a drilled-down denominator and printed 897% — a share of
+     * spend that cannot exceed 100% by construction. Recompute locally whenever the
+     * denominator is local, so numerator and denominator always describe the same rows.
+     */
+    const serverDiscretionarySpend = Math.abs(Number(data?.totalDiscretionarySpend) || 0) / 100;
+    const localDiscretionarySpend = useMemo(
+        () => spendTransactions.reduce((sum: number, tx: any) => (
+            resolveTxCategory(tx).bucket === 'discretionary'
+                ? sum + Math.abs(txAmountMinor(tx)) / 100
+                : sum
+        ), 0),
+        [spendTransactions],
+    );
+    const discretionarySpendForCap = hasActiveDrilldown ? localDiscretionarySpend : serverDiscretionarySpend;
     /** Discretionary as a share of spend — the headline question, not a raw £ figure. */
     const discretionaryShare = filteredTotalSpend > 0
-        ? Math.round((discretionarySpendForCap / filteredTotalSpend) * 100)
+        ? Math.min(100, Math.round((discretionarySpendForCap / filteredTotalSpend) * 100))
         : null;
 
     const rangeLabel = ({
@@ -1927,6 +1988,11 @@ const FinanceDashboardAdvanced: React.FC = () => {
                                         {' '}{formatCurrency(toPounds(budgetHealth.totalBudgetPence || 0))} used ·
                                         {' '}{formatCurrency(Math.abs(toPounds((budgetHealth.totalBudgetPence || 0) - (budgetHealth.totalActualPence || 0))))}
                                         {' '}{(budgetHealth.totalBudgetPence || 0) >= (budgetHealth.totalActualPence || 0) ? 'left' : 'over'}
+                                        {/* The budget is set per month; say when it has been scaled to a
+                                            longer window, or the figure looks arbitrary. */}
+                                        {Number(budgetHealth.rangeMonths || 1) > 1.05 && (
+                                            <> · {formatCurrency(toPounds(budgetHealth.monthlyBudgetPence || 0))}/month × {Number(budgetHealth.rangeMonths).toFixed(1)} months</>
+                                        )}
                                     </p>
                                 </>
                             ) : (
@@ -2910,12 +2976,48 @@ const FinanceDashboardAdvanced: React.FC = () => {
                     <PremiumCard title="External Source Import" icon={Upload}>
                         <Form.Group className="mb-3">
                             <Form.Label>Source</Form.Label>
-                            <Form.Select value={externalSource} onChange={(event) => setExternalSource(event.target.value as ExternalSource)}>
+                            <Form.Select
+                                value={importAccountId ? `account:${importAccountId}` : externalSource}
+                                onChange={(event) => {
+                                    const value = event.target.value;
+                                    if (value.startsWith('account:')) {
+                                        const accountId = value.slice('account:'.length);
+                                        setImportAccountId(accountId);
+                                        const account = ledgerAccounts.find((a) => a.accountId === accountId);
+                                        // Keep the legacy source in step so the actions engine,
+                                        // which is still source-keyed, targets the same provider.
+                                        setExternalSource((account?.externalSource || 'other') as ExternalSource);
+                                    } else {
+                                        setImportAccountId('');
+                                        setExternalSource(value as ExternalSource);
+                                    }
+                                }}
+                            >
                                 <option value="monzo_csv">Monzo (historical CSV backfill)</option>
-                                <option value="barclays">Barclays / Barclaycard</option>
-                                <option value="paypal">PayPal</option>
-                                <option value="other">Other</option>
+                                {ledgerAccounts.length > 0 && (
+                                    <optgroup label="Your registered accounts">
+                                        {ledgerAccounts.map((account) => (
+                                            <option key={account.accountId} value={`account:${account.accountId}`}>
+                                                {account.name}
+                                                {account.provider ? ` — ${account.provider}` : ''}
+                                            </option>
+                                        ))}
+                                    </optgroup>
+                                )}
+                                <optgroup label="Providers">
+                                    <option value="barclays">Barclays / Barclaycard</option>
+                                    <option value="halifax">Halifax</option>
+                                    <option value="paypal">PayPal</option>
+                                    <option value="other">Other</option>
+                                </optgroup>
                             </Form.Select>
+                            <div className="small text-muted mt-1">
+                                {importAccountId
+                                    ? 'Uses this account’s own repayment match terms, APR and statement day.'
+                                    : ledgerAccounts.length > 0
+                                        ? 'Pick a registered account to use its own match terms, or a generic provider.'
+                                        : 'Register cards on the Ledger page to import against them directly.'}
+                            </div>
                         </Form.Group>
 
                         <Form.Group className="mb-3">

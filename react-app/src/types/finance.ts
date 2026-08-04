@@ -154,7 +154,13 @@ export interface LedgerAccount {
 
     monzoAccountId?: string | null;
     monzoPotId?: string | null;
-    externalSource?: 'barclays' | 'paypal' | 'other' | null;
+    // Free provider slug — the importer resolves behaviour from this account, not a fixed enum.
+    externalSource?: string | null;
+    paymentMatchTerms?: string[];
+    statementPaymentTerms?: string[];
+    interestTerms?: string[];
+    refundTerms?: string[];
+    matchDateShiftDays?: number | null;
     linkedGoalId?: string | null;
 
     includeInNetWorth: boolean;
