@@ -530,6 +530,37 @@ const FinanceDashboardAdvanced: React.FC = () => {
         }
     };
 
+    /**
+     * Apply merchant categories that already exist to transactions that never received
+     * them. No model calls: both mapping collections are read straight from Firestore.
+     * Dry run first so the count is visible before anything is written.
+     */
+    const handleApplyKnownCategories = async (dryRun: boolean) => {
+        setBusy(true);
+        setError(null);
+        setOpsMessage(null);
+        try {
+            const fn = httpsCallable(functions, 'applyKnownMerchantCategories');
+            const res = (await fn({ dryRun })).data as any;
+            const n = Number(res?.updated || 0);
+            if (dryRun) {
+                setOpsMessage(
+                    `${n} transaction(s) can be categorised from rules you already have `
+                    + `(${res?.bySource?.merchant_rule || 0} from your merchant rules, `
+                    + `${res?.bySource?.llm_stored || 0} from stored AI results). Nothing written yet.`
+                );
+            } else {
+                await fetchData();
+                setOpsMessage(`Categorised ${n} transaction(s) from existing merchant rules.`);
+            }
+        } catch (err: any) {
+            console.error(err);
+            setError(err?.message || 'Could not apply existing merchant categories');
+        } finally {
+            setBusy(false);
+        }
+    };
+
     const handleRegenerateActions = async () => {
         if (externalSource === 'monzo_csv') {
             setOpsMessage('Action generation is based on external card debt sources, not Monzo CSV backfill.');
@@ -3083,6 +3114,22 @@ const FinanceDashboardAdvanced: React.FC = () => {
                             </Button>
                             <Button variant="outline-secondary" onClick={handleRegenerateActions} disabled={busy || externalSource === 'monzo_csv'}>
                                 Rebuild actions
+                            </Button>
+                        </div>
+
+                        {/* Separate from the CSV pipeline above: this needs no import and no
+                            model calls, it just applies rules that already exist. */}
+                        <hr className="my-3" />
+                        <div className="small text-muted mb-2">
+                            <strong>Uncategorised backlog.</strong> Merchant rules and stored AI results are
+                            only applied when a transaction is written, so older rows never got them.
+                        </div>
+                        <div className="d-flex flex-wrap gap-2">
+                            <Button variant="outline-primary" onClick={() => handleApplyKnownCategories(true)} disabled={busy}>
+                                {busy ? 'Working…' : 'Check what can be categorised'}
+                            </Button>
+                            <Button variant="primary" onClick={() => handleApplyKnownCategories(false)} disabled={busy}>
+                                Apply existing categories
                             </Button>
                         </div>
                     </PremiumCard>
