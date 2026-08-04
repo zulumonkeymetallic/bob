@@ -81,6 +81,7 @@ try {
 try {
   const financeEnhancements = require('./finance/enhancements');
   if (financeEnhancements) {
+    exports.applyKnownMerchantCategories = financeEnhancements.applyKnownMerchantCategories;
     exports.suggestFinanceTransferAccounts = financeEnhancements.suggestFinanceTransferAccounts;
     exports.dismissFinanceTransferSuggestion = financeEnhancements.dismissFinanceTransferSuggestion;
     exports.importExternalFinanceTransactions = financeEnhancements.importExternalFinanceTransactions;
@@ -6702,6 +6703,9 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
     if (!key) return;
     merchantMap.set(key, {
       type: data.categoryType || data.type || 'optional',
+      // The mapping has always carried a category KEY; only the coarse type was ever
+      // applied, which is why so many rows read as uncategorised despite having a rule.
+      categoryKey: data.categoryKey || null,
       label: data.label || data.categoryLabel || null,
       isSubscription: data.isSubscription === true,
     });
@@ -6853,6 +6857,9 @@ async function syncMonzoTransactionsForAccount({ uid, accountId, accessToken, si
       if (merchantKey && merchantMap.has(merchantKey) && !manualOverrides.has(tx.id)) {
         const m = merchantMap.get(merchantKey);
         docData.userCategoryType = m.type;
+        // mappedCategoryKey, not userCategoryKey: this is the merchant RULE, and the
+        // resolver must keep it below a per-transaction choice.
+        if (m.categoryKey) docData.mappedCategoryKey = m.categoryKey;
         if (m.label) docData.userCategoryLabel = m.label;
         if (m.isSubscription) docData.isSubscription = true;
       }
@@ -7190,6 +7197,69 @@ Rules:
   return normalizeAiCategoryResult(parsed, categoriesMap);
 };
 
+/** Attempts before a transaction is left alone. Transient failures must not be terminal. */
+const MAX_AI_CATEGORIZATION_ATTEMPTS = 3;
+
+/**
+ * Re-flag uncategorised transactions so the hourly sweep always has work.
+ *
+ * Deliberately conservative about what counts as "needs categorising": anything with a
+ * user key, a merchant-rule key or a stored AI key is done, and anything the model has
+ * already declined or given up on is left alone — otherwise the queue would refill with
+ * the same unclassifiable rows every hour and never reach the rest.
+ *
+ * Ordered oldest-first via the existing (ownerUid, createdISO ASC) index would need a
+ * per-user query; this runs collection-wide for the scheduler, so it takes whatever the
+ * limit gives it and relies on repeated hourly runs to work through the backlog.
+ */
+async function refillAiCategorizationQueue(db, limit) {
+  const snap = await db.collection('monzo_transactions')
+    .where('needsAiCategorization', '==', true)
+    .limit(1)
+    .get();
+  // Only refill when the queue has actually drained, so a slow backlog is not overtaken.
+  if (!snap.empty) return 0;
+
+  const candidates = await db.collection('monzo_transactions')
+    .where('aiCategoryKey', '==', null)
+    .limit(limit)
+    .get()
+    .catch(() => null);
+
+  // aiCategoryKey is absent rather than null on most documents, so an equality query
+  // cannot find them. Fall back to a bounded scan, which is why the limit matters.
+  const docs = candidates && !candidates.empty
+    ? candidates.docs
+    : (await db.collection('monzo_transactions').limit(limit * 5).get()).docs;
+
+  let flagged = 0;
+  let batch = db.batch();
+  let ops = 0;
+  for (const doc of docs) {
+    if (flagged >= limit) break;
+    const data = doc.data() || {};
+    if (data.userCategoryKey || data.mappedCategoryKey || data.aiCategoryKey) continue;
+    if (data.needsAiCategorization) continue;
+    if (data.aiCategorizationDeclinedAt || data.aiCategorizationGaveUpAt) continue;
+    if (Number(data.aiCategorizationAttempts || 0) >= MAX_AI_CATEGORIZATION_ATTEMPTS) continue;
+    // Only spend has a merchant worth categorising; credits are income or transfers.
+    const amountMinor = Number.isFinite(data.amountMinor) ? Number(data.amountMinor) : null;
+    if (amountMinor !== null && amountMinor >= 0) continue;
+
+    batch.update(doc.ref, { needsAiCategorization: true });
+    flagged += 1;
+    ops += 1;
+    if (ops >= 400) {
+      await batch.commit();
+      batch = db.batch();
+      ops = 0;
+    }
+  }
+  if (ops > 0) await batch.commit();
+  if (flagged > 0) console.log(`[monzoAiCategorizationSweep] refilled queue with ${flagged}`);
+  return flagged;
+}
+
 const applyAiMappingToTransaction = async (ref, mapping) => {
   const update = {
     aiCategoryKey: mapping.key,
@@ -7211,6 +7281,16 @@ exports.monzoAiCategorizationSweep = schedulerV2.onSchedule({
   secrets: [GOOGLE_AI_STUDIO_API_KEY, OPENROUTER_API_KEY_SECRET],
 }, async () => {
   const db = ensureFirestore();
+
+  // Top the queue up before draining it.
+  //
+  // needsAiCategorization was only ever set when a transaction was WRITTEN, and the Monzo
+  // sync went incremental, so historical rows were never flagged. The queue emptied and the
+  // sweep then ran hourly finding nothing — healthy-looking and completely idle — while
+  // thousands of transactions sat uncategorised. Refilling here makes the sweep
+  // self-feeding rather than dependent on a manual backfill nobody ran.
+  await refillAiCategorizationQueue(db, 200);
+
   const pendingSnap = await db.collection('monzo_transactions')
     .where('needsAiCategorization', '==', true)
     .limit(200)
@@ -7279,8 +7359,13 @@ exports.monzoAiCategorizationSweep = schedulerV2.onSchedule({
           categoriesMap,
         });
         if (!normalized) {
+          // A decline is an answer, not an error: the merchant is genuinely unclassifiable.
+          // Record it so the refill below does not pick the row straight back up.
           merchantCache.set(merchantKey, null);
-          await item.ref.update({ needsAiCategorization: admin.firestore.FieldValue.delete() });
+          await item.ref.update({
+            needsAiCategorization: admin.firestore.FieldValue.delete(),
+            aiCategorizationDeclinedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
           continue;
         }
         const mapping = {
@@ -7304,8 +7389,22 @@ exports.monzoAiCategorizationSweep = schedulerV2.onSchedule({
           source: 'llm_auto',
         }, { merge: true });
       } catch (err) {
+        // Do not delete the flag on the first failure. A timeout or a rate limit is
+        // transient, and dropping the flag made every such failure permanent: the row
+        // could never be retried because nothing re-flagged it. Give up only after
+        // MAX_AI_CATEGORIZATION_ATTEMPTS so a genuinely unclassifiable merchant does not
+        // occupy the queue forever.
         console.warn('[monzoAiCategorizationSweep] failed', err?.message || err);
-        await item.ref.update({ needsAiCategorization: admin.firestore.FieldValue.delete() });
+        const attempts = Number(data.aiCategorizationAttempts || 0) + 1;
+        const update = {
+          aiCategorizationAttempts: attempts,
+          aiCategorizationLastError: String(err?.message || err).slice(0, 300),
+        };
+        if (attempts >= MAX_AI_CATEGORIZATION_ATTEMPTS) {
+          update.needsAiCategorization = admin.firestore.FieldValue.delete();
+          update.aiCategorizationGaveUpAt = admin.firestore.FieldValue.serverTimestamp();
+        }
+        await item.ref.update(update);
       }
     }
   }

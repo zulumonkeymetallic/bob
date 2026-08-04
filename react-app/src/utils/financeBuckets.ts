@@ -18,6 +18,7 @@ export type BucketSource =
     | 'pot'
     | 'account'
     | 'user_key'
+    | 'mapped_key'
     | 'user_type'
     | 'ai_bucket'
     | 'ai_key'
@@ -327,6 +328,10 @@ export function resolveTransactionCategory(tx: any, options: ResolveOptions = {}
 
     const candidates: Array<{ source: BucketSource; bucket: CategoryBucket | null; label?: unknown; coarse?: boolean }> = [
         { source: 'user_key', bucket: bucketFromKey(categoryIndex, data.userCategoryKey), label: data.userCategoryLabel },
+        // A merchant RULE's category key — above userCategoryType (same document, more
+        // specific) but below userCategoryKey (a rule must not beat a per-transaction
+        // choice). See functions/finance/bucketResolver.js.
+        { source: 'mapped_key', bucket: bucketFromKey(categoryIndex, data.mappedCategoryKey), label: data.mappedCategoryLabel || data.userCategoryLabel },
         { source: 'user_type', bucket: widenToV10(data.userCategoryType), label: data.userCategoryLabel, coarse: isCoarseWidening(data.userCategoryType) },
         { source: 'ai_bucket', bucket: widenToV10(data.aiBucket), label: data.aiCategoryLabel },
         { source: 'ai_key', bucket: bucketFromKey(categoryIndex, data.aiCategoryKey), label: data.aiCategoryLabel },
@@ -337,6 +342,7 @@ export function resolveTransactionCategory(tx: any, options: ResolveOptions = {}
 
     const categoryKey = firstNonEmpty(
         data.userCategoryKey,
+        data.mappedCategoryKey,
         data.aiCategoryKey,
         data.categoryKey,
         data.category,

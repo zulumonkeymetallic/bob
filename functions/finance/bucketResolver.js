@@ -330,6 +330,17 @@ function resolveTransactionCategory(tx, options = {}) {
       label: data.userCategoryLabel,
     },
     {
+      // A merchant RULE's category key. Sits above userCategoryType because both come
+      // from the same merchant_mappings document and the key is the more specific of the
+      // two — but below userCategoryKey, because a rule must never beat a per-transaction
+      // choice. merchant_mappings has always carried categoryKey; the sync writer applied
+      // only categoryType, so 1,006 transactions read as uncategorised while their
+      // merchant had a perfectly good category on file.
+      source: 'mapped_key',
+      bucket: bucketFromKey(categoryIndex, data.mappedCategoryKey),
+      label: data.mappedCategoryLabel || data.userCategoryLabel,
+    },
+    {
       source: 'user_type',
       bucket: widenToV10(data.userCategoryType),
       label: data.userCategoryLabel,
@@ -362,6 +373,7 @@ function resolveTransactionCategory(tx, options = {}) {
   // usable category key while its bucket came from somewhere coarser.
   const categoryKey = firstNonEmpty(
     data.userCategoryKey,
+    data.mappedCategoryKey,
     data.aiCategoryKey,
     data.categoryKey,
     data.category,

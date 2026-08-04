@@ -938,6 +938,101 @@ const matchExternalToMonzoTransactions = httpsV2.onCall({ region: FUNCTION_REGIO
 });
 
 /**
+ * Apply merchant categories that ALREADY EXIST to transactions that never received them.
+ *
+ * The single biggest cause of the uncategorised rate, and it needs no LLM at all. Two
+ * collections hold merchant categories — `merchant_mappings` (the user's own rules) and
+ * `monzo_ai_merchant_categories` (previous LLM results) — but both are applied only when a
+ * transaction is written or when the AI sweep picks it up. The sweep works from a queue
+ * that nothing refills, so historical rows never got either. On this account that was
+ * 1,729 of 3,057 uncategorised transactions: 1,006 with a user rule on file and 723 with a
+ * stored AI result.
+ *
+ * Writes `mappedCategoryKey` (a rule) rather than `userCategoryKey` (a per-transaction
+ * choice), so a category chosen by hand still outranks it. Rows carrying `manualCategory`
+ * are skipped entirely, for the same reason.
+ */
+const applyKnownMerchantCategories = httpsV2.onCall({
+  region: FUNCTION_REGION,
+  memory: '1GiB',
+  timeoutSeconds: 540,
+}, async (req) => {
+  if (!req?.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const dryRun = req.data?.dryRun === true;
+  const db = admin.firestore();
+
+  const [txSnap, merchantSnap, aiSnap] = await Promise.all([
+    db.collection('monzo_transactions').where('ownerUid', '==', uid).get(),
+    db.collection('merchant_mappings').where('ownerUid', '==', uid).get(),
+    db.collection('monzo_ai_merchant_categories').where('ownerUid', '==', uid).get(),
+  ]);
+
+  const rules = new Map();
+  merchantSnap.docs.forEach((doc) => {
+    const data = doc.data() || {};
+    const key = String(data.merchantKey || '').trim().toLowerCase();
+    if (!key || !data.categoryKey) return;
+    rules.set(key, {
+      categoryKey: data.categoryKey,
+      categoryLabel: data.categoryLabel || data.label || null,
+      source: 'merchant_rule',
+    });
+  });
+  // A stored AI result is weaker than the user's own rule, so it only fills the gaps.
+  aiSnap.docs.forEach((doc) => {
+    const data = doc.data() || {};
+    const key = String(data.merchantKey || '').trim().toLowerCase();
+    if (!key || !data.aiCategoryKey || rules.has(key)) return;
+    rules.set(key, {
+      categoryKey: data.aiCategoryKey,
+      categoryLabel: data.aiCategoryLabel || null,
+      source: 'llm_stored',
+    });
+  });
+
+  let updated = 0;
+  let skippedManual = 0;
+  let noRule = 0;
+  const bySource = { merchant_rule: 0, llm_stored: 0 };
+  let batch = db.batch();
+  let ops = 0;
+
+  for (const doc of txSnap.docs) {
+    const data = doc.data() || {};
+    // Anything already carrying a usable key is done; do not churn it.
+    if (data.userCategoryKey || data.mappedCategoryKey || data.aiCategoryKey) continue;
+    if (data.manualCategory === true) { skippedManual += 1; continue; }
+
+    const key = String(data.merchantKey || '').trim().toLowerCase();
+    const rule = key ? rules.get(key) : null;
+    if (!rule) { noRule += 1; continue; }
+
+    updated += 1;
+    bySource[rule.source] = (bySource[rule.source] || 0) + 1;
+    if (dryRun) continue;
+
+    batch.set(doc.ref, {
+      mappedCategoryKey: rule.categoryKey,
+      mappedCategoryLabel: rule.categoryLabel,
+      mappedCategorySource: rule.source,
+      mappedCategoryAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+    ops += 1;
+    if (ops >= 400) {
+      await batch.commit();
+      batch = db.batch();
+      ops = 0;
+    }
+  }
+  if (!dryRun && ops > 0) await batch.commit();
+
+  return jsonSafe({
+    ok: true, dryRun, updated, bySource, skippedManual, withoutAnyRule: noRule, rulesAvailable: rules.size,
+  });
+});
+
+/**
  * Propose register entries for counterparties that look like the user's own accounts.
  *
  * Read-only and advisory: it writes nothing and classifies nothing. The user confirms each
@@ -2095,6 +2190,7 @@ const fetchFinanceEnhancementData = httpsV2.onCall({ region: FUNCTION_REGION, me
 
 module.exports = {
   assessRecurringActivity,
+  applyKnownMerchantCategories,
   suggestFinanceTransferAccounts,
   dismissFinanceTransferSuggestion,
   importExternalFinanceTransactions,
