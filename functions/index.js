@@ -207,6 +207,7 @@ const { parseTimeStringToTimeOfDay, populateBlankTimeOfDay, inferTimeOfDayFromCo
 
 // Import Fitness KPI Sync service
 const { syncAllUsersFitnessKpis, syncUserFitnessKpis } = require('./services/fitnessKpiSync');
+const { aggregateMetricValuesForUser } = require('./services/metricValueAggregation');
 
 // Import Focus Goals functions
 try {
@@ -389,11 +390,29 @@ exports.updateGoalTargetYears = schedulerV2.onSchedule(
   });
 
 // Nightly fitness KPI sync: updates goal KPI progress from Strava/HealthKit workouts
+//
+// The aggregation runs first and is not optional. `metric_values` is what
+// `resolveObservationSource` reads for every healthkit and strava KPI, and nothing had
+// ever written it — so the resolver's primary path always returned null and every
+// distance-based fitness KPI fell through to a profile scalar or to nothing at all.
 const syncFitnessKpis = async () => {
   try {
+    const profiles = await admin.firestore().collection('profiles').get();
+    let aggregated = 0;
+    for (const profile of profiles.docs) {
+      try {
+        const stats = await aggregateMetricValuesForUser(profile.id);
+        aggregated += stats.written;
+      } catch (e) {
+        // One user's workout history must not stop everyone else's KPIs updating.
+        console.error(`[metricValues] aggregation failed uid=${profile.id}:`, e?.message || e);
+      }
+    }
+    console.log(`✅ metric_values aggregation completed: ${aggregated} rows written`);
+
     const result = await syncAllUsersFitnessKpis();
     console.log(`✅ Fitness KPI sync completed: ${result.totalSynced} goals updated`);
-    return result;
+    return { ...result, metricValuesWritten: aggregated };
   } catch (e) {
     console.error('[fitnessKpiSync] failed', e?.message || e);
     throw e;
@@ -412,11 +431,31 @@ exports.syncFitnessKpisNow = httpsV2.onCall({ region: 'europe-west2' }, async (r
     throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   }
   try {
+    const aggregation = await aggregateMetricValuesForUser(uid);
     const result = await syncUserFitnessKpis(uid);
-    return { ok: true, ...result };
+    return { ok: true, ...result, aggregation };
   } catch (e) {
     console.error('[fitnessKpiSync] user sync failed:', e);
     throw new httpsV2.HttpsError('internal', e?.message || 'Sync failed');
+  }
+});
+
+/**
+ * Rebuild `metric_values` for the caller from `metrics_workouts`, without touching goal
+ * KPIs. Useful after a Strava backfill or a max-HR change, where the workout rows have
+ * moved but the goals have not.
+ */
+exports.aggregateMetricValuesNow = httpsV2.onCall({ region: 'europe-west2' }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) {
+    throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  }
+  try {
+    const lookbackDays = Number(req?.data?.lookbackDays) || undefined;
+    return { ok: true, ...(await aggregateMetricValuesForUser(uid, { lookbackDays })) };
+  } catch (e) {
+    console.error('[metricValues] manual aggregation failed:', e);
+    throw new httpsV2.HttpsError('internal', e?.message || 'Aggregation failed');
   }
 });
 
