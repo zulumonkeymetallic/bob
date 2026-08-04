@@ -7641,7 +7641,17 @@ async function syncMonzoDataForUser(uid, { since, fullRefresh } = {}) {
     const syncStateRef = db.collection('monzo_sync_state').doc(`${uid}_${accountId}`);
     const syncSnap = await syncStateRef.get();
     const stateData = syncSnap.data() || {};
-    const sinceCursor = fullRefresh ? null : (since || stateData.lastTransactionCreated || null);
+    // Monzo's SCA rule: outside a ~5 minute window after authentication, an access
+    // token can only reach transactions from the last 90 days. Anything older
+    // returns 'HTTP 403: Verification required'.
+    //
+    // An account with no cursor (never synced, or newly visible) would otherwise
+    // request from the 2018 floor and 403 every time — which is what happened to
+    // the three secondary accounts here while the personal one synced fine.
+    const SCA_WINDOW_DAYS = 89;
+    const scaFloorISO = new Date(Date.now() - SCA_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    let sinceCursor = fullRefresh ? null : (since || stateData.lastTransactionCreated || null);
+    if (!fullRefresh && (!sinceCursor || sinceCursor < scaFloorISO)) sinceCursor = scaFloorISO;
     const historyFloorISO = '2018-01-01T00:00:00.000Z';
     const parsedAccountCreatedMs = Date.parse(String(account?.created || ''));
     const accountCreatedISO = Number.isNaN(parsedAccountCreatedMs)
@@ -7651,14 +7661,26 @@ async function syncMonzoDataForUser(uid, { since, fullRefresh } = {}) {
       ? (accountCreatedISO && accountCreatedISO > historyFloorISO ? accountCreatedISO : historyFloorISO)
       : null;
 
-    const txSummary = await syncMonzoTransactionsForAccount({
-      uid,
-      accountId,
-      accessToken,
-      since: sinceCursor,
-      fullRefresh: !!fullRefresh,
-      historyStart,
-    });
+    // One account failing must not fail the whole sync. Joint/pot/flex accounts
+    // can 403 or error independently of the personal account, and losing every
+    // account's data because one misbehaved is how a working sync looks broken.
+    let txSummary;
+    try {
+      txSummary = await syncMonzoTransactionsForAccount({
+        uid,
+        accountId,
+        accessToken,
+        since: sinceCursor,
+        fullRefresh: !!fullRefresh,
+        historyStart,
+      });
+    } catch (accountError) {
+      const message = accountError?.message || String(accountError);
+      console.warn('[monzo] account sync failed, continuing', accountId, message);
+      summary.accountErrors = summary.accountErrors || [];
+      summary.accountErrors.push({ accountId, message: message.slice(0, 300) });
+      continue;
+    }
     let firstCreated = txSummary.firstCreated || null;
     if (fullRefresh && !firstCreated) {
       firstCreated = await findEarliestMonzoTransactionCreated(db, uid, accountId);
