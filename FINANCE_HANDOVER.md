@@ -1,7 +1,7 @@
 # BOB Finance — Session Handover
 
 **Date:** 2026-08-04
-**Branch:** `feat/finance-position-ledger` (18 commits ahead of `main`, **not merged**)
+**Branch:** `feat/finance-position-ledger` — **fast-forward merged into `main`** (§8)
 **Deployed:** yes — web app live at commit `89357a45`, all finance/Monzo functions deployed
 **Owner UID:** `3L3nnXSuTPfr08c8DTXG5zYX37A2`
 
@@ -390,6 +390,12 @@ ba123310 feat(finance): monthly position ledger, and one bucket resolver
 Plus unrelated fixes carried on the same branch: `7824d382` (planner priority bonus
 inverted), `ba8e9834` / `549ed9ac` (placeholder acceptance criteria).
 
-**The branch is not merged to `main`.** Everything is deployed from the branch.
+**The 15 above are only the finance commits.** `feat/finance-position-ledger` was a
+long-lived branch cut from `539c28c4` on 2026-08-01 and carried **48 commits** of all BOB
+work — roadmap, kanban, delegation, sharing, and the Gen 1 → Gen 2 / Node 22 /
+firebase-functions 6 / admin 13 functions migration (`f15b822b`). It has been
+fast-forward merged into `main` and pushed; `main` and `origin/main` are level at
+`56f91c01`. Pushing to `main` triggers `auto-deploy.yml`, which is **hosting only** — no
+functions deploy, no index prune.
 
 Original plan: `/Users/jim/.claude/plans/review-the-code-base-glowing-duckling.md`
