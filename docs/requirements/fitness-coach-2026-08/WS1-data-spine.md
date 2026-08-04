@@ -116,6 +116,28 @@ The server-side equivalent, `fitnessKpiSync.js`, reads the wrong collection (2.1
 *and* the legacy `kpis` array rather than `kpisV2`, matching KPI type by substring
 of the KPI's display name (lines 192-219).
 
+### 2.6 `metric_values` is never written
+
+Worse than either of the above, and found while implementing R1.
+
+`resolveObservationSource` (`kpiResolver.ts:70`) — the **primary** path for every
+`healthkit` and `strava` KPI — reads `metric_values` via `getLatestMetricValue`,
+keyed by `metricKey`, `source` and `periodKey`. It does not query
+`metrics_workouts` at all.
+
+`upsertMetricValue` (`metricValues.ts:38`) is the only writer of that collection,
+and **nothing calls it.** Repo-wide, the only reference to the function is its own
+declaration.
+
+So the primary path always returns null, and every fitness KPI falls through to
+`resolveProfileSource`, which can read only scalar fields on `profiles` —
+`healthkitStepsToday`, `healthkitBodyFatPct`, `healthkitProteinTodayG`. The
+consequence is blunt: **no distance-based fitness KPI can resolve today.** Not
+weekly swim km, not weekly run km, not any of the targets on the phase goals.
+
+The missing piece is an aggregation step that nobody wrote: reduce
+`metrics_workouts` into per-metric, per-period rows. See R6.5.
+
 ---
 
 ## 3. Requirements
@@ -282,8 +304,28 @@ behind a flag only for goals that still carry a legacy `kpis` array.
 **R6.4** The web resolver becomes a thin client of the same result where possible,
 so there is one definition of a KPI value, not two that can disagree.
 
+**R6.5 — populate `metric_values`.** Per §2.6 the collection is never written, so
+the resolver's primary path is dead. Add the aggregation:
+
+- reduce `metrics_workouts` into rows keyed
+  `{ownerUid}__{metricKey}__{source}__{periodKey}__{sourceId}` — the id shape
+  `upsertMetricValue` already defines (`metricValues.ts:53`);
+- one row per metric, per source, per period, for each period granularity a KPI
+  can request (`daily`, `weekly`, `monthly`, `sprint`, `quarterly`, `annual` —
+  `toPeriodKey`, line 22);
+- metrics to emit initially: distance and duration per canonical activity, session
+  count per activity, zone time per zone, and total zone share;
+- set `observedAt` from the latest contributing workout and `syncedAt` from the
+  run, so the resolver's freshness logic works as designed;
+- run it in the nightly chain and after any Strava webhook or HealthKit push, so a
+  session recorded this morning is reflected today.
+
+Reuse the existing `metric_values` schema exactly; do not invent a parallel store.
+
 **Acceptance:** with the web app closed for 48 hours, `goal_kpi_metrics` is still
-current, and iOS can read a KPI value it did not compute.
+current, iOS can read a KPI value it did not compute, and a weekly swim-distance
+KPI resolves to a real number from the primary path rather than falling through to
+the profile.
 
 ### R7 — Strava sync verification
 

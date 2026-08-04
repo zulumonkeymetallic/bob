@@ -169,7 +169,12 @@ async function syncUserFitnessKpis(userId) {
 
     // 2. Load user's recent workouts (last 90 days)
     const cutoffDate = Date.now() - (90 * 24 * 60 * 60 * 1000);
-    const workoutsSnap = await db.collection('workouts')
+    // `metrics_workouts`, not `workouts`. There is no `workouts` collection — it has
+    // no rule in firestore.rules and the file has no catch-all. This query has always
+    // returned empty, so every fitness KPI resolved to 0/no-data, silently. The iOS
+    // app wrote to the same phantom name (FirestoreService.createWorkoutWithId), which
+    // is why neither side ever surfaced the mismatch.
+    const workoutsSnap = await db.collection('metrics_workouts')
       .where('ownerUid', '==', userId)
       .get();
 

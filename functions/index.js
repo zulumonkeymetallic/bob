@@ -13655,13 +13655,28 @@ exports.syncStrava = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_
 });
 
 // Retrieve HR stream for an activity and compute zone times; store on metrics_workouts doc
-async function getUserMaxHr(uid) {
+
+/**
+ * The athlete's max HR, and where it came from.
+ *
+ * The source matters as much as the number. Every zone boundary is a percentage of
+ * this value, so a guessed max produces a zone distribution that looks precise and
+ * is not — `220 - age` and a measured max can differ by 10bpm, which moves a whole
+ * band. Surfaces are expected to badge anything that is not `profile` as
+ * provisional rather than presenting it as measurement.
+ */
+async function resolveUserMaxHr(uid) {
   const prof = await admin.firestore().collection('profiles').doc(uid).get();
   const d = prof.exists ? prof.data() : {};
-  const maxHr = Number(d?.maxHr) || null;
-  if (maxHr) return maxHr;
+  const stated = Number(d?.maxHr) || null;
+  if (stated) return { maxHr: stated, source: 'profile' };
   const age = Number(d?.age || (d?.birthYear ? (new Date().getFullYear() - Number(d.birthYear)) : null)) || null;
-  return age ? Math.round(220 - age) : 190; // fallback
+  if (age) {
+    console.warn(`[maxHr] uid=${uid} has no profiles.maxHr; falling back to 220-age=${Math.round(220 - age)}`);
+    return { maxHr: Math.round(220 - age), source: 'age_estimate' };
+  }
+  console.warn(`[maxHr] uid=${uid} has neither profiles.maxHr nor an age; falling back to 190`);
+  return { maxHr: 190, source: 'default' };
 }
 
 function hrZonesFromMax(maxHr) {
@@ -13674,14 +13689,39 @@ function hrZonesFromMax(maxHr) {
   ];
 }
 
-async function enrichActivityHr(uid, activityId) {
+async function enrichActivityHr(uid, activityId, options = {}) {
   const db = admin.firestore();
   const docId = `${uid}_${activityId}`;
   const ref = db.collection('metrics_workouts').doc(docId);
   const snap = await ref.get();
   if (!snap.exists) return { ok: false, reason: 'not_found' };
   const data = snap.data();
-  if (data.hrZones && data.hrZones.z1Time_s != null) return { ok: true, reason: 'already_enriched' };
+
+  // Resolved once by the caller during a backfill; falls back to a per-activity
+  // read when this is invoked on its own.
+  const resolvedMax = Number(options.maxHr)
+    ? { maxHr: Number(options.maxHr), source: options.maxHrSource || 'profile' }
+    : await resolveUserMaxHr(uid);
+  const maxHr = resolvedMax.maxHr;
+
+  // Skip only when the stored zones were computed against the *current* max HR.
+  //
+  // This used to return early on any existing `hrZones`, which made correcting
+  // `profiles.maxHr` a no-op over history: every stored split kept whatever the old
+  // fallback produced — `220 - age`, or the hardcoded 190 — and the zone charts went
+  // on reporting a distribution nobody had measured. Passing `force` did not help
+  // either: that flag only bypassed `enrichRecentStravaHr`'s own filter, and this
+  // return still fired underneath it.
+  //
+  // `maxHrUsed` is written on every enriched document precisely so this comparison
+  // is possible. A document carrying zones but no `maxHrUsed` predates that field and
+  // is treated as stale.
+  const zonesMatchCurrentMax = data.hrZones
+    && data.hrZones.z1Time_s != null
+    && Number(data.maxHrUsed) === maxHr;
+  if (zonesMatchCurrentMax && options.force !== true) {
+    return { ok: true, reason: 'already_enriched' };
+  }
 
   const accessToken = await getStravaAccessToken(uid);
   let streams;
@@ -13708,7 +13748,6 @@ async function enrichActivityHr(uid, activityId) {
     return { ok: false, reason: 'empty_stream' };
   }
 
-  const maxHr = await getUserMaxHr(uid);
   const zones = hrZonesFromMax(maxHr);
   const totals = { z1Time_s: 0, z2Time_s: 0, z3Time_s: 0, z4Time_s: 0, z5Time_s: 0 };
   for (let i = 1; i < tm.length; i++) {
@@ -13724,6 +13763,9 @@ async function enrichActivityHr(uid, activityId) {
   const patch = {
     hrZones: totals,
     maxHrUsed: maxHr,
+    // So a surface can badge a distribution derived from a guessed max as
+    // provisional rather than presenting it as a measurement.
+    maxHrSource: resolvedMax.source,
     hrZonesUnavailable: admin.firestore.FieldValue.delete(),
     hrZonesUnavailableReason: admin.firestore.FieldValue.delete(),
     hrZonesUnavailableAt: admin.firestore.FieldValue.delete(),
@@ -13751,6 +13793,8 @@ async function enrichRecentStravaHr(uid, days = 30, options = {}) {
   console.log('[enrichStravaHR] uid', uid, 'days', safeDays, 'force', force, 'maxActivities', maxActivities);
   const since = Date.now() - safeDays * 24 * 60 * 60 * 1000;
   const db = admin.firestore();
+  // Once for the whole run, rather than a profile read per activity.
+  const { maxHr, source: maxHrSource } = await resolveUserMaxHr(uid);
   const q = await db.collection('metrics_workouts')
     .where('ownerUid', '==', uid)
     .where('provider', '==', 'strava')
@@ -13769,7 +13813,12 @@ async function enrichRecentStravaHr(uid, days = 30, options = {}) {
     if ((w.startDate || 0) < since) continue;
     if (!w.hasHeartrate && !w.avgHeartrate) continue;
     eligible++;
-    if (!force && (w.hrZones || w.hrZonesUnavailable === true)) {
+    // Zones computed against a different max HR do not count as "existing" — they
+    // are wrong, and a change to profiles.maxHr must pull them back through. Zones
+    // that could not be computed at all (private activity, no stream) stay skipped:
+    // a new max HR does not conjure a heart-rate stream.
+    const zonesMatchCurrentMax = w.hrZones && Number(w.maxHrUsed) === maxHr;
+    if (!force && (zonesMatchCurrentMax || w.hrZonesUnavailable === true)) {
       skippedExisting++;
       continue;
     }
@@ -13777,11 +13826,11 @@ async function enrichRecentStravaHr(uid, days = 30, options = {}) {
     scanned++;
     const actId = String(w.stravaActivityId || '').trim();
     if (!actId) continue;
-    const r = await enrichActivityHr(uid, actId).catch(() => null);
+    const r = await enrichActivityHr(uid, actId, { maxHr, maxHrSource, force }).catch(() => null);
     if (r?.ok) enriched++;
   }
   const remaining = Math.max(0, eligible - skippedExisting - scanned);
-  return { ok: true, enriched, scanned, eligible, skippedExisting, remaining };
+  return { ok: true, enriched, scanned, eligible, skippedExisting, remaining, maxHr, maxHrSource };
 }
 
 // Enrich recent Strava runs with HR zone breakdown
