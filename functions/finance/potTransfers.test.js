@@ -220,3 +220,39 @@ describe('account transfers (the generic replacement for hardcoding merchants)',
     expect(accountTotals.netPence).toBe(45000);
   });
 });
+
+describe('saving is not spending', () => {
+  const { aggregateTransactions } = require('./dashboard');
+  const { DEFAULT_FINANCE_CATEGORIES } = require('./categories');
+
+  // The real catalogue, not the empty index the pot tests use: these assertions are about
+  // category KEYS resolving to buckets, which needs the catalogue present.
+  const fullIndex = buildCategoryIndex(DEFAULT_FINANCE_CATEGORIES);
+  const agg = (txs) => aggregateTransactions(txs, null, null, fullIndex, potIndex);
+
+  test('investment and savings outflows leave totalSpend and land in totalSaved', () => {
+    // These arrive already hand-categorised, so the classification was never wrong —
+    // only totalSpend, which excluded income buckets but not saving ones.
+    const result = agg([
+      { userCategoryKey: 'investment_traditional', amountMinor: -100000, createdISO: '2026-07-01T00:00:00Z' },
+      { description: 'TESCO', amountMinor: -1899, createdISO: '2026-07-02T00:00:00Z' },
+    ]);
+    expect(Math.abs(result.totalSpend)).toBe(1899);
+    expect(Math.abs(result.totalSaved)).toBe(100000);
+  });
+
+  test('income is still excluded from both', () => {
+    const result = agg([
+      { userCategoryKey: 'salary', amountMinor: 500000, createdISO: '2026-07-01T00:00:00Z' },
+    ]);
+    expect(result.totalSpend).toBe(0);
+    expect(result.totalSaved).toBe(0);
+  });
+
+  test('saved money is broken down by bucket', () => {
+    const result = agg([
+      { userCategoryKey: 'investment_traditional', amountMinor: -50000, createdISO: '2026-07-01T00:00:00Z' },
+    ]);
+    expect(Object.keys(result.savedByBucket)).toContain('investment');
+  });
+});

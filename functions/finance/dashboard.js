@@ -23,6 +23,12 @@ const { DEFAULT_FINANCE_CATEGORIES } = require('./categories');
 // the default keeps every existing call site working unchanged.
 const DEFAULT_CATEGORY_INDEX = buildCategoryIndex(DEFAULT_FINANCE_CATEGORIES);
 
+/** Money that moved somewhere it still belongs to the user. Not consumption. */
+const SAVING_BUCKETS = ['short_saving', 'long_saving', 'investment'];
+
+/** Buckets that must never land in totalSpend: income arriving, and saving departing. */
+const NON_SPEND_BUCKETS = ['income', 'net_salary', 'irregular_income', ...SAVING_BUCKETS];
+
 /**
  * Simple static mapping of category keys to theme names.
  * In a real implementation this could be stored in Firestore or a config file.
@@ -93,6 +99,8 @@ function toAmountMinor(tx) {
 function aggregateTransactions(transactions, startDate, endDate, categoryIndex = DEFAULT_CATEGORY_INDEX, potIndex = null, transferAccountIndex = null) {
   const result = {
     totalSpend: 0,
+    totalSaved: 0,
+    savedByBucket: {},
     spendByBucket: {},
     spendByCategory: {},
     spendByTheme: {},
@@ -133,13 +141,24 @@ function aggregateTransactions(transactions, startDate, endDate, categoryIndex =
         // effective behaviour rather than the written one.)
         if (bucketNormalized === 'bank_transfer') return;
 
-        // Only consider spend (negative amounts) for most aggregates
-        if (amount < 0 && !['income', 'net_salary', 'irregular_income'].includes(bucketNormalized)) {
+        // Only consider spend (negative amounts) for most aggregates.
+        //
+        // Saving and investing are not spending: the money is still yours, it has just moved
+        // somewhere it earns. Counting them inflated all-history spend by £24,429 — money
+        // the user had ALREADY hand-categorised as investment_traditional and retirement,
+        // so the classification was right and only this total was wrong. They are reported
+        // as result.totalSaved instead, which is the savings rate.
+        if (amount < 0 && !NON_SPEND_BUCKETS.includes(bucketNormalized)) {
             result.totalSpend += amount;
 
             // Track daily spend for burn-down
             const dayKey = txDate.toISOString().split('T')[0];
             result.dailySpend[dayKey] = (result.dailySpend[dayKey] || 0) + Math.abs(amount);
+        }
+
+        if (amount < 0 && SAVING_BUCKETS.includes(bucketNormalized)) {
+            result.totalSaved += amount;
+            result.savedByBucket[bucketNormalized] = (result.savedByBucket[bucketNormalized] || 0) + amount;
         }
 
         // Bucket aggregation
