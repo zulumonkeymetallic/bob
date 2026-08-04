@@ -525,6 +525,9 @@ const STRAVA_REDIRECT_HOST = defineSecret("STRAVA_REDIRECT_HOST");
 // Monzo integration secrets
 const MONZO_CLIENT_ID = defineSecret("MONZO_CLIENT_ID");
 const MONZO_CLIENT_SECRET = defineSecret("MONZO_CLIENT_SECRET");
+// Application-level encryption key for the Monzo refresh token, as an alternative
+// to GCP KMS. Set with: firebase functions:secrets:set MONZO_TOKEN_ENCRYPTION_KEY
+const MONZO_TOKEN_ENCRYPTION_KEY = defineSecret("MONZO_TOKEN_ENCRYPTION_KEY");
 const MONZO_WEBHOOK_SECRET = defineSecret("MONZO_WEBHOOK_SECRET");
 const STRAVA_WEBHOOK_VERIFY_TOKEN = defineSecret("STRAVA_WEBHOOK_VERIFY_TOKEN");
 // No secrets required for Parkrun
@@ -3968,24 +3971,73 @@ function getMonzoKmsKeyName() {
   }
   return null;
 }
+/**
+ * Derive a 32-byte AES key from the MONZO_TOKEN_ENCRYPTION_KEY secret. Accepts a
+ * raw 64-char hex key or any passphrase (hashed to 32 bytes).
+ */
+function getMonzoLocalKey() {
+  const raw = (process.env.MONZO_TOKEN_ENCRYPTION_KEY || '').trim();
+  if (!raw) return null;
+  if (/^[0-9a-f]{64}$/i.test(raw)) return Buffer.from(raw, 'hex');
+  return crypto.createHash('sha256').update(raw).digest();
+}
+
+/**
+ * Encrypt the Monzo refresh token at rest.
+ *
+ * Two backends. GCP KMS is preferred when MONZO_KMS_KEY is set, but it was never
+ * provisioned — and because this runs mid-OAuth, an unconfigured KMS meant the
+ * callback threw AFTER Monzo had already burned the single-use authorisation
+ * code, so every reconnect attempt failed at the last step.
+ *
+ * The local backend (AES-256-GCM under a Firebase secret) needs no gcloud and no
+ * KMS provisioning. Ciphertext is prefixed 'v1:' so decryptMonzoSecret can tell
+ * the two formats apart; bare base64 is assumed to be KMS, as before.
+ */
 async function encryptMonzoSecret(plainText) {
   if (!plainText) return null;
+
   const keyName = getMonzoKmsKeyName();
-  if (!keyName) {
-    throw new Error('MONZO_KMS_KEY not configured. Set MONZO_KMS_KEY to the full KMS resource path.');
+  if (keyName) {
+    const client = getMonzoKmsClient();
+    const [result] = await client.encrypt({
+      name: keyName,
+      plaintext: Buffer.from(String(plainText), 'utf8'),
+    });
+    if (!result.ciphertext) {
+      throw new Error('Monzo token encryption failed (no ciphertext)');
+    }
+    return Buffer.from(result.ciphertext).toString('base64');
   }
-  const client = getMonzoKmsClient();
-  const [result] = await client.encrypt({
-    name: keyName,
-    plaintext: Buffer.from(String(plainText), 'utf8'),
-  });
-  if (!result.ciphertext) {
-    throw new Error('Monzo token encryption failed (no ciphertext)');
+
+  const localKey = getMonzoLocalKey();
+  if (localKey) {
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', localKey, iv);
+    const enc = Buffer.concat([cipher.update(String(plainText), 'utf8'), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    return `v1:${iv.toString('base64')}:${tag.toString('base64')}:${enc.toString('base64')}`;
   }
-  return Buffer.from(result.ciphertext).toString('base64');
+
+  throw new Error(
+    'No Monzo token encryption configured. Set MONZO_TOKEN_ENCRYPTION_KEY '
+    + '(firebase functions:secrets:set MONZO_TOKEN_ENCRYPTION_KEY), or MONZO_KMS_KEY '
+    + 'to a full KMS resource path.'
+  );
 }
 async function decryptMonzoSecret(cipherText) {
   if (!cipherText) return null;
+
+  // 'v1:' marks the local AES-256-GCM format; anything else is KMS ciphertext.
+  if (String(cipherText).startsWith('v1:')) {
+    const localKey = getMonzoLocalKey();
+    if (!localKey) throw new Error('MONZO_TOKEN_ENCRYPTION_KEY not configured; cannot decrypt stored token.');
+    const [, ivB64, tagB64, dataB64] = String(cipherText).split(':');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', localKey, Buffer.from(ivB64, 'base64'));
+    decipher.setAuthTag(Buffer.from(tagB64, 'base64'));
+    return Buffer.concat([decipher.update(Buffer.from(dataB64, 'base64')), decipher.final()]).toString('utf8');
+  }
+
   const keyName = getMonzoKmsKeyName();
   if (!keyName) {
     throw new Error('MONZO_KMS_KEY not configured. Set MONZO_KMS_KEY to the full KMS resource path.');
@@ -4931,7 +4983,9 @@ async function getMonzoAccessToken(uid) {
 }
 
 // ===== Monzo: list accounts and store basics
-exports.monzoListAccounts = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+exports.monzoListAccounts = httpsV2.onCall({
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
+}, async (req) => {
   const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const access = await getMonzoAccessToken(uid);
   const res = await fetch('https://api.monzo.com/accounts', { headers: { Authorization: `Bearer ${access}` } });
@@ -4949,7 +5003,9 @@ exports.monzoListAccounts = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CL
 });
 
 // ===== Monzo: create pot (callable)
-exports.monzoCreatePot = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+exports.monzoCreatePot = httpsV2.onCall({
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
+}, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const name = String(req?.data?.name || '').trim();
@@ -5019,7 +5075,9 @@ exports.monzoCreatePot = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIEN
 });
 
 // ===== Monzo: sync transactions for account
-exports.monzoSyncTransactions = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+exports.monzoSyncTransactions = httpsV2.onCall({
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
+}, async (req) => {
   const uid = req?.auth?.uid; if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   const accountId = String(req?.data?.accountId || '');
   const since = req?.data?.since ? new Date(req.data.since).toISOString() : undefined;
@@ -5193,7 +5251,7 @@ exports.monzoOAuthStart = httpsV2.onRequest({
 
 // ===== Monzo OAuth Callback
 exports.monzoOAuthCallback = httpsV2.onRequest({
-  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET],
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
   invoker: 'public',
   // See monzoOAuthStart. A failure here costs the user a whole re-authorisation,
   // because Monzo authorisation codes are single-use.
@@ -5437,7 +5495,9 @@ async function monzoApi(accessToken, path, query = {}) {
 }
 
 // Register a Monzo webhook for an account (callable)
-exports.monzoRegisterWebhook = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+exports.monzoRegisterWebhook = httpsV2.onCall({
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
+}, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const accountId = String(req.data?.accountId || '').trim();
@@ -5529,7 +5589,9 @@ exports.monzoWebhook = httpsV2.onRequest({ secrets: [MONZO_WEBHOOK_SECRET], invo
 });
 
 // Callable: revoke Monzo access (delete tokens, attempt token revocation)
-exports.revokeMonzoAccess = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+exports.revokeMonzoAccess = httpsV2.onCall({
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
+}, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const db = admin.firestore();
@@ -5717,7 +5779,9 @@ exports.monzoBackstopSync = schedulerV2.onSchedule('every 15 minutes', async () 
 });
 
 // Budget transfer plan/execute (test mode caps amounts to £0.01 and can be dry-run)
-exports.monzoTransferPlan = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+exports.monzoTransferPlan = httpsV2.onCall({
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
+}, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const dryRun = !!req.data?.dryRun;
@@ -5866,7 +5930,9 @@ exports.monzoTransferPlan = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CL
   return { ok: true, plan, transfers, executed };
 });
 
-exports.processMonzoSyncJob = firestoreV2.onDocumentCreated('monzo_sync_jobs/{jobId}', { secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (event) => {
+exports.processMonzoSyncJob = firestoreV2.onDocumentCreated('monzo_sync_jobs/{jobId}', {
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
+}, async (event) => {
   const jobRef = event?.data?.ref;
   const initialData = event?.data?.data() || {};
   const uid = initialData.ownerUid;
@@ -5925,7 +5991,9 @@ exports.processMonzoSyncJob = firestoreV2.onDocumentCreated('monzo_sync_jobs/{jo
   }
 });
 
-exports.syncMonzo = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+exports.syncMonzo = httpsV2.onCall({
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
+}, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
 
@@ -6006,7 +6074,9 @@ exports.syncMonzo = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SEC
   }
 });
 
-exports.updateMonzoTransactionCategory = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+exports.updateMonzoTransactionCategory = httpsV2.onCall({
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
+}, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const transactionId = String(req.data?.transactionId || '').trim();
@@ -6039,7 +6109,9 @@ exports.updateMonzoTransactionCategory = httpsV2.onCall({ secrets: [MONZO_CLIENT
   return { ok: true };
 });
 
-exports.recomputeMonzoAnalytics = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+exports.recomputeMonzoAnalytics = httpsV2.onCall({
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
+}, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const analytics = await runMonzoAnalytics(uid, { reason: 'manual_recompute' });
@@ -6077,7 +6149,9 @@ async function applyMappingToExisting(uid, merchantKey, categoryType, categoryKe
 }
 
 // Upsert a mapping for a merchant (auto-categorise going forward)
-exports.setMerchantMapping = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+exports.setMerchantMapping = httpsV2.onCall({
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
+}, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const merchantName = String(req.data?.merchantName || req.data?.merchant || req.data?.name || '').trim();
@@ -6126,7 +6200,9 @@ exports.setMerchantMapping = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_C
   return { ok: true, merchantKey, updated };
 });
 
-exports.setMonzoSubscriptionOverride = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+exports.setMonzoSubscriptionOverride = httpsV2.onCall({
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
+}, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const merchantKey = String(req.data?.merchantKey || '').trim();
@@ -6153,7 +6229,9 @@ exports.setMonzoSubscriptionOverride = httpsV2.onCall({ secrets: [MONZO_CLIENT_I
   return { ok: true, merchantKey };
 });
 
-exports.setTransactionCategoryOverride = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+exports.setTransactionCategoryOverride = httpsV2.onCall({
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
+}, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const transactionId = String(req.data?.transactionId || '').trim();
@@ -6199,7 +6277,9 @@ exports.setTransactionCategoryOverride = httpsV2.onCall({ secrets: [MONZO_CLIENT
 });
 
 // Bulk upsert merchant mappings from CSV or UI array
-exports.bulkUpsertMerchantMappings = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+exports.bulkUpsertMerchantMappings = httpsV2.onCall({
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
+}, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const rows = Array.isArray(req.data?.rows) ? req.data.rows : [];
@@ -6248,7 +6328,9 @@ exports.bulkUpsertMerchantMappings = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID,
   return { ok: true, upserts, updated };
 });
 
-exports.importMerchantMappingsCsv = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+exports.importMerchantMappingsCsv = httpsV2.onCall({
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
+}, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const csvText = String(req.data?.csv || '').trim();
@@ -6339,7 +6421,9 @@ exports.importMerchantMappingsCsv = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, 
 });
 
 // Explicit apply (all or one merchant)
-exports.applyMerchantMappings = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+exports.applyMerchantMappings = httpsV2.onCall({
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
+}, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const merchantKeyIn = String(req.data?.merchantKey || '').trim();
@@ -6364,7 +6448,9 @@ exports.applyMerchantMappings = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZ
 });
 
 // Backfill merchantKey for older transactions (run once per user if needed)
-exports.backfillMerchantKeys = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+exports.backfillMerchantKeys = httpsV2.onCall({
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
+}, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const db = admin.firestore();
@@ -6389,7 +6475,9 @@ exports.backfillMerchantKeys = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO
   return { ok: true, updated };
 });
 
-exports.generateMonzoAuditReport = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+exports.generateMonzoAuditReport = httpsV2.onCall({
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
+}, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const analytics = await runMonzoAnalytics(uid, { reason: 'audit_report' });
@@ -7565,7 +7653,9 @@ async function syncMonzoDataForUser(uid, { since, fullRefresh } = {}) {
 }
 
 // ===== Manual Monzo Sync (User-triggered)
-exports.syncMonzoNow = httpsV2.onCall({ secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET] }, async (req) => {
+exports.syncMonzoNow = httpsV2.onCall({
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
+}, async (req) => {
   const uid = req.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Must be signed in');
 
@@ -7686,7 +7776,7 @@ exports.syncMonzoTwiceDaily = schedulerV2.onSchedule("every 12 hours", async (ev
 exports.syncMonzoHourly = schedulerV2.onSchedule({
   schedule: 'every 1 hours',
   timeZone: 'UTC',
-  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET]
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY]
 }, async () => {
   const db = admin.firestore();
   console.log('Starting hourly Monzo sync...');
