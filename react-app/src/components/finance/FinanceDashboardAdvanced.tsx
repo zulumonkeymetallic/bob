@@ -225,6 +225,7 @@ const FinanceDashboardAdvanced: React.FC = () => {
     const [windowDays, setWindowDays] = useState(5);
     const [amountTolerancePence, setAmountTolerancePence] = useState(150);
     const [convertingActionId, setConvertingActionId] = useState<string | null>(null);
+    const [dismissingActionId, setDismissingActionId] = useState<string | null>(null);
 
     const [analysisDimension, setAnalysisDimension] = useState<AnalysisDimension>('bucket');
     const [analysisChartType, setAnalysisChartType] = useState<AnalysisChartType>('trend');
@@ -534,6 +535,25 @@ const FinanceDashboardAdvanced: React.FC = () => {
         }
     };
 
+    /** Dismissals are permanent — the backend keeps a tombstone so the suggestion
+     *  is not regenerated on the next run. */
+    const handleDismissAction = async (actionId: string) => {
+        if (!actionId) return;
+        setDismissingActionId(actionId);
+        setError(null);
+        setOpsMessage(null);
+        try {
+            await httpsCallable(functions, 'dismissFinanceAction')({ actionId });
+            await fetchData();
+            setOpsMessage('Suggestion dismissed — it will not come back.');
+        } catch (err: any) {
+            console.error(err);
+            setError(err?.message || 'Failed to dismiss the suggestion');
+        } finally {
+            setDismissingActionId(null);
+        }
+    };
+
     const resetManualForm = () => {
         setEditingManualAccountId(null);
         setManualForm({
@@ -758,7 +778,35 @@ const FinanceDashboardAdvanced: React.FC = () => {
         .slice(0, 5)
         .map(([key]) => key);
 
-    const filteredTotalSpend = spendTransactions.reduce((sum: number, tx: any) => sum + Math.abs(txAmountMinor(tx)) / 100, 0);
+    /**
+     * Headline spend for the selected range.
+     *
+     * This used to be a sum over `spendTransactions`, which derives from
+     * `data.recentTransactions` — and dashboard.js caps that at 100 rows. So the
+     * "Total Spend" card was the sum of the most recent hundred transactions,
+     * while the "Actual Spend" card next to it came from the server reading all
+     * 8,471. That is why the dashboard showed two different spend totals side by
+     * side (£1,241.90 vs £765.04).
+     *
+     * The server already computes the correct full-range figure in
+     * aggregateTransactions; the frontend simply never read it. Use it whenever
+     * no drill-down is active. With a filter applied the server total no longer
+     * describes what is on screen, so fall back to the local sum — which is then
+     * correct, because a drill-down is always a subset of the loaded preview.
+     */
+    const hasActiveDrilldown = Boolean(chartFilter.type) || cardFilter !== 'all';
+    const serverTotalSpendPence = Number((data as any)?.totalSpend);
+    const localTotalSpend = spendTransactions.reduce(
+        (sum: number, tx: any) => sum + Math.abs(txAmountMinor(tx)) / 100,
+        0,
+    );
+    const filteredTotalSpend = (!hasActiveDrilldown && Number.isFinite(serverTotalSpendPence))
+        ? Math.abs(serverTotalSpendPence) / 100
+        : localTotalSpend;
+    /** True when the preview cap means the on-screen rows understate the range. */
+    const previewIsTruncated = !hasActiveDrilldown
+        && Number.isFinite(serverTotalSpendPence)
+        && Math.abs(Math.abs(serverTotalSpendPence) / 100 - localTotalSpend) > 1;
 
     // Merchant distribution from spend transactions only.
     const merchantTopDataEarly = spendTransactions
@@ -827,10 +875,24 @@ const FinanceDashboardAdvanced: React.FC = () => {
         return local;
     })();
 
-    const distributionCenterValue = useMemo(() => {
-        const total = distributionSource.reduce((sum: number, entry: any) => sum + Number(entry?.value || 0), 0);
-        return formatCurrency(total);
-    }, [distributionSource]);
+    /**
+     * The centre of the distribution donut sums only the slices it draws — the
+     * top ten. It was labelled the same way as the headline Total Spend, so it
+     * read as a third, disagreeing spend figure (£1,200.31 against £1,241.90).
+     * Show the range total instead, and let the caption say what the ring covers.
+     */
+    const distributionTop10Total = useMemo(
+        () => distributionSource.reduce((sum: number, entry: any) => sum + Number(entry?.value || 0), 0),
+        [distributionSource],
+    );
+    const distributionCenterValue = useMemo(
+        () => formatCurrency(filteredTotalSpend),
+        [filteredTotalSpend, formatCurrency],
+    );
+    const distributionCoveragePct = useMemo(() => {
+        if (!filteredTotalSpend) return null;
+        return Math.min(100, Math.round((distributionTop10Total / filteredTotalSpend) * 100));
+    }, [distributionTop10Total, filteredTotalSpend]);
 
     const distributionOption = {
         tooltip: { trigger: 'item', valueFormatter: (v: number) => `£${v}` },
@@ -853,7 +915,11 @@ const FinanceDashboardAdvanced: React.FC = () => {
                 left: 'center',
                 top: '49%',
                 style: {
-                    text: viewMode === 'merchant' ? 'Top merchants' : viewMode === 'bucket' ? 'Top buckets' : 'Top categories',
+                    // The centre now shows the range total, so the caption has to
+                    // say how much of it the ring actually accounts for.
+                    text: distributionCoveragePct !== null && distributionCoveragePct < 100
+                        ? `total · ring shows ${distributionCoveragePct}%`
+                        : 'total spend',
                     textAlign: 'center',
                     fill: isDark ? 'rgba(255,255,255,0.62)' : '#6b7280',
                     fontSize: 11,
@@ -1108,7 +1174,12 @@ const FinanceDashboardAdvanced: React.FC = () => {
         __merchantKey: toKeyText(item.merchantKey || item.merchantName, `merchant-${index}`),
         __merchantName: toText(item.merchantName || item.merchantKey, 'Unknown merchant'),
     }));
-    const actions = (enhancementData?.actions ?? EMPTY_LIST).map((action: any) => ({
+    // Dismissed actions are kept in the stored array as tombstones, so that
+    // generateFinanceActionInsights knows not to regenerate them. They must never
+    // reach the UI or the savings total.
+    const actions = (enhancementData?.actions ?? EMPTY_LIST)
+        .filter((action: any) => action?.status !== 'dismissed')
+        .map((action: any) => ({
         ...action,
         __title: toText(action.title || action.merchantName || action.merchantKey, 'Finance action'),
         __reason: toText(action.reason, 'No detail provided.'),
@@ -1519,6 +1590,19 @@ const FinanceDashboardAdvanced: React.FC = () => {
     }, [compareYoY, data, yoyData]);
 
     const totalActionSavings = actions.reduce((sum: number, action: any) => sum + Number(action.estimatedMonthlySavings || 0), 0);
+
+    /**
+     * The raw sum is the LLM's per-action estimates added together, with nothing
+     * stopping it exceeding what is actually spent — it was showing £1,339/month
+     * of "savings" against £1,242 of total spend, which discredits the whole card.
+     * You cannot save more than you discretionarily spend, so cap it there and say
+     * so when the cap bites.
+     */
+    const discretionarySpendForCap = Math.abs(Number(data?.totalDiscretionarySpend) || 0) / 100;
+    const cappedActionSavings = discretionarySpendForCap > 0
+        ? Math.min(totalActionSavings, discretionarySpendForCap)
+        : totalActionSavings;
+    const actionSavingsWereCapped = cappedActionSavings < totalActionSavings - 0.5;
     const anomalyRows = Array.isArray(data?.anomalyTransactions) ? data.anomalyTransactions : EMPTY_LIST;
     const anomalyCount = anomalyRows.length;
     const anomalySpend = anomalyRows.reduce((sum: number, tx: any) => sum + Math.abs(txAmountMinor(tx)), 0);
@@ -1682,6 +1766,32 @@ const FinanceDashboardAdvanced: React.FC = () => {
 
     const renderOverview = () => (
         <>
+            {/* Data quality first. Every number below is computed from categorised
+                transactions, so a high uncategorised rate makes the whole page
+                misleading rather than merely incomplete — that deserves a banner,
+                not a stat card sitting quietly among nine others. */}
+            {uncategorizedPct >= 15 && (
+                <Alert variant={uncategorizedPct >= 30 ? 'danger' : 'warning'} className="d-flex flex-wrap justify-content-between align-items-center gap-2">
+                    <span>
+                        <strong>{uncategorizedPct.toFixed(0)}% of spend is uncategorised</strong>
+                        {' '}({(data?.uncategorizedCount ?? 0).toLocaleString()} of {classifiableCount.toLocaleString()} transactions).
+                        Budgets, the mandatory/discretionary split and the coach are all computed
+                        from categories, so treat the figures below as indicative until this drops.
+                    </span>
+                    <Button size="sm" variant={uncategorizedPct >= 30 ? 'light' : 'outline-dark'} onClick={() => handleCardFilter('missingCategory')}>
+                        Categorise them
+                    </Button>
+                </Alert>
+            )}
+
+            {/* The transaction preview is capped server-side, so say when the
+                headline covers more than the rows on screen. */}
+            {previewIsTruncated && (
+                <div className="small text-muted mb-2">
+                    Totals cover the full date range; the table below shows the most recent 100 transactions.
+                </div>
+            )}
+
             <Row className="g-3 mb-3">
                 <Col xxl={2} xl={3} lg={4} md={6}>
                     <div
@@ -1762,9 +1872,13 @@ const FinanceDashboardAdvanced: React.FC = () => {
                     >
                         <PremiumCard icon={Sparkles} title="Actions Potential" className="finance-summary-card">
                             <div className="finance-summary-value" style={{ color: colors.success }}>
-                                {formatCurrency(totalActionSavings)}
+                                {formatCurrency(cappedActionSavings)}
                             </div>
-                            <p className="text-muted mb-0 mt-1 finance-summary-caption">Estimated monthly savings ({actions.length} actions)</p>
+                            <p className="text-muted mb-0 mt-1 finance-summary-caption">
+                                {actionSavingsWereCapped
+                                    ? `Capped at discretionary spend (${actions.length} actions)`
+                                    : `Estimated monthly savings (${actions.length} actions)`}
+                            </p>
                         </PremiumCard>
                     </div>
                 </Col>
@@ -2615,14 +2729,25 @@ const FinanceDashboardAdvanced: React.FC = () => {
                                                         Open story
                                                     </a>
                                                 ) : (
-                                                    <Button
-                                                        size="sm"
-                                                        variant="primary"
-                                                        onClick={() => handleConvertActionToStory(action.id)}
-                                                        disabled={convertingActionId === action.id}
-                                                    >
-                                                        {convertingActionId === action.id ? 'Converting…' : 'Convert to story'}
-                                                    </Button>
+                                                    <div className="d-flex gap-2 justify-content-end">
+                                                        <Button
+                                                            size="sm"
+                                                            variant="primary"
+                                                            onClick={() => handleConvertActionToStory(action.id)}
+                                                            disabled={convertingActionId === action.id}
+                                                        >
+                                                            {convertingActionId === action.id ? 'Converting…' : 'Convert to story'}
+                                                        </Button>
+                                                        <Button
+                                                            size="sm"
+                                                            variant="outline-secondary"
+                                                            title="Dismiss permanently — this suggestion will not be generated again"
+                                                            onClick={() => handleDismissAction(action.id)}
+                                                            disabled={dismissingActionId === action.id}
+                                                        >
+                                                            {dismissingActionId === action.id ? 'Dismissing…' : 'Dismiss'}
+                                                        </Button>
+                                                    </div>
                                                 )}
                                             </td>
                                         </tr>

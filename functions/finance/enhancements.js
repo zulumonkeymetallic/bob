@@ -405,6 +405,98 @@ function normalizeBucket(bucketRaw) {
   return narrowToV4(bucketRaw) || 'unknown';
 }
 
+/**
+ * Is this merchant a LIVE recurring charge, or just one that used to be?
+ *
+ * The action engine previously trusted `merchantSummary.isRecurring`, an all-time
+ * aggregate with no recency test — so a CrossFit membership cancelled in December
+ * 2025 still presented as a cancellable subscription, and its notional saving was
+ * counted towards the headline "Actions Potential".
+ *
+ * A charge counts as live only if, across the last `windowMonths` months:
+ *   - it appears in at least `windowMonths - 1` of them (one skip tolerated for a
+ *     billing date that straddles a month boundary),
+ *   - it appears in the most recent full month (the actual cancellation test),
+ *   - amounts sit within ±`amountTolerancePct` of the median, and
+ *   - the gaps between charges sit within ±`dayToleranceDays` of the median.
+ *
+ * Returns { isLive, reason, monthsSeen, medianAmount, medianGapDays }.
+ */
+function assessRecurringActivity(transactions, options = {}) {
+  const {
+    now = Date.now(),
+    windowMonths = 6,
+    amountTolerancePct = 10,
+    dayToleranceDays = 5,
+  } = options;
+
+  const DAY = 24 * 60 * 60 * 1000;
+  const windowStart = now - windowMonths * 30.44 * DAY;
+
+  const dated = (transactions || [])
+    .map((tx) => ({
+      ms: timestampToMs(tx.createdAt, tx.createdISO),
+      amount: Math.abs(normalizeAmountMinor(tx)) / 100,
+    }))
+    .filter((tx) => tx.ms && tx.ms >= windowStart && tx.amount > 0)
+    .sort((a, b) => a.ms - b.ms);
+
+  if (dated.length < 2) {
+    return {
+      isLive: false, reason: 'too_few_charges', monthsSeen: dated.length, medianAmount: null, medianGapDays: null,
+    };
+  }
+
+  const median = (values) => {
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  };
+
+  const monthsSeen = new Set(dated.map((tx) => monthKeyFromMs(tx.ms)));
+
+  // Cancelled charges fail here: nothing in the most recent complete month.
+  const lastFullMonth = monthKeyFromMs(now - 30 * DAY);
+  if (!monthsSeen.has(lastFullMonth) && !monthsSeen.has(monthKeyFromMs(now))) {
+    return {
+      isLive: false,
+      reason: 'no_recent_charge',
+      monthsSeen: monthsSeen.size,
+      medianAmount: median(dated.map((t) => t.amount)),
+      medianGapDays: null,
+    };
+  }
+
+  if (monthsSeen.size < windowMonths - 1) {
+    return {
+      isLive: false,
+      reason: 'not_every_month',
+      monthsSeen: monthsSeen.size,
+      medianAmount: median(dated.map((t) => t.amount)),
+      medianGapDays: null,
+    };
+  }
+
+  const amounts = dated.map((tx) => tx.amount);
+  const medianAmount = median(amounts);
+  const amountBand = medianAmount * (amountTolerancePct / 100);
+  const amountsConsistent = amounts.every((a) => Math.abs(a - medianAmount) <= amountBand);
+
+  const gaps = [];
+  for (let i = 1; i < dated.length; i += 1) gaps.push((dated[i].ms - dated[i - 1].ms) / DAY);
+  const medianGapDays = median(gaps);
+  const cadenceConsistent = gaps.every((g) => Math.abs(g - medianGapDays) <= dayToleranceDays);
+
+  if (!amountsConsistent) {
+    return { isLive: false, reason: 'amount_varies', monthsSeen: monthsSeen.size, medianAmount, medianGapDays };
+  }
+  if (!cadenceConsistent) {
+    return { isLive: false, reason: 'cadence_varies', monthsSeen: monthsSeen.size, medianAmount, medianGapDays };
+  }
+
+  return { isLive: true, reason: 'live', monthsSeen: monthsSeen.size, medianAmount, medianGapDays };
+}
+
 function buildActionId(action) {
   return crypto
     .createHash('sha1')
@@ -869,18 +961,42 @@ const recomputeDebtServiceBreakdown = httpsV2.onCall({ region: FUNCTION_REGION }
   return { ok: true, source, perMonth, totals };
 });
 
-const generateFinanceActionInsights = httpsV2.onCall({ region: FUNCTION_REGION, secrets: [OPENROUTER_API_KEY_SECRET] }, async (req) => {
+const generateFinanceActionInsights = httpsV2.onCall({
+  region: FUNCTION_REGION,
+  secrets: [OPENROUTER_API_KEY_SECRET],
+}, async (req) => {
   if (!req?.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const source = normalizeExternalSource(req.data?.source || 'barclays');
   const maxActions = Math.max(5, Math.min(Number(req.data?.maxActions || 12), 25));
 
   const db = admin.firestore();
-  const [summarySnap, debtSnap, existingSnap] = await Promise.all([
+  const RECURRENCE_WINDOW_DAYS = 200;
+  const recurrenceStartISO = new Date(Date.now() - RECURRENCE_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const [summarySnap, debtSnap, existingSnap, recentTxSnap] = await Promise.all([
     db.collection('monzo_budget_summary').doc(uid).get(),
     db.collection('finance_debt_service').doc(uid).get(),
     db.collection('finance_action_insights').doc(uid).get(),
+    // Bounded read — only what the six-month recurrence test needs. Uses the
+    // (ownerUid, createdISO ASC) composite index.
+    db.collection('monzo_transactions')
+      .where('ownerUid', '==', uid)
+      .where('createdISO', '>=', recurrenceStartISO)
+      .get(),
   ]);
+
+  // Group the recent window by merchant so each candidate can be tested for
+  // whether it is still actually being charged.
+  const recentByMerchant = new Map();
+  recentTxSnap.docs.forEach((doc) => {
+    const tx = doc.data() || {};
+    if (normalizeAmountMinor(tx) >= 0) return;
+    const key = tx.merchantKey
+      || normaliseMerchantName(tx.merchant?.name || tx.counterparty?.name || tx.description || '');
+    if (!key) return;
+    if (!recentByMerchant.has(key)) recentByMerchant.set(key, []);
+    recentByMerchant.get(key).push(tx);
+  });
   const summary = summarySnap.exists ? (summarySnap.data() || {}) : {};
   const debt = debtSnap.exists ? (debtSnap.data() || {}) : {};
   const existingActions = Array.isArray(existingSnap.data()?.actions) ? existingSnap.data().actions : [];
@@ -902,10 +1018,16 @@ const generateFinanceActionInsights = httpsV2.onCall({ region: FUNCTION_REGION, 
     const category = normalizeBucket(merchant.primaryCategoryType || 'optional');
     if (!Number.isFinite(monthlySpend) || monthlySpend < 8) continue;
 
+    // Never suggest cancelling something that is no longer being charged.
+    // merchant.isRecurring is an all-time flag; this is the live test.
+    const activity = assessRecurringActivity(recentByMerchant.get(merchantKey) || []);
+    if (!activity.isLive) continue;
+    const isLiveRecurring = true;
+
     let type = 'review';
-    if (category === 'optional' && merchant.isRecurring && monthlySpend >= 20) type = 'cancel';
+    if (category === 'optional' && isLiveRecurring && monthlySpend >= 20) type = 'cancel';
     else if (category === 'optional') type = 'reduce';
-    else if (category === 'mandatory' && merchant.isRecurring && monthlySpend >= 30) type = 'review';
+    else if (category === 'mandatory' && isLiveRecurring && monthlySpend >= 30) type = 'review';
     if (type === 'review' && category === 'income') continue;
 
     const estimatedMonthlySavings = type === 'cancel'
@@ -924,9 +1046,16 @@ const generateFinanceActionInsights = httpsV2.onCall({ region: FUNCTION_REGION, 
         : type === 'reduce'
           ? `Reduce spend with ${merchantName}`
           : `Review ${merchantName} charges`,
-      reason: `~£${monthlySpend.toFixed(2)}/month (${months} month pattern, ${category} spend).`,
+      reason: `~£${activity.medianAmount.toFixed(2)} every ~${Math.round(activity.medianGapDays)} days, `
+        + `charged in ${activity.monthsSeen} of the last 6 months (${category} spend).`,
       estimatedMonthlySavings: Number(estimatedMonthlySavings.toFixed(2)),
       confidence,
+      // Provenance for the live-recurrence test, so a wrong suggestion is diagnosable.
+      recurrence: {
+        monthsSeen: activity.monthsSeen,
+        medianAmount: Number(activity.medianAmount.toFixed(2)),
+        medianGapDays: Math.round(activity.medianGapDays),
+      },
     });
   }
 
@@ -995,11 +1124,19 @@ const generateFinanceActionInsights = httpsV2.onCall({ region: FUNCTION_REGION, 
     });
   }
 
+  // A dismissal is permanent. buildActionId hashes source|type|merchantKey||title,
+  // so the same suggestion regenerates with the same id every run — previously it
+  // reappeared on the next generation because only 'converted' was respected.
+  const dismissedIds = new Set(
+    existingActions.filter((a) => a && a.status === 'dismissed').map((a) => a.id),
+  );
+
   const actions = Array.from(finalMap.values())
-    .sort((a, b) => (b.estimatedMonthlySavings || 0) - (a.estimatedMonthlySavings || 0))
+    .map((action) => ({ action, id: buildActionId(action) }))
+    .filter(({ id }) => !dismissedIds.has(id))
+    .sort((a, b) => (b.action.estimatedMonthlySavings || 0) - (a.action.estimatedMonthlySavings || 0))
     .slice(0, maxActions)
-    .map((action) => {
-      const id = buildActionId(action);
+    .map(({ action, id }) => {
       const existing = statusById.get(id) || {};
       return {
         id,
@@ -1011,10 +1148,15 @@ const generateFinanceActionInsights = httpsV2.onCall({ region: FUNCTION_REGION, 
       };
     });
 
+  // Carry dismissed entries forward in the document (not the active list) so the
+  // set survives the next regeneration. Without this the tombstones are lost the
+  // first time actions are regenerated and every dismissal comes back.
+  const dismissedTombstones = existingActions.filter((a) => a && a.status === 'dismissed');
+
   await db.collection('finance_action_insights').doc(uid).set({
     ownerUid: uid,
     source,
-    actions,
+    actions: [...actions, ...dismissedTombstones],
     generatedAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     metadata: {
@@ -1103,6 +1245,52 @@ const convertFinanceActionToStory = httpsV2.onCall({ region: FUNCTION_REGION }, 
     storyPath: `/stories/${storyRef.id}`,
     action: updatedActions[idx],
   };
+});
+
+/**
+ * Dismiss a finance action for good.
+ *
+ * Writes status 'dismissed' rather than removing the entry, because
+ * generateFinanceActionInsights reads those entries back as tombstones and skips
+ * regenerating them. Deleting the row would make the suggestion return on the
+ * next run.
+ */
+const dismissFinanceAction = httpsV2.onCall({ region: FUNCTION_REGION }, async (req) => {
+  if (!req?.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const actionId = String(req.data?.actionId || '').trim();
+  if (!actionId) throw new httpsV2.HttpsError('invalid-argument', 'actionId is required');
+  const undo = req.data?.undo === true;
+
+  const db = admin.firestore();
+  const ref = db.collection('finance_action_insights').doc(uid);
+  const snap = await ref.get();
+  if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'No finance actions for this user');
+
+  const data = snap.data() || {};
+  if (data.ownerUid && data.ownerUid !== uid) {
+    throw new httpsV2.HttpsError('permission-denied', 'Not your finance actions');
+  }
+
+  const current = Array.isArray(data.actions) ? data.actions : [];
+  let found = false;
+  const next = current.map((action) => {
+    if (!action || action.id !== actionId) return action;
+    found = true;
+    return {
+      ...action,
+      status: undo ? 'open' : 'dismissed',
+      dismissedAt: undo ? null : new Date().toISOString(),
+    };
+  });
+  if (!found) throw new httpsV2.HttpsError('not-found', 'Action not found');
+
+  await ref.set({
+    actions: next,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  return { ok: true, actionId, status: undo ? 'open' : 'dismissed' };
 });
 
 const upsertManualFinanceAccount = httpsV2.onCall({ region: FUNCTION_REGION }, async (req) => {
@@ -1642,12 +1830,14 @@ const fetchFinanceEnhancementData = httpsV2.onCall({ region: FUNCTION_REGION, me
 });
 
 module.exports = {
+  assessRecurringActivity,
   importExternalFinanceTransactions,
   importMonzoTransactionsCsv,
   matchExternalToMonzoTransactions,
   recomputeDebtServiceBreakdown,
   generateFinanceActionInsights,
   convertFinanceActionToStory,
+  dismissFinanceAction,
   upsertManualFinanceAccount,
   deleteManualFinanceAccount,
   fetchFinanceEnhancementData,

@@ -276,7 +276,9 @@ export interface PlanAssumptions {
 export const DEFAULT_PLAN_ASSUMPTIONS: Omit<PlanAssumptions, 'ownerUid'> = {
     currentAge: 42,
     targetRetirementAge: 55,
-    safeWithdrawalRatePct: 4,
+    // See functions/finance/ledger.js — 3.5% for a 40+ year horizon, not the
+    // conventional 4%, which was validated over 30 years.
+    safeWithdrawalRatePct: 3.5,
     nominalGrowthRatePct: 5,
     inflationRatePct: 2.5,
     useRealReturns: true,

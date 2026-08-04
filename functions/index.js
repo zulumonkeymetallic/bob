@@ -87,6 +87,7 @@ try {
     exports.recomputeDebtServiceBreakdown = financeEnhancements.recomputeDebtServiceBreakdown;
     exports.generateFinanceActionInsights = financeEnhancements.generateFinanceActionInsights;
     exports.convertFinanceActionToStory = financeEnhancements.convertFinanceActionToStory;
+    exports.dismissFinanceAction = financeEnhancements.dismissFinanceAction;
     exports.upsertManualFinanceAccount = financeEnhancements.upsertManualFinanceAccount;
     exports.deleteManualFinanceAccount = financeEnhancements.deleteManualFinanceAccount;
     exports.fetchFinanceEnhancementData = financeEnhancements.fetchFinanceEnhancementData;

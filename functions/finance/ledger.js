@@ -48,7 +48,11 @@ const ASSUMPTIONS = 'finance_plan_assumptions';
 const DEFAULT_ASSUMPTIONS = {
   currentAge: 42,
   targetRetirementAge: 55,
-  safeWithdrawalRatePct: 4,
+  // 3.5%, not the conventional 4%. The Trinity Study's 4% was validated on a
+  // 30-YEAR horizon of US assets. Retiring at 55 is a 40-45 year horizon, where
+  // 4% carries materially higher failure probability. 3.5% raises the target
+  // ~14% and is the more defensible default. Editable per user.
+  safeWithdrawalRatePct: 3.5,
   nominalGrowthRatePct: 5,
   inflationRatePct: 2.5,
   useRealReturns: true,
