@@ -351,6 +351,14 @@ service cloud.firestore {
       allow update: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
       allow delete: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
     }
+    // Tombstones for dismissed own-account transfer suggestions, so a rejected suggestion
+    // does not reappear on the next pass. Written by the callable, read by the ledger page.
+    match /finance_suggestion_dismissals/{uid} {
+      allow create: if isSignedIn() && (request.auth.uid == uid || request.resource.data.ownerUid == request.auth.uid);
+      allow read: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+      allow update: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+      allow delete: if isSignedIn() && (request.auth.uid == uid || resource.data.ownerUid == request.auth.uid);
+    }
     match /finance_manual_accounts/{id} {
       allow create: if isSignedIn() && request.resource.data.ownerUid == request.auth.uid;
       allow read, delete: if isSignedIn() && resource.data.ownerUid == request.auth.uid;

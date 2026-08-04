@@ -81,6 +81,8 @@ try {
 try {
   const financeEnhancements = require('./finance/enhancements');
   if (financeEnhancements) {
+    exports.suggestFinanceTransferAccounts = financeEnhancements.suggestFinanceTransferAccounts;
+    exports.dismissFinanceTransferSuggestion = financeEnhancements.dismissFinanceTransferSuggestion;
     exports.importExternalFinanceTransactions = financeEnhancements.importExternalFinanceTransactions;
     exports.importMonzoTransactionsCsv = financeEnhancements.importMonzoTransactionsCsv;
     exports.matchExternalToMonzoTransactions = financeEnhancements.matchExternalToMonzoTransactions;

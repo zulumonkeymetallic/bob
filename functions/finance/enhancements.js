@@ -6,6 +6,8 @@ const { normaliseMerchantName, inferDefaultCategoryType, inferDefaultCategoryLab
 const { mergeFinanceCategories } = require('./categories');
 const { resolveTransactionCategory, buildCategoryIndex, narrowToV4 } = require('./bucketResolver');
 const { callLLM } = require('../utils/llmHelper');
+const { suggestOwnAccountTransfers } = require('./transferSuggestions');
+const { buildPotIndex, buildTransferAccountIndex } = require('./bucketResolver');
 const {
   normalizeExternalSource,
   resolveSourceConfig,
@@ -933,6 +935,68 @@ const matchExternalToMonzoTransactions = httpsV2.onCall({ region: FUNCTION_REGIO
 
   if (ops > 0) await batch.commit();
   return { ok: true, source, windowDays, amountTolerancePence, matched, unmatched, bySource };
+});
+
+/**
+ * Propose register entries for counterparties that look like the user's own accounts.
+ *
+ * Read-only and advisory: it writes nothing and classifies nothing. The user confirms each
+ * one by saving an account, which is what actually changes any number — a false positive
+ * applied silently would delete real spend from the totals.
+ */
+const suggestFinanceTransferAccounts = httpsV2.onCall({
+  region: FUNCTION_REGION,
+  memory: '1GiB',
+}, async (req) => {
+  if (!req?.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const db = admin.firestore();
+
+  const [txSnap, potsSnap, accountsSnap, profileSnap, dismissSnap, categoriesSnap] = await Promise.all([
+    db.collection('monzo_transactions').where('ownerUid', '==', uid).get(),
+    db.collection('monzo_pots').where('ownerUid', '==', uid).get(),
+    db.collection(LEDGER_ACCOUNTS).where('ownerUid', '==', uid).get(),
+    db.collection('profiles').doc(uid).get(),
+    db.collection('finance_suggestion_dismissals').doc(uid).get(),
+    db.collection('finance_categories').doc(uid).get(),
+  ]);
+
+  const profile = profileSnap.exists ? (profileSnap.data() || {}) : {};
+  const ownerNames = [profile.displayName, profile.name, profile.fullName]
+    .filter((value) => typeof value === 'string' && value.trim().length > 2);
+
+  const dismissed = new Set(((dismissSnap.exists ? dismissSnap.data() : {})?.transferAccounts) || []);
+
+  const categories = mergeFinanceCategories(categoriesSnap.exists ? categoriesSnap.data() : null);
+  const suggestions = suggestOwnAccountTransfers(txSnap.docs.map((d) => d.data()), {
+    ownerNames,
+    categoryIndex: buildCategoryIndex(categories),
+    potIndex: buildPotIndex(potsSnap.docs.map((d) => d.data())),
+    transferAccountIndex: buildTransferAccountIndex(accountsSnap.docs.map((d) => d.data())),
+  });
+
+  return {
+    ok: true,
+    ownerNames,
+    suggestions: jsonSafe(suggestions.filter((item) => !dismissed.has(item.key))),
+    dismissedCount: dismissed.size,
+  };
+});
+
+/** Tombstone a suggestion so it stops coming back. Mirrors dismissFinanceAction. */
+const dismissFinanceTransferSuggestion = httpsV2.onCall({ region: FUNCTION_REGION }, async (req) => {
+  if (!req?.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
+  const uid = req.auth.uid;
+  const key = String(req.data?.key || '').trim().toLowerCase();
+  if (!key) throw new httpsV2.HttpsError('invalid-argument', 'key is required');
+
+  await admin.firestore().collection('finance_suggestion_dismissals').doc(uid).set({
+    ownerUid: uid,
+    transferAccounts: admin.firestore.FieldValue.arrayUnion(key),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  return { ok: true, key };
 });
 
 const recomputeDebtServiceBreakdown = httpsV2.onCall({ region: FUNCTION_REGION }, async (req) => {
@@ -2031,6 +2095,8 @@ const fetchFinanceEnhancementData = httpsV2.onCall({ region: FUNCTION_REGION, me
 
 module.exports = {
   assessRecurringActivity,
+  suggestFinanceTransferAccounts,
+  dismissFinanceTransferSuggestion,
   importExternalFinanceTransactions,
   importMonzoTransactionsCsv,
   matchExternalToMonzoTransactions,

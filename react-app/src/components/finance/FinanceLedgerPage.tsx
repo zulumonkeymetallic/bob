@@ -39,9 +39,39 @@ const FinanceLedgerPage: React.FC = () => {
     const [formAccount, setFormAccount] = useState<LedgerAccount | null>(null);
     const [showForm, setShowForm] = useState(false);
     const [notice, setNotice] = useState<string | null>(null);
+    /**
+     * Counterparties that look like the user's own accounts. Advisory only — nothing changes
+     * until one is saved as an account, because a wrong one would delete real spend from the
+     * totals rather than merely mislabel it.
+     */
+    const [suggestions, setSuggestions] = useState<any[]>([]);
+    const [suggestBusy, setSuggestBusy] = useState(false);
 
     const toMonth = monthKeyFromDate(new Date());
     const fromMonth = monthKeyFromIndex(monthIndexOf(toMonth) - (MONTH_WINDOW - 1));
+
+    const loadSuggestions = useCallback(async () => {
+        if (isDemo) return;
+        setSuggestBusy(true);
+        try {
+            const fn = httpsCallable(functions, 'suggestFinanceTransferAccounts');
+            const res: any = await fn({});
+            setSuggestions(res?.data?.suggestions || []);
+        } catch {
+            setSuggestions([]);
+        } finally {
+            setSuggestBusy(false);
+        }
+    }, [isDemo]);
+
+    const dismissSuggestion = useCallback(async (key: string) => {
+        setSuggestions((prev) => prev.filter((item) => item.key !== key));
+        try {
+            await httpsCallable(functions, 'dismissFinanceTransferSuggestion')({ key });
+        } catch {
+            // A failed tombstone only means it reappears next load; do not block the UI.
+        }
+    }, []);
 
     const load = useCallback(async () => {
         if (isDemo) {
@@ -65,6 +95,7 @@ const FinanceLedgerPage: React.FC = () => {
     }, [currentUser, fromMonth, toMonth, isDemo]);
 
     useEffect(() => { load(); }, [load]);
+    useEffect(() => { loadSuggestions(); }, [loadSuggestions]);
 
     const setTab = (next: LedgerTab) => {
         const params = new URLSearchParams(searchParams);
@@ -205,6 +236,67 @@ const FinanceLedgerPage: React.FC = () => {
                         Import them
                     </Button>
                 </Alert>
+            )}
+
+            {suggestions.length > 0 && (
+                <Card className="mb-3 border-primary-subtle">
+                    <Card.Body>
+                        <div className="d-flex justify-content-between align-items-start mb-2 gap-2 flex-wrap">
+                            <div>
+                                <div className="fw-semibold">Possible accounts of yours</div>
+                                <div className="small text-muted">
+                                    Money regularly leaving for these looks like a transfer, not spending.
+                                    Adding one stops it counting as spend and tracks it in and out instead.
+                                    Nothing changes until you add it.
+                                </div>
+                            </div>
+                            {suggestBusy && <Spinner animation="border" size="sm" />}
+                        </div>
+
+                        {suggestions.map((item) => (
+                            <div key={item.key} className="d-flex justify-content-between align-items-start gap-3 border-top py-2 flex-wrap">
+                                <div className="flex-grow-1">
+                                    <div className="fw-semibold">
+                                        {item.name}{' '}
+                                        <Badge bg="light" text="dark" className="border fw-normal">
+                                            {Math.round(Number(item.confidence || 0) * 100)}% confident
+                                        </Badge>
+                                    </div>
+                                    <div className="small text-muted">
+                                        {formatPence(item.outPence)} out over {item.outCount} payment{item.outCount === 1 ? '' : 's'}
+                                        {item.inCount > 0 && <> · {formatPence(item.inPence)} back in</>}
+                                    </div>
+                                    <ul className="small text-muted mb-0 mt-1 ps-3">
+                                        {(item.reasons || []).map((reason: string) => (
+                                            <li key={reason}>{reason}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                                <div className="d-flex gap-2">
+                                    <Button
+                                        size="sm"
+                                        variant="primary"
+                                        onClick={() => {
+                                            // Pre-fill the register form rather than writing directly: the
+                                            // kind and the match terms are the user's call, not a guess.
+                                            setFormAccount({
+                                                name: item.name,
+                                                kind: item.suggestedKind,
+                                                paymentMatchTerms: item.suggestedTerms || [item.key],
+                                            } as any);
+                                            setShowForm(true);
+                                        }}
+                                    >
+                                        Add as account
+                                    </Button>
+                                    <Button size="sm" variant="outline-secondary" onClick={() => dismissSuggestion(item.key)}>
+                                        Not mine
+                                    </Button>
+                                </div>
+                            </div>
+                        ))}
+                    </Card.Body>
+                </Card>
             )}
 
             {loading ? (

@@ -61,12 +61,20 @@ describe('suggestOwnAccountTransfers', () => {
     expect(out).toHaveLength(0);
   });
 
-  test('a transfer to your own name is proposed and says why', () => {
+  test('matches the bank spelling of your name, not just the profile spelling', () => {
+    // The profile says "James Donnelly"; the bank may say "DONNELLY J". Surname carries it.
+    const out = run(rep(3, {
+      merchantKey: 'donnelly j', scheme: 'payport_faster_payments', amountMinor: -50000,
+    }));
+    expect(out).toHaveLength(1);
+    expect(out[0].reasons.join(' ')).toMatch(/surname/i);
+  });
+
+  test('the surname reason warns that a relative looks identical', () => {
     const out = run(rep(3, {
       merchantKey: 'james donnelly', scheme: 'payport_faster_payments', amountMinor: -50000,
     }));
-    expect(out).toHaveLength(1);
-    expect(out[0].reasons).toContain('Counterparty is your own name');
+    expect(out[0].reasons.join(' ')).toMatch(/relative/i);
   });
 
   test('skips anything the user already categorised by hand', () => {

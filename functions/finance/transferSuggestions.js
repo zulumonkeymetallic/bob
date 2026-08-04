@@ -99,6 +99,8 @@ function suggestOwnAccountTransfers(transactions, options = {}) {
   } = options;
 
   const ownerTokens = new Set(ownerNames.flatMap(tokenise));
+  const surnames = ownerNames.map((name) => tokenise(name).slice(-1)[0]).filter(Boolean);
+  const ownerSurname = surnames.length ? surnames[0] : null;
   const groups = new Map();
 
   (transactions || []).forEach((tx) => {
@@ -174,10 +176,18 @@ function suggestOwnAccountTransfers(transactions, options = {}) {
     }
 
     const nameTokens = tokenise(group.name);
-    const matchesOwner = nameTokens.length > 0 && nameTokens.every((token) => ownerTokens.has(token));
+    // Banks rarely render a name the way the profile does: "Jim Donnelly" pays
+    // "JAMES DONNELLY" and is paid by "DONNELLY J". Match on the surname and require a
+    // person-shaped name, then say plainly that a relative would look identical — this is
+    // a prompt to check, not a conclusion.
+    const sharesSurname = ownerSurname
+      && nameTokens.includes(ownerSurname)
+      && nameTokens.length <= 3;
+    const matchesOwner = nameTokens.length > 0
+      && (nameTokens.every((token) => ownerTokens.has(token)) || sharesSurname);
     if (matchesOwner) {
       score += 0.3;
-      reasons.push('Counterparty is your own name');
+      reasons.push('Shares your surname — check this is your account and not a relative');
     }
 
     if (containsAny(lowerName, INSTITUTION_MARKERS)) {
