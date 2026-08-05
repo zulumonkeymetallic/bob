@@ -168,7 +168,7 @@ async function generateCoachBriefingLLM(uid, firestore, ctx) {
       'Use UK English. Avoid markdown headings; short emoji prefixes are fine.',
     ].filter(Boolean);
 
-    const text = await callLLM(systemPrompt, lines.join('\n'));
+    const text = await callLLM(systemPrompt, lines.join('\n'), undefined, { userId: uid, purpose: 'coach_briefing' });
     const trimmed = String(text || '').trim();
     return trimmed.length > 0 ? trimmed : null;
   } catch (e) {
@@ -524,9 +524,26 @@ async function _runOrchestratorForUser(uid) {
   const nowMs2 = Date.now();
   const resolved = await resolveActivePhase(firestore, uid, umbrellaGoalId);
   const phases = resolved?.phases ?? [];
-  // Preserve original fallback: default to phases[0] when nothing brackets "now".
-  const activePhase = resolved?.phase ?? phases[0] ?? null;
-  const phaseIdx = activePhase ? phases.indexOf(activePhase) : 0;
+
+  // No silent fallback to phases[0] when nothing brackets today.
+  //
+  // That fallback meant "no active phase" and "Phase 0 — Base Building" were the same
+  // state. Jim's plan ends 2027-05-15 against a September 2027 race, so from mid-May the
+  // coach would have prescribed base building through the final four months before the
+  // Ironman — the exact opposite of a taper, presented as a real phase.
+  //
+  // A gap is now carried through to coach_daily as `phaseGap`, so the absence is visible
+  // rather than dressed as Phase 0.
+  const activePhase = resolved?.phase ?? null;
+  const phaseIdx = activePhase ? phases.indexOf(activePhase) : -1;
+  const phaseGap = resolved?.gap === true || (phases.length > 0 && !activePhase);
+  const phaseOverlaps = resolved?.overlapping ?? [];
+  if (phaseGap) {
+    console.warn(`[coachOrchestrator] uid=${uid} has ${phases.length} phases but none brackets today — not falling back to Phase 0`);
+  }
+  if (phaseOverlaps.length > 0) {
+    console.warn(`[coachOrchestrator] uid=${uid} phase overlap: also active — ${phaseOverlaps.map(p => p.title).join(', ')}`);
+  }
 
   let phaseRef = {
     phaseIndex: 0,
@@ -726,6 +743,10 @@ async function _runOrchestratorForUser(uid) {
     // sleep alone is not the same claim as one standing on HRV and sleep together.
     readinessBasis,
     readinessBasisDate,
+    // Surfaced rather than hidden: a gap means no phase covers today, and overlaps mean
+    // more than one does. Both were previously invisible.
+    phaseGap,
+    phaseOverlaps,
     hrvToday,
     hrv7dAvg: hrv7dAvg !== null ? Math.round(hrv7dAvg) : null,
     sleepToday,

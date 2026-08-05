@@ -69,11 +69,34 @@ async function resolveActivePhase(firestore, uid, umbrellaGoalId) {
     .filter(p => p.startDate && p.endDate)
     .sort((a, b) => a.startDate - b.startDate);
 
-  const activePhase = phases.find(p => p.startDate <= nowMs && p.endDate >= nowMs);
-  if (!activePhase) return phases.length ? { phaseIndex: -1, phase: null, phases } : null;
+  // Overlaps are a data fault, not a case to resolve by array order.
+  //
+  // `.find()` returns the earliest-starting phase that brackets now, silently. Jim's
+  // phases overlap by three months — Build runs 2026-10-01→12-31 while Peak runs
+  // 2026-10-03→2027-02-15 — so from 3 October the coach would sit in Build and never
+  // notice Peak had started. Nothing anywhere would say so.
+  //
+  // The ambiguity is surfaced instead of hidden: the earliest is still returned so the
+  // coach keeps working, but `overlapping` names the others and callers can warn.
+  const bracketing = phases.filter(p => p.startDate <= nowMs && p.endDate >= nowMs);
+  const activePhase = bracketing[0] || null;
+  if (!activePhase) {
+    // Nothing brackets today. Jim's plan ends 2027-05-15 against a September 2027 race,
+    // so this is reachable and is not the same as "no phases exist" — callers must not
+    // quietly fall back to phase 0, which would prescribe base building in race week.
+    return phases.length
+      ? { phaseIndex: -1, phase: null, phases, overlapping: [], gap: true }
+      : null;
+  }
 
   const phaseIndex = phases.indexOf(activePhase);
-  return { phaseIndex, phase: activePhase, phases };
+  return {
+    phaseIndex,
+    phase: activePhase,
+    phases,
+    overlapping: bracketing.slice(1).map(p => ({ id: p.id, title: p.title })),
+    gap: false,
+  };
 }
 
 /** Run/bike/swim/body-fat targets from a phase's kpisV2 (falls back to legacy kpis). */
