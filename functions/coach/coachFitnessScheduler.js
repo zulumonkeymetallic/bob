@@ -76,10 +76,30 @@ function parseICalEvents(rawEvents, windowStart, windowEnd) {
   for (const event of Object.values(rawEvents)) {
     if (event.type !== 'VEVENT') continue;
 
-    const dtstart = event.dtstart instanceof Date ? event.dtstart : null;
+    // `event.start`, not `event.dtstart`.
+    //
+    // node-ical exposes the parsed dates as `start` and `end`. There is no `dtstart`
+    // property on a VEVENT at all — `event.dtstart` is `undefined`, and
+    // `undefined instanceof Date` is false, so the guard below skipped **every** event.
+    //
+    // Confirmed against the live Runna feed on 2026-08-05: 249 VEVENTs parsed, 0 with a
+    // `dtstart`, 0 written to fitness_programme_cache. Every poll for months logged
+    // `ical_polled {runnerCount: 0, crossFitCount: 0}` and looked like a healthy run
+    // against an empty training plan.
+    //
+    // That silence was doubly expensive, because `materializePlannerThemeBlocks` stands
+    // down from health theme blocks whenever `hasIronmanCoach` is true
+    // (nightlyOrchestration.js) — deferring to a coach that could never see a session.
+    // Fifteen configured Health & Fitness slots and a full Runna plan, and not one
+    // training block reached the calendar.
+    //
+    // `dtstart`/`dtend` are kept as fallbacks in case a future node-ical restores them.
+    const dtstart = (event.start instanceof Date) ? event.start
+      : (event.dtstart instanceof Date ? event.dtstart : null);
     if (!dtstart) continue;
 
-    const dtend = event.dtend instanceof Date ? event.dtend : null;
+    const dtend = (event.end instanceof Date) ? event.end
+      : (event.dtend instanceof Date ? event.dtend : null);
     const durationMin = dtend
       ? Math.round((dtend.getTime() - dtstart.getTime()) / 60000)
       : 60;
@@ -448,21 +468,33 @@ exports.scheduleCoachFitnessBlocks = schedulerV2.onSchedule(
     const firestore = db();
     console.log('[coachScheduler] scheduleCoachFitnessBlocks starting');
 
-    // Find users with ironman coach + at least one iCal URL
+    // Find users with an ironman coach + at least one iCal URL.
+    //
+    // ONE `!=` per query. Firestore rejects more outright — "Only a single 'NOT_EQUAL',
+    // 'NOT_IN', 'IS_NOT_NAN', or 'IS_NOT_NULL' filter allowed per query" — and this used
+    // to stack `ironmanUmbrellaGoalId != null` with `runnerProgrammeUrl != null` in both
+    // branches. Every night both queries threw, the rejection propagated out of the
+    // Promise.all with nothing to catch it, and the scheduled function died before
+    // processing a single user. Silently: a scheduled function's throw goes to Cloud
+    // Logging and nowhere a person looks.
+    //
+    // `pollFitnessProgrammes` above does it correctly — one inequality per query, merged
+    // in memory — which is exactly why polling ran every four hours while scheduling
+    // never ran at all. The two sat forty lines apart.
+    //
+    // Confirmed 2026-08-05: no `fitness_blocks_scheduled` event has ever been written.
     const [runnerSnap, crossFitSnap] = await Promise.all([
-      firestore.collection('profiles')
-        .where('ironmanUmbrellaGoalId', '!=', null)
-        .where('runnerProgrammeUrl', '!=', null)
-        .get(),
-      firestore.collection('profiles')
-        .where('ironmanUmbrellaGoalId', '!=', null)
-        .where('crossFitProgrammeUrl', '!=', null)
-        .get(),
+      firestore.collection('profiles').where('runnerProgrammeUrl', '!=', null).get(),
+      firestore.collection('profiles').where('crossFitProgrammeUrl', '!=', null).get(),
     ]);
 
     const uidMap = new Map();
     for (const doc of [...runnerSnap.docs, ...crossFitSnap.docs]) {
-      if (!uidMap.has(doc.id)) uidMap.set(doc.id, doc.data());
+      if (uidMap.has(doc.id)) continue;
+      const data = doc.data();
+      // The second condition, applied in memory rather than as a second inequality.
+      if (!data?.ironmanUmbrellaGoalId) continue;
+      uidMap.set(doc.id, data);
     }
 
     console.log(`[coachScheduler] scheduling blocks for ${uidMap.size} users`);
