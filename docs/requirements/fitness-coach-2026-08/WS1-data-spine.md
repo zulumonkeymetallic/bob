@@ -14,14 +14,43 @@
 | R2 — canonical taxonomy | **Done** | `bob` fda00aea, `bob-ios` 64f9018 |
 | R3 — HealthKit zones | **Done** | `bob-ios` 64f9018 |
 | R4.1/4.2 — max HR entry, re-enrichment | **Done** | `bob` fb89b3cb |
-| R4.3 — history backfill | **Blocked on deploy** | needs `enrichStravaHR` live |
+| R4.3 — history backfill | **Done, run 2026-08-05** | 234 activities re-enriched at 186 |
 | R5 — readiness | **Done** | `bob` fb89b3cb |
 | R6 — server-side KPI resolution | **Not started** | the resolver port itself |
 | R6.5 — populate `metric_values` | **Done** | `bob` 901ecd1b |
 | R7 — Strava sync verification | **Diagnosed, not fixed** | see below |
 
-Branches: `bob` → `docs/fitness-coach-requirements-2026-08`,
-`bob-ios` → `fix/fitness-data-spine`. Neither merged; nothing deployed.
+Both branches merged to `main` locally. Web, functions, Firestore rules and indexes
+deployed 2026-08-05. The iOS changes are merged but not shipped — they need a
+TestFlight build.
+
+### The backfill result, 2026-08-05
+
+234 eligible Strava activities re-enriched against `maxHr: 186` with the corrected
+zone boundaries; 2,891 `metric_values` rows written from 243 workouts.
+
+**Last 90 days, 26 sessions with heart rate, all at maxHr 186:**
+
+| | Before (maxHr 190, Z5 floor bug) | After |
+|---|---|---|
+| Z1 | 6.0h — 29% | 6.4h — 35.7% |
+| Z2 | 3.2h — 15% | 2.8h — 15.5% |
+| Z3 | 2.0h — 10% | 2.2h — 12.4% |
+| Z4 | 4.3h — 21% | 3.7h — 20.5% |
+| Z5 | 5.2h — 25% | 2.9h — 15.9% |
+| **Z2+Z3** | **25%** | **27.9%** |
+| **Z4+Z5** | **46%** | **36.4%** |
+
+Zone 5 nearly halved, which is the floor bug coming out: readings under 93bpm had
+been credited to maximal effort. The corrected picture is still not the one the
+phase asks for — 36% hard against 28% in the target band, with another 36% in Z1
+that is too easy to count as training.
+
+Nine in-window activities remain on the old max HR. All nine are marked
+`hrZonesUnavailable: 'empty_stream'` — Strava holds no heart-rate stream for them,
+so they cannot be recomputed. They retain zone data computed on the old
+boundaries, which is a small, known source of error in any total that includes
+them; worth zeroing rather than leaving misleading, but not urgent at 9 of 234.
 
 ### Two findings from the live data, 2026-08-04
 
