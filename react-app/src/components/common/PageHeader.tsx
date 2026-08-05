@@ -13,6 +13,11 @@ interface PageHeaderProps {
         label: string;
         variant?: 'primary' | 'success' | 'warning' | 'danger' | 'info' | 'secondary';
     };
+    /** Links to peer pages, rendered inline after the title (see WorkAreaLinks). */
+    siblingLinks?: React.ReactNode;
+    /** Merged over typography.h1. Only for pages that need the title to out-rank
+     * something sitting beside it, e.g. siblingLinks. */
+    titleStyle?: React.CSSProperties;
 }
 
 export const PageHeader: React.FC<PageHeaderProps> = ({
@@ -21,6 +26,8 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
     breadcrumbs,
     actions,
     badge,
+    siblingLinks,
+    titleStyle,
 }) => {
     const navigate = useNavigate();
 
@@ -88,9 +95,11 @@ export const PageHeader: React.FC<PageHeaderProps> = ({
                         <h1 style={{
                             margin: 0,
                             ...typography.h1,
+                            ...titleStyle,
                         }}>
                             {title}
                         </h1>
+                        {siblingLinks}
                         {badge && (
                             <Badge
                                 bg={badge.variant || 'primary'}

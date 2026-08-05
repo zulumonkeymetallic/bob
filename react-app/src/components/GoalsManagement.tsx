@@ -26,6 +26,7 @@ import { useSidebar } from '../contexts/SidebarContext';
 import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import { computeWindowExpectedProgress, evaluateGoalTargetStatus } from '../utils/goalKpiStatus';
 import { goalNeedsLinkedPot } from '../utils/goalCost';
+import WorkAreaLinks from './common/WorkAreaLinks';
 
 interface GoalsManagementProps {
   /** When true, fills its container's height instead of assuming the full viewport — for
@@ -721,9 +722,12 @@ const GoalsManagement: React.FC<GoalsManagementProps> = ({ embedded = false }) =
           marginBottom: '8px'
         }}>
           <div>
-            <h2 style={{ margin: '0 0 4px 0', fontSize: '20px', fontWeight: '700' }}>
-              Goals
-            </h2>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '14px', flexWrap: 'wrap', marginBottom: '4px' }}>
+              <h2 style={{ margin: 0, fontSize: '24px', fontWeight: '700' }}>
+                Goals
+              </h2>
+              <WorkAreaLinks current="goals" />
+            </div>
             {!deviceInfo.isMobile && (
               <p style={{ margin: 0, color: 'var(--notion-text-secondary)', fontSize: '13px' }}>
                 Manage your life goals across different themes

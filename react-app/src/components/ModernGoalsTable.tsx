@@ -55,6 +55,7 @@ import { themeVars, rgbaCard } from '../utils/themeVars';
 import { getGoalLinkedPotId, normalizeGoalCostType } from '../utils/goalCost';
 import { MISSING_INFO_CELL_BG, MISSING_INFO_CELL_BG_HOVER } from '../utils/dataQuality';
 import { resolveLeafGoalSelection } from '../utils/goalHierarchy';
+import { compareTimestamps, formatTimestampCell } from '../utils/timestamps';
 import { useFocusGoals } from '../hooks/useFocusGoals';
 
 interface GoalTableRow extends Goal {
@@ -254,7 +255,28 @@ const defaultColumns: Column[] = [
     editable: true,
     type: 'number'
   },
+  // Last data column, so it sits immediately left of Actions. Read-only: createdAt is
+  // written once by Firestore and is not a field to correct by hand.
+  {
+    key: 'createdAt',
+    label: 'Created',
+    width: '14%',
+    visible: true,
+    editable: false,
+    type: 'text'
+  },
 ];
+
+type GoalSortKey = 'orderIndex' | 'startDate' | 'endDate' | 'targetYear' | 'createdAt';
+
+const SORTABLE_GOAL_COLUMNS = new Set<string>([
+  'startDate',
+  'endDate',
+  'targetYear',
+  'createdAt',
+  'storiesCount',
+  'sprintStoriesCount',
+]);
 
 interface SortableRowProps {
   goal: Goal;
@@ -578,6 +600,9 @@ const SortableRow: React.FC<SortableRowProps> = ({
     const goalKpi = goalKpiStatusByGoalId?.[goal.id];
     if (key === 'startDate' || key === 'endDate' || key === 'targetDate') {
       return formatDateForDisplay(value);
+    }
+    if (key === 'createdAt') {
+      return formatTimestampCell(value);
     }
     if (key === 'storiesCount') {
       return `${storyCounts[goal.id] || 0}`;
@@ -1275,7 +1300,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   const [habitAdherenceData, setHabitAdherenceData] = useState<Record<string, { planned: number; completed: number; progress: number }>>({});
   const [costDataFilter, setCostDataFilter] = useState<'all' | 'missing_any' | 'missing_cost_type' | 'missing_estimated_cost'>('all');
   const { selectedSprintId } = useSprint();
-  const [sortConfig, setSortConfig] = useState<{ key: 'orderIndex' | 'startDate' | 'endDate' | 'targetYear'; direction: 'asc' | 'desc' }>({
+  const [sortConfig, setSortConfig] = useState<{ key: GoalSortKey; direction: 'asc' | 'desc' }>({
     key: 'startDate',
     direction: 'asc'
   });
@@ -1649,7 +1674,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
     return true;
   });
 
-  const handleSort = (key: 'orderIndex' | 'startDate' | 'endDate' | 'targetYear') => {
+  const handleSort = (key: GoalSortKey) => {
     setSortConfig(prev => ({
       key,
       direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc'
@@ -1657,7 +1682,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
   };
 
   const renderHeaderLabel = (column: Column) => {
-    const sortable = column.key === 'startDate' || column.key === 'endDate' || column.key === 'targetYear' || column.key === 'storiesCount' || column.key === 'sprintStoriesCount';
+    const sortable = SORTABLE_GOAL_COLUMNS.has(column.key);
     if (!sortable) return column.label;
     const isActive = sortConfig.key === column.key;
     return (
@@ -1688,6 +1713,11 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
     const list = [...qualityFilteredRows];
     const directionFactor = direction === 'asc' ? 1 : -1;
     list.sort((a, b) => {
+      // createdAt is a Firestore Timestamp/Date, not a number — Number() on it is NaN,
+      // which would collapse the whole column into one tie.
+      if (key === 'createdAt') {
+        return compareTimestamps((a as any).createdAt, (b as any).createdAt, directionFactor);
+      }
       const valA = key === 'orderIndex' ? (a as any).sortOrder ?? 0 : (a as any)[key] ?? null;
       const valB = key === 'orderIndex' ? (b as any).sortOrder ?? 0 : (b as any)[key] ?? null;
       const numA = typeof valA === 'number' ? valA : (valA ? Number(valA) : null);
@@ -1943,7 +1973,7 @@ const ModernGoalsTable: React.FC<ModernGoalsTableProps> = ({
                     Order
                   </th>
                   {columns.filter(col => col.visible).map(column => {
-                    const sortable = column.key === 'startDate' || column.key === 'endDate' || column.key === 'targetYear' || column.key === 'storiesCount' || column.key === 'sprintStoriesCount';
+                    const sortable = SORTABLE_GOAL_COLUMNS.has(column.key);
                     return (
                       <th
                         key={column.key}

@@ -24,6 +24,7 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useSprint } from '../contexts/SprintContext';
 import StatCard from './common/StatCard';
 import PageHeader from './common/PageHeader';
+import WorkAreaLinks from './common/WorkAreaLinks';
 import { SkeletonStatCard } from './common/SkeletonLoader';
 import EmptyState from './common/EmptyState';
 import { colors } from '../utils/colors';
@@ -455,6 +456,8 @@ const StoriesManagement: React.FC = () => {
       <div style={{ maxWidth: '100%', margin: '0' }}>
         <PageHeader
           title="Stories"
+          titleStyle={{ fontSize: '24px' }}
+          siblingLinks={<WorkAreaLinks current="stories" />}
           breadcrumbs={[
             { label: 'Home', href: '/' },
             { label: 'Stories' }

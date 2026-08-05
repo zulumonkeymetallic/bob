@@ -25,6 +25,7 @@ import { collection, query, where, onSnapshot, orderBy, addDoc, updateDoc, delet
 import { db, functions } from '../firebase';
 import { httpsCallable } from 'firebase/functions';
 import { displayRefForEntity, validateRef } from '../utils/referenceGenerator';
+import { compareTimestamps, formatTimestampCell } from '../utils/timestamps';
 import { 
   Settings, 
   GripVertical, 
@@ -177,14 +178,24 @@ const defaultColumns: Column[] = [
     type: 'select',
     options: ['XS', 'S', 'M', 'L', 'XL']
   },
-  { 
-    key: 'sprintId', 
-    label: 'Sprint', 
-    width: '18%', 
-    visible: true, 
-    editable: true, 
+  {
+    key: 'sprintId',
+    label: 'Sprint',
+    width: '18%',
+    visible: true,
+    editable: true,
     type: 'select',
     options: [] // Will be populated dynamically with sprint names
+  },
+  // Last data column, so it sits immediately left of Actions. Read-only: createdAt is
+  // written once by Firestore and is not a field to correct by hand.
+  {
+    key: 'createdAt',
+    label: 'Created',
+    width: '14%',
+    visible: true,
+    editable: false,
+    type: 'text'
   },
 ];
 
@@ -578,6 +589,12 @@ const SortableRow: React.FC<SortableRowProps> = ({
   };
 
   const formatValue = (key: string, value: any): string => {
+    // Ahead of the generic object handling below: createdAt reaches here as a Timestamp,
+    // a Date, or raw millis depending on the host page, and the millis case used to fall
+    // through to the `value || ''` return and render as a bare epoch number.
+    if (key === 'createdAt' || key === 'updatedAt') {
+      return formatTimestampCell(value);
+    }
     // Handle Firebase timestamp objects - React error #31 fix
     if (value && typeof value === 'object') {
       // Check if it's a Firebase Timestamp object
@@ -1446,8 +1463,9 @@ const ModernStoriesTable: React.FC<ModernStoriesTableProps> = ({
 
     // Handle different data types
     if (key === 'updatedAt' || key === 'createdAt') {
-      aValue = new Date(aValue as string).getTime();
-      bValue = new Date(bValue as string).getTime();
+      // new Date(Timestamp) is Invalid Date, so this used to tie every row on a
+      // Timestamp-valued column and leave the order untouched.
+      return compareTimestamps(aValue, bValue, direction === 'asc' ? 1 : -1);
     } else if (key === 'points') {
       aValue = Number(aValue) || 0;
       bValue = Number(bValue) || 0;

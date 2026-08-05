@@ -20,6 +20,7 @@ import { useDeviceInfo } from '../utils/deviceDetection';
 import MobileEntityList, { type MobileEntityViewType } from './MobileEntityList';
 import MobileViewToggle, { readStoredMobileView } from './MobileViewToggle';
 import { FocusGoal } from '../types';
+import WorkAreaLinks from './common/WorkAreaLinks';
 
 const TaskListView: React.FC = () => {
   const { currentUser } = useAuth();
@@ -401,9 +402,12 @@ const TaskListView: React.FC = () => {
           marginBottom: deviceInfo.isMobile ? '12px' : '24px'
         }}>
           <div>
-            <h2 style={{ margin: '0 0 4px 0', fontSize: '20px', fontWeight: '700' }}>
-              Tasks
-            </h2>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '14px', flexWrap: 'wrap', marginBottom: '4px' }}>
+              <h2 style={{ margin: 0, fontSize: '24px', fontWeight: '700' }}>
+                Tasks
+              </h2>
+              <WorkAreaLinks current="tasks" />
+            </div>
             {!deviceInfo.isMobile && (
               <p style={{ margin: 0, color: 'var(--muted)', fontSize: '13px' }}>
                 Manage all your tasks with modern table interface
