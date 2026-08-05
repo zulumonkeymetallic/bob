@@ -288,32 +288,61 @@ build_ios() {
     /usr/libexec/PlistBuddy -c "Set :BOBGitCommit '$ios_commit'" \
         BOB/Resources/Info.plist 2>/dev/null || true
     
+    local ios_installed=false
+
     if [ "$DRY_RUN" != "true" ]; then
-        # Build for Mac Catalyst
+        # Build for Mac Catalyst.
+        #
+        # The exit code is checked, and the log goes to a file rather than through a pipe.
+        #
+        # This used to pipe xcodebuild straight into `grep … | head -5`, which discards the
+        # real exit status (the pipeline's status is head's) and then reported
+        # "iOS build complete" unconditionally — while the PR summary printed "Installed to
+        # /Applications/BOB-Mac.app" as a hardcoded string whether or not anything was
+        # copied. Confirmed on 2026-08-05: the build failed on a missing provisioning
+        # profile, no product was produced, /Applications/BOB-Mac.app did not exist, and
+        # the script declared success. Same shape as the functions-deploy fault documented
+        # in deploy_web — a silent failure wearing a green tick.
         log_info "Building for Mac Catalyst..."
+        local ios_log
+        ios_log="$(mktemp -t bob_ios_build)"
+        set +e
         xcodebuild build \
             -project "BOB Universal.xcodeproj" \
             -scheme BOB \
             -destination 'platform=macOS' \
             -derivedDataPath /tmp/bob-ios-build \
-            -configuration Release 2>&1 | grep -E "Build complete|error:" | head -5 >&2
-        
-        # Copy app to Applications
+            -configuration Release > "$ios_log" 2>&1
+        local ios_status=$?
+        set -e
+
+        if [ $ios_status -ne 0 ]; then
+            log_error "Mac Catalyst build FAILED (exit $ios_status). Last errors:"
+            grep -E "error:|BUILD FAILED" "$ios_log" | tail -5 >&2
+            log_error "Full log: $ios_log"
+            return 1
+        fi
+
         log_info "Installing to Applications..."
         if [ -d "/tmp/bob-ios-build/Build/Products/Release/BOB.app" ]; then
             cp -r "/tmp/bob-ios-build/Build/Products/Release/BOB.app" /Applications/BOB-Mac.app
+            ios_installed=true
             log_success "Installed to /Applications/BOB-Mac.app"
+        else
+            # A zero exit with no product means the scheme built something else entirely.
+            log_error "Build reported success but produced no BOB.app — nothing installed."
+            return 1
         fi
     else
         log_warning "DRY RUN: Skipping Xcode build"
     fi
-    
+
     local build_end=$(date +%s)
     local build_duration=$((build_end - build_start))
-    
+
     log_success "iOS build complete (${build_duration}s)"
-    
-    printf '%s\n' "$ios_version|$ios_commit|${build_duration}s|$BUILD_TIMESTAMP"
+
+    printf '%s\n' "$ios_version|$ios_commit|${build_duration}s|$BUILD_TIMESTAMP|$ios_installed"
 }
 
 build_mac() {
@@ -402,7 +431,7 @@ create_build_pr() {
 
 ### Artifacts
 - 🌐 Web: Deployed to Firebase Hosting
-- 📱 iOS: Installed to /Applications/BOB-Mac.app
+- 📱 iOS: $([ "${IOS_INSTALLED:-false}" = "true" ] && echo 'Installed to /Applications/BOB-Mac.app' || echo 'not built')
 - 💻 Mac Sync: Installed to /Applications/BOB-SyncService
 
 **GitHub Links:**
@@ -567,14 +596,14 @@ case $BUILD_TARGET in
         IFS='|' read -r WEB_VERSION WEB_COMMIT WEB_DURATION WEB_TIMESTAMP < <(build_web)
         ;;
     ios)
-        IFS='|' read -r IOS_VERSION IOS_COMMIT IOS_DURATION IOS_TIMESTAMP < <(build_ios)
+        IFS='|' read -r IOS_VERSION IOS_COMMIT IOS_DURATION IOS_TIMESTAMP IOS_INSTALLED < <(build_ios)
         ;;
     mac)
         IFS='|' read -r MAC_VERSION MAC_COMMIT MAC_DURATION MAC_TIMESTAMP < <(build_mac)
         ;;
     all)
         IFS='|' read -r WEB_VERSION WEB_COMMIT WEB_DURATION WEB_TIMESTAMP < <(build_web)
-        IFS='|' read -r IOS_VERSION IOS_COMMIT IOS_DURATION IOS_TIMESTAMP < <(build_ios)
+        IFS='|' read -r IOS_VERSION IOS_COMMIT IOS_DURATION IOS_TIMESTAMP IOS_INSTALLED < <(build_ios)
         IFS='|' read -r MAC_VERSION MAC_COMMIT MAC_DURATION MAC_TIMESTAMP < <(build_mac)
         ;;
 esac
