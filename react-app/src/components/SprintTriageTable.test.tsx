@@ -44,6 +44,17 @@ jest.mock('./DeferItemModal', () => () => null);
 const LONG_TITLE =
   'Rebuild the nightly orchestration chain so rollover, projected due dates and criticality scoring run in one pass';
 
+// Firestore hands createdAt over as a Timestamp, not a Date or a number.
+const timestamp = (millis: number) => ({
+  seconds: Math.floor(millis / 1000),
+  nanoseconds: 0,
+  toMillis: () => millis,
+  toDate: () => new Date(millis),
+});
+
+const STORY_CREATED = Date.UTC(2026, 0, 15, 9, 30);
+const TASK_CREATED = Date.UTC(2026, 5, 2, 14, 5);
+
 const story = {
   id: 's1',
   ref: 'ST-11111',
@@ -54,6 +65,7 @@ const story = {
   points: 5,
   goalId: 'g1',
   sprintId: 'sp1',
+  createdAt: timestamp(STORY_CREATED),
   acceptanceCriteria: [
     'Rollover runs before projected due dates are computed',
     'Criticality scoring sees the post-rollover state',
@@ -67,6 +79,7 @@ const task = {
   title: 'A task with no acceptance criteria of its own',
   status: 0,
   sprintId: 'sp1',
+  createdAt: timestamp(TASK_CREATED),
 } as unknown as Task;
 
 const goal = { id: 'g1', ref: 'GR-33333', title: 'Ship the nightly chain', status: 1 } as unknown as Goal;
@@ -144,6 +157,81 @@ describe('column order', () => {
     renderTable();
     const headers = screen.getAllByRole('columnheader').map((h) => h.textContent?.trim());
     expect(headers.indexOf('Criticality')).toBe(headers.indexOf('Status') + 1);
+  });
+
+  it('puts Created last, immediately before Actions', () => {
+    // Same position as on the Modern goals/stories/tasks tables.
+    renderTable();
+    const headers = screen.getAllByRole('columnheader').map((h) => h.textContent?.trim());
+    expect(headers[headers.length - 2]).toBe('Created');
+    expect(headers[headers.length - 1]).toBe('Actions');
+  });
+});
+
+describe('Created column', () => {
+  const cellFor = (rowText: string, columnLabel: string) => {
+    const headers = screen.getAllByRole('columnheader').map((h) => h.textContent?.trim());
+    const row = screen.getByText(rowText).closest('tr')!;
+    return row.querySelectorAll('td')[headers.indexOf(columnLabel)];
+  };
+
+  it('renders a Firestore Timestamp as a date, not a raw object or epoch number', () => {
+    renderTable();
+    expect(cellFor(LONG_TITLE, 'Created')).toHaveTextContent(/^\d{2}\/\d{2}\/\d{4}, \d{2}:\d{2}$/);
+  });
+
+  it('shows an em dash when a row has no createdAt', () => {
+    renderTable({ tasks: [{ ...task, createdAt: undefined } as unknown as Task] });
+    expect(cellFor(task.title, 'Created')).toHaveTextContent('—');
+  });
+
+  it('sorts by Created, oldest first then newest first', async () => {
+    renderTable();
+    // The task is the newer of the two rows.
+    await userEvent.click(screen.getByText('Created'));
+    const ascending = screen.getAllByRole('row').slice(1).map((r) => r.textContent);
+    expect(ascending[0]).toContain(LONG_TITLE);
+
+    await userEvent.click(screen.getByText('Created'));
+    const descending = screen.getAllByRole('row').slice(1).map((r) => r.textContent);
+    expect(descending[0]).toContain(task.title);
+  });
+});
+
+describe('column visibility', () => {
+  const openConfig = async () => userEvent.click(screen.getByRole('button', { name: /columns/i }));
+
+  it('hides a column when its toggle is switched off', async () => {
+    renderTable();
+    expect(screen.getByRole('columnheader', { name: 'Description' })).toBeInTheDocument();
+
+    await openConfig();
+    await userEvent.click(screen.getByRole('button', { name: 'Hide Description' }));
+
+    expect(screen.queryByRole('columnheader', { name: 'Description' })).not.toBeInTheDocument();
+  });
+
+  it('lets the compact iPad layout turn a hidden column back on', async () => {
+    // compactColumns is now only the starting set, not a permanent lockout — the whole point
+    // of porting the config panel is that the narrow default is recoverable.
+    renderTable({ compactColumns: true });
+    expect(screen.queryByRole('columnheader', { name: 'Acceptance criteria' })).not.toBeInTheDocument();
+
+    await openConfig();
+    await userEvent.click(screen.getByRole('button', { name: 'Show Acceptance criteria' }));
+
+    expect(screen.getByRole('columnheader', { name: 'Acceptance criteria' })).toBeInTheDocument();
+  });
+
+  it('keeps Actions when every data column is hidden', async () => {
+    renderTable();
+    await openConfig();
+    for (const label of ['Type', 'Ref', 'Title', 'Parent', 'Description', 'Acceptance criteria',
+      'Status', 'Criticality', 'AI', 'Points', 'Due', 'Time of day', 'Sprint', 'Last note', 'Created']) {
+      await userEvent.click(screen.getByRole('button', { name: `Hide ${label}` }));
+    }
+    const headers = screen.getAllByRole('columnheader').map((h) => h.textContent?.trim());
+    expect(headers).toEqual(['Actions']);
   });
 });
 

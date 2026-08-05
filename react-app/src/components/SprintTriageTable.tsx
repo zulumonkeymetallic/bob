@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Spinner } from 'react-bootstrap';
-import { Activity, Clock3, Wand2, Pencil, Trash2, ExternalLink, ChevronUp, ChevronDown, MessageSquarePlus } from 'lucide-react';
+import { Activity, Clock3, Wand2, Pencil, Trash2, ExternalLink, MessageSquarePlus, Settings, Eye, EyeOff } from 'lucide-react';
 import {
     doc, updateDoc, deleteDoc, serverTimestamp,
     collection, query, where, orderBy, limit, onSnapshot,
@@ -21,14 +21,60 @@ import { MISSING_INFO_CELL_BG, MISSING_INFO_CELL_BG_HOVER } from '../utils/dataQ
 import { normalizePriorityValue } from '../utils/priorityUtils';
 import { POINTS_STEP, STORY_POINTS_MAX, TASK_POINTS_MAX, normalizePointsValue, parsePointsValue } from '../utils/points';
 import { ActivityStreamService } from '../services/ActivityStreamService';
+import { compareTimestamps, formatTimestampCell } from '../utils/timestamps';
 
 const BASE_URL = 'https://bob.jc1.tech';
 const EXCLUDED_TASK_TYPES = new Set(['chore', 'routine', 'habit', 'core', 'read', 'watch']);
 
 interface Sprint { id: string; name: string; }
 type RowType = 'story' | 'task';
-type SortKey = 'type' | 'ref' | 'title' | 'status' | 'ai' | 'dueDate';
+type SortKey = 'type' | 'ref' | 'title' | 'status' | 'ai' | 'dueDate' | 'createdAt';
 type SortDir = 'asc' | 'desc';
+
+type ColumnKey =
+    | 'type' | 'ref' | 'title' | 'parent' | 'description' | 'acceptanceCriteria'
+    | 'status' | 'criticality' | 'ai' | 'points' | 'dueDate' | 'timeOfDay'
+    | 'sprint' | 'note' | 'createdAt';
+
+interface TriageColumn {
+    key: ColumnKey;
+    label: string;
+    minWidth: number;
+    /** Set only on columns the table can sort by; the rest render an inert header. */
+    sortKey?: SortKey;
+    /** In the reduced set used on iPad landscape, where the full 15 need horizontal
+     *  scrolling to read anything. Everything else starts hidden there. */
+    compact?: boolean;
+}
+
+/**
+ * The column set, in render order. Replaces the hand-maintained pairs of
+ * `{!compactColumns && <TH .../>}` / `{!compactColumns && <td>...</td>}` guards, which meant
+ * the header list and the cell list could drift apart and gave the user no say either way.
+ * Order/Actions are not here: Actions is always rendered last, and this table has no drag
+ * column (reordering a mixed story+task list has no single field to write).
+ */
+const TRIAGE_COLUMNS: TriageColumn[] = [
+    { key: 'type', label: 'Type', minWidth: 70, sortKey: 'type' },
+    { key: 'ref', label: 'Ref', minWidth: 80, sortKey: 'ref' },
+    { key: 'title', label: 'Title', minWidth: 200, sortKey: 'title', compact: true },
+    // Parent sits directly after Title — what a row rolls up to is read together with what
+    // it is, not eight columns away.
+    { key: 'parent', label: 'Parent', minWidth: 180 },
+    { key: 'description', label: 'Description', minWidth: 160 },
+    { key: 'acceptanceCriteria', label: 'Acceptance criteria', minWidth: 220 },
+    { key: 'status', label: 'Status', minWidth: 100, sortKey: 'status', compact: true },
+    { key: 'criticality', label: 'Criticality', minWidth: 100 },
+    { key: 'ai', label: 'AI', minWidth: 50, sortKey: 'ai', compact: true },
+    { key: 'points', label: 'Points', minWidth: 70 },
+    { key: 'dueDate', label: 'Due', minWidth: 90, sortKey: 'dueDate' },
+    { key: 'timeOfDay', label: 'Time of day', minWidth: 100 },
+    { key: 'sprint', label: 'Sprint', minWidth: 130 },
+    { key: 'note', label: 'Last note', minWidth: 180 },
+    // Last data column, so it sits immediately left of Actions — same position as the
+    // Created column on the Modern goals/stories/tasks tables.
+    { key: 'createdAt', label: 'Created', minWidth: 140, sortKey: 'createdAt' },
+];
 
 interface SprintTriageTableProps {
     stories: Story[];
@@ -113,10 +159,14 @@ const TH_BASE: React.CSSProperties = {
     userSelect: 'none',
 };
 
+// Padding, size and line height match ModernStoriesTable's cells, so a row reads the same
+// on the Kanban's table view as it does on /stories. Per Jim, 2026-08-05.
 const TD: React.CSSProperties = {
-    padding: '10px 8px',
-    fontSize: 13,
+    padding: '12px 8px',
+    fontSize: 14,
+    lineHeight: 1.4,
     verticalAlign: 'middle',
+    wordBreak: 'break-word',
     borderRight: `1px solid ${themeVars.border}`,
 };
 
@@ -148,6 +198,19 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
     const [convertedStory, setConvertedStory] = useState<{ ref: string; id: string } | null>(null);
     const [sortKey, setSortKey] = useState<SortKey>('type');
     const [sortDir, setSortDir] = useState<SortDir>('asc');
+    const [showConfig, setShowConfig] = useState(false);
+    // Seeded once from compactColumns rather than tracked: the prop is device-derived
+    // (isIPad && isTablet in SprintKanbanPageV2) and stable for the session, so re-deriving
+    // it would only ever throw away a choice the user has since made here.
+    const [visibleColumns, setVisibleColumns] = useState<Set<ColumnKey>>(
+        () => new Set(TRIAGE_COLUMNS.filter(c => !compactColumns || c.compact).map(c => c.key)),
+    );
+    const show = useCallback((key: ColumnKey) => visibleColumns.has(key), [visibleColumns]);
+    const toggleColumn = (key: ColumnKey) => setVisibleColumns((prev) => {
+        const next = new Set(prev);
+        if (next.has(key)) next.delete(key); else next.add(key);
+        return next;
+    });
     const [hovered, setHovered] = useState<string | null>(null);
     const [latestNotes, setLatestNotes] = useState<Record<string, string>>({});
     const [hideDone, setHideDone] = useState(true);
@@ -462,6 +525,13 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
         }
     };
 
+    /** Actions (180) plus whatever data columns are on, so hiding columns actually narrows
+     *  the table instead of leaving it padded out to the full 15-column width. */
+    const visibleMinWidth = useMemo(
+        () => 180 + TRIAGE_COLUMNS.filter(c => visibleColumns.has(c.key)).reduce((sum, c) => sum + c.minWidth, 0),
+        [visibleColumns],
+    );
+
     const handleSort = (key: SortKey) => {
         if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
         else { setSortKey(key); setSortDir('asc'); }
@@ -485,6 +555,11 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
             else if (sortKey === 'status') { av = Number((a.item as any).status ?? 0); bv = Number((b.item as any).status ?? 0); }
             else if (sortKey === 'ai') { av = Number((a.item as any).aiCriticalityScore ?? -1); bv = Number((b.item as any).aiCriticalityScore ?? -1); }
             else if (sortKey === 'dueDate') { av = fmtDate((a.item as any).dueDate); bv = fmtDate((b.item as any).dueDate); }
+            else if (sortKey === 'createdAt') {
+                // createdAt is a Timestamp/Date/millis, none of which compare correctly as the
+                // strings this comparator otherwise works in.
+                return compareTimestamps((a.item as any).createdAt, (b.item as any).createdAt, sortDir === 'asc' ? 1 : -1);
+            }
             if (av < bv) return sortDir === 'asc' ? -1 : 1;
             if (av > bv) return sortDir === 'asc' ? 1 : -1;
             return 0;
@@ -497,16 +572,18 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
     }, [sprintStories, sprintTasks, sortKey, sortDir, hideDone]);
 
     // Render helpers
+    /** Text arrows shown only on the active column — same indicator ModernStoriesTable uses,
+     *  rather than this table's previous lucide chevrons. Per Jim, 2026-08-05. */
     const SortIcon = ({ col }: { col: SortKey }) =>
         sortKey !== col ? null :
-        sortDir === 'asc' ? <ChevronUp size={11} style={{ marginLeft: 2 }} /> : <ChevronDown size={11} style={{ marginLeft: 2 }} />;
+        <span style={{ fontSize: '10px', color: themeVars.text as string }}>{sortDir === 'asc' ? '↑' : '↓'}</span>;
 
     const TH = ({ label, col, style }: { label: string; col?: SortKey; style?: React.CSSProperties }) => (
         <th
             style={{ ...TH_BASE, color: themeVars.muted as string, backgroundColor: themeVars.card as string, ...style, cursor: col ? 'pointer' : 'default' }}
             onClick={col ? () => handleSort(col) : undefined}
         >
-            <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                 {label}{col && <SortIcon col={col} />}
             </span>
         </th>
@@ -986,33 +1063,97 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
 
     return (
         <>
+            {/* Same affordance and wording as the Modern tables' Configure Table button, so
+                column visibility is found in the same place on every table surface. */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+                <button
+                    type="button"
+                    onClick={() => setShowConfig(v => !v)}
+                    style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        padding: '4px 10px',
+                        fontSize: 12,
+                        borderRadius: 6,
+                        border: `1px solid ${showConfig ? themeVars.brand : themeVars.border}`,
+                        background: showConfig ? (themeVars.card as string) : 'transparent',
+                        color: themeVars.text as string,
+                        cursor: 'pointer',
+                    }}
+                >
+                    <Settings size={14} />
+                    {showConfig ? 'Hide Columns' : 'Columns'}
+                </button>
+            </div>
+
+            {showConfig && (
+                <div style={{
+                    marginBottom: 12,
+                    padding: 12,
+                    borderRadius: 8,
+                    border: `1px solid ${themeVars.border}`,
+                    backgroundColor: themeVars.panel as string,
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: 8,
+                }}>
+                    {TRIAGE_COLUMNS.map(column => {
+                        const visible = show(column.key);
+                        return (
+                            <button
+                                key={column.key}
+                                type="button"
+                                onClick={() => toggleColumn(column.key)}
+                                aria-pressed={visible}
+                                // The visible text is just the column name; on its own it does
+                                // not say that pressing it toggles anything, or which way.
+                                aria-label={visible ? `Hide ${column.label}` : `Show ${column.label}`}
+                                title={visible ? `Hide ${column.label}` : `Show ${column.label}`}
+                                style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 6,
+                                    padding: '4px 10px',
+                                    fontSize: 12,
+                                    borderRadius: 999,
+                                    border: `1px solid ${visible ? themeVars.brand : themeVars.border}`,
+                                    background: 'transparent',
+                                    color: visible ? (themeVars.text as string) : (themeVars.muted as string),
+                                    cursor: 'pointer',
+                                }}
+                            >
+                                {visible ? <Eye size={13} /> : <EyeOff size={13} />}
+                                {column.label}
+                            </button>
+                        );
+                    })}
+                </div>
+            )}
+
             <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: '70vh' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: compactColumns ? 480 : 1720 }}>
-                    <thead>
+                <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: visibleMinWidth }}>
+                    {/* Matches ModernStoriesTable's header rule, which this table was missing. */}
+                    <thead style={{ borderBottom: `1px solid ${themeVars.border}` }}>
                         <tr>
-                            {!compactColumns && <TH label="Type" col="type" style={{ minWidth: 70 }} />}
-                            {!compactColumns && <TH label="Ref" col="ref" style={{ minWidth: 80 }} />}
-                            <TH label="Title" col="title" style={{ minWidth: 200 }} />
-                            {/* Parent sits directly after Title — what a row rolls up to is
-                                read together with what it is, not eight columns away. */}
-                            {!compactColumns && <TH label="Parent" style={{ minWidth: 180, cursor: 'default' }} />}
-                            {!compactColumns && <TH label="Description" style={{ minWidth: 160, cursor: 'default' }} />}
-                            {!compactColumns && <TH label="Acceptance criteria" style={{ minWidth: 220, cursor: 'default', whiteSpace: 'normal' }} />}
-                            <TH label="Status" col="status" style={{ minWidth: 100 }} />
-                            {!compactColumns && <TH label="Criticality" style={{ minWidth: 100, cursor: 'default' }} />}
-                            <TH label="AI" col="ai" style={{ minWidth: 50 }} />
-                            {!compactColumns && <TH label="Points" style={{ minWidth: 70, cursor: 'default' }} />}
-                            {!compactColumns && <TH label="Due" col="dueDate" style={{ minWidth: 90 }} />}
-                            {!compactColumns && <TH label="Time of day" style={{ minWidth: 100, cursor: 'default' }} />}
-                            {!compactColumns && <TH label="Sprint" style={{ minWidth: 130, cursor: 'default' }} />}
-                            {!compactColumns && <TH label="Last note" style={{ minWidth: 180, cursor: 'default' }} />}
+                            {TRIAGE_COLUMNS.filter(c => show(c.key)).map(c => (
+                                <TH
+                                    key={c.key}
+                                    label={c.label}
+                                    col={c.sortKey}
+                                    style={{
+                                        minWidth: c.minWidth,
+                                        ...(c.key === 'acceptanceCriteria' ? { whiteSpace: 'normal' } : null),
+                                    }}
+                                />
+                            ))}
                             <TH label="Actions" style={{ minWidth: 180, cursor: 'default' }} />
                         </tr>
                     </thead>
                     <tbody>
                         {rows.length === 0 && (
                             <tr>
-                                <td colSpan={compactColumns ? 4 : 15} style={{ padding: 32, textAlign: 'center', color: themeVars.muted as string, fontSize: 13 }}>
+                                <td colSpan={visibleColumns.size + 1} style={{ padding: 32, textAlign: 'center', color: themeVars.muted as string, fontSize: 13 }}>
                                     No stories or tasks in this sprint.
                                 </td>
                             </tr>
@@ -1029,7 +1170,7 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
                                     onMouseLeave={() => setHovered(null)}
                                 >
                                     {/* Type */}
-                                    {!compactColumns && (
+                                    {show('type') && (
                                     <td style={TD}>
                                         <span style={{ display: 'inline-block', padding: '2px 7px', borderRadius: 10, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', backgroundColor: rowType === 'story' ? '#0d6efd22' : '#6c757d22', color: rowType === 'story' ? '#0d6efd' : '#6c757d' }}>
                                             {rowType === 'story' ? 'Story' : ((item as any).type || 'Task')}
@@ -1039,8 +1180,8 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
                                     {/* Ref — opens the same edit modal as the row's Edit action,
                                         rather than navigating to a separate page. Confirmed by
                                         Jim, 2026-07-23: clicking the ref should stay on this page. */}
-                                    {!compactColumns && (
-                                    <td style={{ ...TD, fontFamily: 'monospace', fontSize: 12 }}>
+                                    {show('ref') && (
+                                    <td style={{ ...TD, fontFamily: 'monospace', fontSize: 13 }}>
                                         <button
                                             type="button"
                                             onClick={() => rowType === 'story' ? onEditStory(item as Story) : onEditTask(item as Task)}
@@ -1054,78 +1195,91 @@ const SprintTriageTable: React.FC<SprintTriageTableProps> = ({
                                         hovering for a tooltip. Vertically centred: acceptance
                                         criteria make rows tall, and a short title pinned to the
                                         top of a five-line row reads as belonging to nothing. */}
+                                    {show('title') && (
                                     <td style={{ ...TD, maxWidth: 320, fontWeight: 500, verticalAlign: 'middle' }}>
                                         {inlineText(item, rowType, 'title', item.title || '', false, true)}
                                     </td>
+                                    )}
                                     {/* Parent + progress — shaded when nothing parents this row,
                                         because unparented work rolls up to nothing. */}
-                                    {!compactColumns && (
+                                    {show('parent') && (
                                     <td style={{ ...TD, minWidth: 180, verticalAlign: 'top', backgroundColor: missingBg(!hasParent(item, rowType), isHovered) }}>
                                         {parentCell(item, rowType)}
                                     </td>
                                     )}
                                     {/* Description — centred with the title, same reasoning. */}
-                                    {!compactColumns && (
+                                    {show('description') && (
                                     <td style={{ ...TD, maxWidth: 240, color: themeVars.muted as string, verticalAlign: 'middle' }}>
                                         {inlineText(item, rowType, 'description', (item as any).description || '', true, true, 3)}
                                     </td>
                                     )}
                                     {/* Acceptance criteria — wrapped bullet list, click to edit
                                         (one criterion per line). Shaded when there are none. */}
-                                    {!compactColumns && (
-                                    <td style={{ ...TD, maxWidth: 340, fontSize: 12, verticalAlign: 'top', backgroundColor: missingBg(!hasAcceptanceCriteria, isHovered) }}>
+                                    {show('acceptanceCriteria') && (
+                                    <td style={{ ...TD, maxWidth: 340, fontSize: 13, verticalAlign: 'top', backgroundColor: missingBg(!hasAcceptanceCriteria, isHovered) }}>
                                         {acceptanceCriteriaCell(item, rowType)}
                                     </td>
                                     )}
                                     {/* Status — cell shaded by lane (grey backlog, green in
                                         progress, blue complete) so the column can be scanned
                                         without reading it. */}
+                                    {show('status') && (
                                     <td style={{ ...TD, verticalAlign: 'top', backgroundColor: statusCellBg(canonicalStatusValue((item as any).status, rowType), rowType) }}>
                                         {inlineStatus(item, rowType)}
                                     </td>
+                                    )}
                                     {/* Criticality — the human-set priority, next to Status.
                                         Distinct from the AI column, which is the model's
                                         computed 0–100 score. */}
-                                    {!compactColumns && (
+                                    {show('criticality') && (
                                     <td style={{ ...TD, verticalAlign: 'top' }}>{inlinePriority(item, rowType)}</td>
                                     )}
                                     {/* AI score */}
+                                    {show('ai') && (
                                     <td style={{ ...TD, textAlign: 'center', minWidth: 50, verticalAlign: 'top' }}>
                                         {aiScore != null ? (
-                                            <span style={{ fontSize: 12, fontWeight: 600, color: aiScore >= 70 ? '#dc3545' : aiScore >= 40 ? '#fd7e14' : themeVars.muted as string }}>
+                                            <span style={{ fontSize: 13, fontWeight: 600, color: aiScore >= 70 ? '#dc3545' : aiScore >= 40 ? '#fd7e14' : themeVars.muted as string }}>
                                                 {aiScore}
                                             </span>
-                                        ) : <span style={{ color: themeVars.muted as string, fontSize: 11 }}>—</span>}
+                                        ) : <span style={{ color: themeVars.muted as string, fontSize: 12 }}>—</span>}
                                     </td>
+                                    )}
                                     {/* Points */}
-                                    {!compactColumns && (
+                                    {show('points') && (
                                     <td style={{ ...TD, minWidth: 70, verticalAlign: 'top' }}>
                                         {inlinePoints(item, rowType)}
                                     </td>
                                     )}
                                     {/* Due */}
-                                    {!compactColumns && (
+                                    {show('dueDate') && (
                                     <td style={{ ...TD, minWidth: 90, verticalAlign: 'top' }}>
                                         {inlineText(item, rowType, 'dueDate', fmtDate((item as any).dueDate))}
                                     </td>
                                     )}
                                     {/* Time of day */}
-                                    {!compactColumns && (
+                                    {show('timeOfDay') && (
                                     <td style={{ ...TD, minWidth: 100, verticalAlign: 'top' }}>
                                         {inlineTimeOfDay(item, rowType)}
                                     </td>
                                     )}
                                     {/* Sprint */}
-                                    {!compactColumns && (
+                                    {show('sprint') && (
                                     <td style={{ ...TD, minWidth: 130, verticalAlign: 'top' }}>
                                         {inlineSprintSelect(item, rowType)}
                                     </td>
                                     )}
                                     {/* Last note — click to add one, written straight to the
                                         activity stream. */}
-                                    {!compactColumns && (
-                                    <td style={{ ...TD, maxWidth: 240, color: themeVars.muted as string, fontSize: 12, verticalAlign: 'top' }}>
+                                    {show('note') && (
+                                    <td style={{ ...TD, maxWidth: 240, color: themeVars.muted as string, fontSize: 13, verticalAlign: 'top' }}>
                                         {noteCell(item, rowType)}
+                                    </td>
+                                    )}
+                                    {/* Created — read-only, written once by Firestore. */}
+                                    {show('createdAt') && (
+                                    <td style={{ ...TD, minWidth: 140, verticalAlign: 'top', color: themeVars.muted as string, whiteSpace: 'nowrap' }}>
+                                        {formatTimestampCell((item as any).createdAt)
+                                            || <span style={{ color: themeVars.muted as string }}>—</span>}
                                     </td>
                                     )}
                                     {/* Actions */}
