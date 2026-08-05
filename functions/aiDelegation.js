@@ -292,7 +292,7 @@ async function findFlaggedItems(db, uid, limit, onlyId = null) {
  * revision it is a rewrite of that prompt informed by the rejection commentary, always on the
  * top tier — see REVISION_MODEL.
  */
-async function resolveWorkingPrompt(data, basePrompt, title) {
+async function resolveWorkingPrompt(data, basePrompt, title, uid = null) {
   const feedback = String(data.aiDelegationFeedback || '').trim();
   if (!feedback) {
     const taskType = data.aiDelegationType || data.aiDelegationTaskType || classifyDelegationTask(basePrompt);
@@ -308,7 +308,7 @@ async function resolveWorkingPrompt(data, basePrompt, title) {
 
   let revisedPrompt = basePrompt;
   try {
-    const rewritten = await callLLM(PROMPT_REVISION_SYSTEM_PROMPT, revisionInput, REVISION_MODEL);
+    const rewritten = await callLLM(PROMPT_REVISION_SYSTEM_PROMPT, revisionInput, REVISION_MODEL, { userId: uid, purpose: 'storyResearchDoc' });
     const trimmed = String(rewritten || '').trim();
     if (trimmed) revisedPrompt = trimmed;
   } catch (err) {
@@ -376,7 +376,7 @@ async function runDelegationCycle(uid, { limit = MAX_ITEMS_PER_RUN, dryRun = fal
 
     let working;
     try {
-      working = await resolveWorkingPrompt(data, prompt, title);
+      working = await resolveWorkingPrompt(data, prompt, title, uid);
     } catch (err) {
       results.push({ ref, link, status: 'error', reason: err?.message || 'Prompt resolution failed' });
       continue;
@@ -399,7 +399,7 @@ async function runDelegationCycle(uid, { limit = MAX_ITEMS_PER_RUN, dryRun = fal
     const revision = Number(data.aiDelegationRevision || 0) + (revised ? 1 : 0);
 
     try {
-      const response = await callLLM(DOC_SYSTEM_PROMPT, `# ${title}\n\n${workingPrompt}`, model);
+      const response = await callLLM(DOC_SYSTEM_PROMPT, `# ${title}\n\n${workingPrompt}`, model, { userId: uid, purpose: 'storyResearchDoc' });
       const docName = revision > 0 ? `${ref} — ${title} (rev ${revision})` : `${ref} — ${title}`;
       const { docUrl } = await createDelegationDoc(uid, entityType, id, docName, response);
 

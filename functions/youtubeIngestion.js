@@ -44,7 +44,7 @@ Return JSON only.`;
 async function analyzeTranscript(transcript, context) {
   const { system, user } = buildAnalysisPrompts(transcript, context);
   try {
-    const raw = await callLLMFreeFirst(system, user, { purpose: 'youtube_transcript_analysis' });
+    const raw = await callLLMFreeFirst(system, user, { purpose: 'youtube_transcript_analysis', userId: context?.uid || null });
     return JSON.parse(raw);
   } catch (e) {
     console.warn('[youtubeIngestion] analyzeTranscript failed:', e.message);
@@ -144,6 +144,7 @@ async function ingestYouTubeUrl({ uid, entityType, entityId, videoUrl }) {
       entityDescription: entity.description,
       acceptanceCriteria: entity.acceptanceCriteria,
       goalTitle,
+      uid,
     });
 
     const folderId = entityType === 'task'

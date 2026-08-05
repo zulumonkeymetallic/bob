@@ -507,7 +507,7 @@ const PRIORITY_TEXT_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
 async function callLLMJsonSafe({ system, user, purpose, userId, model }) {
   const { callLLM } = require('./utils/llmHelper');
   try {
-    const raw = await callLLM(system, user, model);
+    const raw = await callLLM(system, user, model, { userId, purpose });
     return JSON.parse(raw);
   } catch (error) {
     console.warn('[llm-json] failed', { purpose, userId, error: error?.message || error });
@@ -801,6 +801,7 @@ const THEME_LABELS = {
   13: 'Sleep',
   14: 'Random',
   15: 'Side Gig',
+  16: 'Business Experiments',
 };
 function resolveThemeLabel(theme) {
   if (theme == null) return null;

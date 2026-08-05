@@ -6,6 +6,7 @@ const cheerio = require('cheerio');
 const { DateTime } = require('luxon');
 const { google } = require('googleapis');
 const { VertexAI } = require('@google-cloud/vertexai');
+const llmCredentials = require('./utils/llmCredentials');
 const { HarmCategory, HarmBlockThreshold } = require('@google/generative-ai'); // kept for constant values only
 
 const { sendEmail } = require('./lib/email');
@@ -472,28 +473,80 @@ async function generateVertexJsonText(model, prompt, emptyMessage) {
   return text;
 }
 
-// Legacy aliases — callers use these names; remapped to Vertex equivalents
-const createGeminiJsonModel = (_, opts) => createVertexJsonModel(opts);
-const generateGeminiJsonText = generateVertexJsonText;
+/** Gemini via a user's own AI Studio key — billed to them, not to the BOB project. */
+function createUserGeminiJsonModel(apiKey, { schema, maxOutputTokens, temperature, topP, topK }) {
+  const { GoogleGenerativeAI } = require('@google/generative-ai');
+  const genAI = new GoogleGenerativeAI(apiKey);
+  return genAI.getGenerativeModel({
+    model: GEMINI_MODEL,
+    generationConfig: {
+      temperature,
+      topP,
+      topK,
+      maxOutputTokens,
+      responseMimeType: 'application/json',
+      responseSchema: schema,
+    },
+  });
+}
 
-function resolveProfileProviderApiKeys(profile = null) {
+/**
+ * Picks the Gemini transport for this call.
+ *
+ * This used to be `(_, opts) => createVertexJsonModel(opts)` — it discarded the caller's
+ * apiKey argument entirely, so every Gemini call in transcript ingestion ran on Vertex ADC and
+ * billed the BOB project even when the user had supplied their own key. Vertex is now reached
+ * only when there is no user key, which under BYOK means an exempt account.
+ */
+function createGeminiJsonModel(apiKey, opts) {
+  const key = String(apiKey || '').trim();
+  return key ? createUserGeminiJsonModel(key, opts) : createVertexJsonModel(opts);
+}
+
+/**
+ * Reads the generated text from either transport.
+ *
+ * The two SDKs disagree on response shape: AI Studio exposes `response.text()`, Vertex exposes
+ * `response.candidates[0].content.parts[0].text`.
+ */
+async function generateGeminiJsonText(model, prompt, emptyMessage) {
+  const result = await model.generateContent(prompt);
+  const response = result?.response;
+  const text = (typeof response?.text === 'function' ? response.text() : null)
+    || response?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error(emptyMessage);
+  return text;
+}
+
+/**
+ * Resolves which API keys this ingestion run may spend.
+ *
+ * BOB is bring-your-own-key: the project's own credentials are added only for the accounts in
+ * llmCredentials.exemptUids() (the owner's automation and the demo user). For everyone else a
+ * null here is the point where ingestion stops rather than silently billing the owner — the
+ * downstream callers turn that into a `missing_key` the user can see in Settings → AI.
+ */
+function resolveProfileProviderApiKeys(profile = null, userId = null) {
   const profileData = profile && typeof profile === 'object' ? profile : {};
   const perProvider = profileData.aiApiKeys && typeof profileData.aiApiKeys === 'object'
     ? profileData.aiApiKeys
     : {};
   const legacyKey = String(profileData.aiApiKey || '').trim() || null;
+  const infra = llmCredentials.isExempt(userId);
 
   const geminiApiKey = String(
     perProvider.gemini ||
     perProvider['google-ai-studio'] ||
     perProvider.google ||
     legacyKey ||
+    (infra ? process.env.GOOGLEAISTUDIOAPIKEY : '') ||
     ''
   ).trim() || null;
 
   const anthropicApiKey = String(
     perProvider.anthropic ||
     legacyKey ||
+    (infra ? process.env.ANTHROPIC_API_KEY : '') ||
     ''
   ).trim() || null;
 
@@ -501,6 +554,7 @@ function resolveProfileProviderApiKeys(profile = null) {
     perProvider.openrouter ||
     perProvider['open-router'] ||
     perProvider.open_router ||
+    (infra ? process.env.OPENROUTER_API_KEY : '') ||
     ''
   ).trim() || null;
 
@@ -520,8 +574,16 @@ function resolveProfileProviderApiKeys(profile = null) {
 }
 
 async function callAnthropicText({ system, user, apiKey }) {
-  const key = String(apiKey || process.env.ANTHROPIC_API_KEY || '').trim();
-  if (!key) throw new Error('ANTHROPIC_API_KEY not configured for fallback');
+  // No process.env fallback: the key arrives from resolveProfileProviderApiKeys, which is the
+  // one place allowed to decide whether BOB's own credentials are in play.
+  const key = String(apiKey || '').trim();
+  if (!key) {
+    throw new llmCredentials.LLMCredentialError(
+      llmCredentials.CODES.MISSING_KEY,
+      llmCredentials.messageForCode(llmCredentials.CODES.MISSING_KEY, 'anthropic'),
+      { provider: 'anthropic' },
+    );
+  }
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -545,8 +607,14 @@ async function callAnthropicText({ system, user, apiKey }) {
 }
 
 async function callOpenRouterText({ system, user, apiKey, model = OPENROUTER_FALLBACK_MODEL }) {
-  const key = String(apiKey || process.env.OPENROUTER_API_KEY || '').trim();
-  if (!key) throw new Error('OPENROUTER_API_KEY not configured for fallback');
+  const key = String(apiKey || '').trim();
+  if (!key) {
+    throw new llmCredentials.LLMCredentialError(
+      llmCredentials.CODES.MISSING_KEY,
+      llmCredentials.messageForCode(llmCredentials.CODES.MISSING_KEY, 'openrouter', model),
+      { provider: 'openrouter', model },
+    );
+  }
   const selectedModel = String(model || OPENROUTER_FALLBACK_MODEL).trim() || OPENROUTER_FALLBACK_MODEL;
   const buildBody = ({ enforceJsonMode = true } = {}) => ({
     model: selectedModel,
@@ -1746,10 +1814,14 @@ async function callAgentRouterModel({
   openRouterApiKey = null,
   openRouterModel = OPENROUTER_FALLBACK_MODEL,
 }) {
-  const apiKey = String(geminiApiKey || process.env.GOOGLEAISTUDIOAPIKEY || '').trim();
-  const fallbackKey = String(openRouterApiKey || process.env.OPENROUTER_API_KEY || '').trim();
+  const apiKey = String(geminiApiKey || '').trim();
+  const fallbackKey = String(openRouterApiKey || '').trim();
   if (!apiKey && !fallbackKey) {
-    throw new Error('No AI API key configured. Add GOOGLEAISTUDIOAPIKEY or OPENROUTER_API_KEY.');
+    throw new llmCredentials.LLMCredentialError(
+      llmCredentials.CODES.MISSING_KEY,
+      llmCredentials.messageForCode(llmCredentials.CODES.MISSING_KEY, 'gemini'),
+      { provider: 'gemini' },
+    );
   }
 
   const system = [
@@ -1811,15 +1883,17 @@ async function callAgentRouterModel({
   };
 
   try {
-    const model = createVertexJsonModel({
+    // `apiKey` is the user's own AI Studio key when they have one; without it this falls to
+    // Vertex ADC, which only exempt accounts ever reach (resolveProfileProviderApiKeys).
+    const model = createGeminiJsonModel(apiKey, {
       schema: ROUTER_RESPONSE_SCHEMA,
       maxOutputTokens: 1024,
       temperature: 0.1,
       topP: 0.9,
       topK: 40,
     });
-    const text = await generateVertexJsonText(model, `${system}\n\n${user}`, 'Vertex AI returned an empty routing response');
-    return parseModelJson(text, 'Vertex AI routing response');
+    const text = await generateGeminiJsonText(model, `${system}\n\n${user}`, 'Gemini returned an empty routing response');
+    return parseModelJson(text, 'Gemini routing response');
   } catch (vertexError) {
     if (!shouldFallbackToOpenRouter(vertexError) || !fallbackKey) throw vertexError;
     const repairedSystem = `${system}\nReturn STRICT JSON only with no extra text.`;
@@ -1846,11 +1920,15 @@ async function callTranscriptModel({
   openRouterApiKey = null,
   openRouterModel = OPENROUTER_FALLBACK_MODEL,
 }) {
-  const apiKey = String(geminiApiKey || process.env.GOOGLEAISTUDIOAPIKEY || '').trim();
-  const anthropicKey = String(anthropicApiKey || process.env.ANTHROPIC_API_KEY || '').trim();
-  const openRouterKey = String(openRouterApiKey || process.env.OPENROUTER_API_KEY || '').trim();
+  const apiKey = String(geminiApiKey || '').trim();
+  const anthropicKey = String(anthropicApiKey || '').trim();
+  const openRouterKey = String(openRouterApiKey || '').trim();
   if (!apiKey && !anthropicKey && !openRouterKey) {
-    throw new Error('No AI API key configured. Add GOOGLEAISTUDIOAPIKEY, ANTHROPIC_API_KEY, or OPENROUTER_API_KEY.');
+    throw new llmCredentials.LLMCredentialError(
+      llmCredentials.CODES.MISSING_KEY,
+      llmCredentials.messageForCode(llmCredentials.CODES.MISSING_KEY, 'gemini'),
+      { provider: 'gemini' },
+    );
   }
   const currentDate = DateTime.now().setZone(timezone || DEFAULT_TIMEZONE);
   const customJournalPrompt = sanitizeUserJournalPrompt(journalPromptOverride);
@@ -2051,19 +2129,42 @@ async function callTranscriptModel({
     });
   };
 
-  try {
-    const model = createVertexJsonModel({
-      schema: TRANSCRIPT_ANALYSIS_SCHEMA,
-      maxOutputTokens: 8192,
-      temperature: 0.2,
-      topP: 0.95,
-      topK: 40,
-    });
-    text = await generateVertexJsonText(model, `${system}\n\n${user}`, 'Vertex AI returned an empty response');
-    usedProvider = 'vertex-ai';
-  } catch (vertexError) {
-    if (!shouldFallbackToAlternateProvider(vertexError)) throw vertexError;
-    text = await tryAnthropicThenOpenRouter(vertexError);
+  if (apiKey || anthropicKey || openRouterKey) {
+    // A Gemini key means AI Studio; no key at all means Vertex ADC, which is BOB's own
+    // infrastructure and therefore exempt accounts only.
+    if (apiKey) {
+      try {
+        const model = createGeminiJsonModel(apiKey, {
+          schema: TRANSCRIPT_ANALYSIS_SCHEMA,
+          maxOutputTokens: 8192,
+          temperature: 0.2,
+          topP: 0.95,
+          topK: 40,
+        });
+        text = await generateGeminiJsonText(model, `${system}\n\n${user}`, 'Gemini returned an empty response');
+        usedProvider = 'gemini';
+      } catch (geminiError) {
+        if (!shouldFallbackToAlternateProvider(geminiError)) throw geminiError;
+        text = await tryAnthropicThenOpenRouter(geminiError);
+      }
+    } else {
+      text = await tryAnthropicThenOpenRouter(null);
+    }
+  } else {
+    try {
+      const model = createVertexJsonModel({
+        schema: TRANSCRIPT_ANALYSIS_SCHEMA,
+        maxOutputTokens: 8192,
+        temperature: 0.2,
+        topP: 0.95,
+        topK: 40,
+      });
+      text = await generateVertexJsonText(model, `${system}\n\n${user}`, 'Vertex AI returned an empty response');
+      usedProvider = 'vertex-ai';
+    } catch (vertexError) {
+      if (!shouldFallbackToAlternateProvider(vertexError)) throw vertexError;
+      text = await tryAnthropicThenOpenRouter(vertexError);
+    }
   }
 
   if (logger) {
@@ -4619,7 +4720,7 @@ async function processTranscriptIngestion({
     // hanging off a work parent is misfiled and drops out of personal scheduling.
     const userGoals = allUserGoals.filter((goal) => !isStoredWorkPersona(goal.persona));
 
-    const profileApiKeys = resolveProfileProviderApiKeys(profile);
+    const profileApiKeys = resolveProfileProviderApiKeys(profile, uid);
     const rawAnalysis = existingLock.analysis || await callTranscriptModel({
       transcript: normalizedTranscript,
       persona: persona || 'personal',
@@ -5103,7 +5204,7 @@ async function processAgentRequest({
     profile?.settings?.timezone ||
     DEFAULT_TIMEZONE
   ).trim() || DEFAULT_TIMEZONE;
-  const profileApiKeys = resolveProfileProviderApiKeys(profile);
+  const profileApiKeys = resolveProfileProviderApiKeys(profile, uid);
   let effectiveRoute;
   if (!likelyQueryOrAction) {
     effectiveRoute = sanitizeAgentRoute({

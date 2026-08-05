@@ -1,5 +1,7 @@
 const { defineSecret } = require('firebase-functions/params');
 const { VertexAI } = require('@google-cloud/vertexai');
+const admin = require('firebase-admin');
+const llmCredentials = require('./llmCredentials');
 
 const OPENROUTER_API_KEY_SECRET = defineSecret('OPENROUTER_API_KEY');
 
@@ -73,6 +75,89 @@ async function _callOpenRouter(apiKey, systemPrompt, userPrompt) {
 }
 
 // ---------------------------------------------------------------------------
+// User-key providers (bring-your-own-key)
+//
+// Vertex above runs on ADC and bills the BOB project. These are the equivalents that run on a
+// key the user supplied, and they are what every non-exempt account uses. Deliberately plain
+// text-in/text-out to match `callLLM`'s contract — no JSON mode, no tools.
+// ---------------------------------------------------------------------------
+
+const _stripFences = (text) => String(text || '').replace(/```json\n?|\n?```/g, '').trim();
+
+async function _callUserGemini(apiKey, systemPrompt, userPrompt, modelName) {
+  const { GoogleGenerativeAI } = require('@google/generative-ai');
+  const model = new GoogleGenerativeAI(apiKey).getGenerativeModel({
+    model: modelName || VERTEX_DEFAULT_MODEL,
+    systemInstruction: systemPrompt || undefined,
+    generationConfig: { temperature: 0.2, maxOutputTokens: 2048 },
+  });
+  const result = await model.generateContent(userPrompt);
+  const text = typeof result?.response?.text === 'function' ? result.response.text() : null;
+  if (!text) throw new Error('Gemini returned an empty response');
+  return _stripFences(text);
+}
+
+async function _callUserAnthropic(apiKey, systemPrompt, userPrompt, modelName) {
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({
+      model: modelName || 'claude-haiku-4-5-20251001',
+      max_tokens: 2048,
+      system: systemPrompt || undefined,
+      messages: [{ role: 'user', content: userPrompt }],
+      temperature: 0.2,
+    }),
+  });
+  if (!resp.ok) throw new Error(`Anthropic HTTP ${resp.status}: ${await resp.text()}`);
+  const data = await resp.json();
+  const text = data?.content?.[0]?.text;
+  if (!text) throw new Error('Anthropic returned an empty response');
+  return _stripFences(text);
+}
+
+async function _callUserOpenAI(apiKey, systemPrompt, userPrompt, modelName) {
+  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: modelName || 'gpt-4o-mini',
+      temperature: 0.2,
+      max_tokens: 2048,
+      messages: [
+        { role: 'system', content: systemPrompt || '' },
+        { role: 'user', content: userPrompt },
+      ],
+    }),
+  });
+  if (!resp.ok) throw new Error(`OpenAI HTTP ${resp.status}: ${await resp.text()}`);
+  const data = await resp.json();
+  const text = data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error('OpenAI returned an empty response');
+  return _stripFences(text);
+}
+
+/**
+ * Runs one call on the user's own credentials.
+ *
+ * A model name chosen for Vertex (e.g. 'gemini-2.5-flash') is meaningless to Anthropic or
+ * OpenAI, so the caller's `modelName` is only honoured when the user is actually on Gemini;
+ * otherwise their configured model, then the provider default, wins.
+ */
+async function _callWithUserKey({ provider, apiKey, model, systemPrompt, userPrompt, callerModel }) {
+  switch (provider) {
+    case 'anthropic':
+      return _callUserAnthropic(apiKey, systemPrompt, userPrompt, model);
+    case 'openai':
+      return _callUserOpenAI(apiKey, systemPrompt, userPrompt, model);
+    case 'openrouter':
+      return _callOpenRouterModel(apiKey, model || OPENROUTER_MODEL, systemPrompt, userPrompt);
+    default:
+      return _callUserGemini(apiKey, systemPrompt, userPrompt, model || callerModel);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Failure alerting — one email per failed job, best-effort (never throws)
 // ---------------------------------------------------------------------------
 
@@ -120,11 +205,24 @@ async function _sendModelFailureEmail(purpose, primaryError, fallbackError) {
 // ordering in this file and not two that can drift. That function already falls back to
 // OpenRouter only on quota/503, which is the right trigger: a malformed prompt should fail
 // loudly, not quietly get a second opinion from a different model.
-async function callLLM(systemPrompt, userPrompt, modelName = VERTEX_DEFAULT_MODEL) {
-  return callLLMVertexFirst(systemPrompt, userPrompt, modelName);
+// 2026-08-05: bring-your-own-key. The Vertex/OpenRouter pair below is BOB's own
+// infrastructure and bills the project, so it is now reachable only by the accounts in
+// llmCredentials.exemptUids(). Every other user runs on the key they configured in
+// Settings → AI, and a user with no key gets a `missing_key` error they can act on rather
+// than free usage on the owner's account.
+//
+// `userId` is therefore required in practice. It is an option rather than a positional
+// argument so the existing `callLLM(system, user, model)` shape still reads the same at the
+// ~10 call sites, but omitting it now means "no user" and fails closed.
+async function callLLM(systemPrompt, userPrompt, modelName = VERTEX_DEFAULT_MODEL, { userId = null, purpose = null } = {}) {
+  return callLLMVertexFirst(systemPrompt, userPrompt, modelName, { userId, purpose });
 }
 
-async function callLLMVertexFirst(systemPrompt, userPrompt, modelName = VERTEX_DEFAULT_MODEL) {
+async function callLLMVertexFirst(systemPrompt, userPrompt, modelName = VERTEX_DEFAULT_MODEL, { userId = null, purpose = null } = {}) {
+  if (!llmCredentials.isExempt(userId)) {
+    return _callAsUser({ systemPrompt, userPrompt, modelName, userId, purpose });
+  }
+
   try {
     return await _callVertexAI(systemPrompt, userPrompt, modelName);
   } catch (vertexError) {
@@ -143,8 +241,54 @@ async function callLLMVertexFirst(systemPrompt, userPrompt, modelName = VERTEX_D
   }
 }
 
-async function callLLMFreeFirst(systemPrompt, userPrompt, { modelName, purpose } = {}) {
-  return callLLM(systemPrompt, userPrompt, modelName);
+/** The non-exempt path: resolve the user's own provider and key, then call it. */
+async function _callAsUser({ systemPrompt, userPrompt, modelName, userId, purpose }) {
+  if (!userId) {
+    // A call with no user attached cannot be billed to anyone but the owner, which is exactly
+    // what BYOK exists to prevent. Fail closed and name the caller so it can be fixed.
+    throw new llmCredentials.LLMCredentialError(
+      llmCredentials.CODES.MISSING_KEY,
+      `An AI call was made with no user attached${purpose ? ` (${purpose})` : ''}, so there is no key to charge it to.`,
+      { purpose },
+    );
+  }
+
+  let profile = {};
+  try {
+    const snap = await admin.firestore().collection('profiles').doc(userId).get();
+    profile = snap.exists ? (snap.data() || {}) : {};
+  } catch (e) {
+    console.warn('[llmHelper] profile lookup failed:', e?.message);
+  }
+
+  const featureKey = purpose ? llmCredentials.featureForPurpose(purpose) : null;
+  let creds;
+  try {
+    creds = llmCredentials.resolveCredentials({ profile, userId, featureKey, purpose });
+  } catch (err) {
+    await llmCredentials.reportFailure(userId, err, { provider: err.provider, model: err.model, purpose });
+    throw err;
+  }
+
+  try {
+    const text = await _callWithUserKey({
+      provider: creds.provider,
+      apiKey: creds.apiKey,
+      model: creds.model,
+      systemPrompt,
+      userPrompt,
+      callerModel: modelName,
+    });
+    await llmCredentials.recordLLMStatus(userId, { ok: true, provider: creds.provider, model: creds.model });
+    return text;
+  } catch (err) {
+    await llmCredentials.reportFailure(userId, err, { provider: creds.provider, model: creds.model, purpose });
+    throw err;
+  }
+}
+
+async function callLLMFreeFirst(systemPrompt, userPrompt, { modelName, purpose, userId = null } = {}) {
+  return callLLM(systemPrompt, userPrompt, modelName, { userId, purpose });
 }
 
 module.exports = {

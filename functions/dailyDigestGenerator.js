@@ -159,7 +159,7 @@ async function processDigestForUser({ db, userId, userProfile, today, todayStr, 
     let aiInsights;
     try {
       aiInsights = await aiWrapper(async () => {
-        return await generateAIInsights(userData, userProfile?.aiPersonality || null);
+        return await generateAIInsights(userData, userProfile?.aiPersonality || null, userId);
       }, {
         functionName: 'generateDailyDigest',
         userId: userId,
@@ -457,7 +457,7 @@ async function gatherUserData(db, userId, today, userProfile = {}) {
 /**
  * Generate AI insights using Google AI Studio (Gemini)
  */
-async function generateAIInsights(userData, personality = null) {
+async function generateAIInsights(userData, personality = null, userId = null) {
   // Build a dynamic tone line from the user's personality settings (same logic as callLLMJson).
   function buildToneLine(p) {
     if (!p || typeof p !== 'object') return 'Tone: concise, directive, specific. No generic wellness tips.';
@@ -521,7 +521,7 @@ async function generateAIInsights(userData, personality = null) {
   ${toneLine}`;
 
   const digestSystemPrompt = 'You are an expert executive assistant. Be precise and data-driven.';
-  const textOut = await callLLM(digestSystemPrompt, prompt, DEFAULT_GEMINI_MODEL);
+  const textOut = await callLLM(digestSystemPrompt, prompt, DEFAULT_GEMINI_MODEL, { userId, purpose: 'sendMorningBriefing' });
   return { choices: [{ message: { content: textOut || '' } }] };
 }
 

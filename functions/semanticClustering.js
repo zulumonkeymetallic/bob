@@ -24,6 +24,7 @@
 
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const admin = require('firebase-admin');
+const llmCredentials = require('./utils/llmCredentials');
 
 const EMBED_MODEL = 'text-embedding-004';
 const EMBED_DIM = 768;
@@ -37,15 +38,47 @@ const OPEN_STATUSES = [0, 1, 2];
 // Types never clustered (recurring items pollute sizing/matching).
 const EXCLUDED_TYPES = new Set(['chore', 'routine', 'habit', 'habitual']);
 
-let _genAI = null;
-function embedClient() {
-  if (_genAI) return _genAI;
-  // firebase defineSecret('GOOGLEAISTUDIOAPIKEY') exposes the value on the
-  // GOOGLEAISTUDIOAPIKEY env var (secret name, no underscores). Accept both.
-  const key = process.env.GOOGLEAISTUDIOAPIKEY || process.env.GOOGLE_AI_STUDIO_API_KEY;
-  if (!key) throw new Error('GOOGLEAISTUDIOAPIKEY not set — cannot embed');
-  _genAI = new GoogleGenerativeAI(key);
-  return _genAI;
+// Memoised per key rather than globally: embeddings now run on whichever user's key paid for
+// them, so one cached client would hand user B the client built for user A's key.
+const _genAIByKey = new Map();
+function embedClient(apiKey) {
+  const key = String(apiKey || '').trim();
+  if (!key) throw new Error('no embedding API key — cannot embed');
+  if (!_genAIByKey.has(key)) _genAIByKey.set(key, new GoogleGenerativeAI(key));
+  return _genAIByKey.get(key);
+}
+
+/**
+ * Resolves whose key pays for this user's embeddings.
+ *
+ * Same bring-your-own-key rule as every other model call: BOB's own GOOGLEAISTUDIOAPIKEY is
+ * reachable only by the exempt accounts. Callers fail soft on a throw here, so a user with no
+ * key simply gets no duplicate detection rather than a broken write path.
+ */
+async function resolveEmbedKey(db, uid) {
+  if (llmCredentials.isExempt(uid)) {
+    // firebase defineSecret('GOOGLEAISTUDIOAPIKEY') exposes the value on the
+    // GOOGLEAISTUDIOAPIKEY env var (secret name, no underscores). Accept both.
+    const infra = process.env.GOOGLEAISTUDIOAPIKEY || process.env.GOOGLE_AI_STUDIO_API_KEY;
+    if (infra) return infra;
+  }
+
+  const snap = await db.collection('profiles').doc(uid).get();
+  const profile = snap.exists ? (snap.data() || {}) : {};
+  const keys = profile.aiApiKeys || {};
+  const key = String(
+    keys.gemini || keys['google-ai-studio'] || keys.google ||
+    (!profile.aiApiKeys ? profile.aiApiKey : '') || ''
+  ).trim();
+
+  if (!key) {
+    throw new llmCredentials.LLMCredentialError(
+      llmCredentials.CODES.MISSING_KEY,
+      llmCredentials.messageForCode(llmCredentials.CODES.MISSING_KEY, 'gemini'),
+      { provider: 'gemini' },
+    );
+  }
+  return key;
 }
 
 /** Text we embed: title carries most of the signal; a slice of description adds context. */
@@ -58,10 +91,10 @@ function buildEmbedText(title, description) {
 /**
  * Embed one string → number[768]. Throws on failure (callers fail-soft).
  */
-async function embedText(text) {
+async function embedText(text, apiKey) {
   const clean = String(text || '').trim();
   if (!clean) return null;
-  const model = embedClient().getGenerativeModel({ model: EMBED_MODEL });
+  const model = embedClient(apiKey).getGenerativeModel({ model: EMBED_MODEL });
   const res = await model.embedContent(clean);
   const values = res && res.embedding && res.embedding.values;
   if (!Array.isArray(values) || values.length !== EMBED_DIM) {
@@ -127,7 +160,7 @@ async function resolveCandidate({ db, uid, kind, title, description, entity }) {
   }
   let embedding;
   try {
-    embedding = await embedText(buildEmbedText(title, description));
+    embedding = await embedText(buildEmbedText(title, description), await resolveEmbedKey(db, uid));
   } catch (err) {
     return { action: 'create', embedding: null, match: null, reason: `embed_failed:${err.message}` };
   }
@@ -167,6 +200,15 @@ async function resolveCandidate({ db, uid, kind, title, description, entity }) {
  * Batched + budgeted. Returns { embedded, skipped, failed }.
  */
 async function backfillEmbeddings(db, uid, { collection = 'stories', budget = 300 } = {}) {
+  // Resolved once for the whole loop rather than per document — same key throughout, and a
+  // profile read per story would dominate the cost of the backfill.
+  let embedKey;
+  try {
+    embedKey = await resolveEmbedKey(db, uid);
+  } catch (err) {
+    return { embedded: 0, skipped: 0, failed: 0, reason: `no_key:${err.code || err.message}` };
+  }
+
   const snap = await db.collection(collection)
     .where('ownerUid', '==', uid)
     .where('status', 'in', OPEN_STATUSES)
@@ -180,7 +222,7 @@ async function backfillEmbeddings(db, uid, { collection = 'stories', budget = 30
     if (data[EMBED_FIELD]) { skipped += 1; continue; }
     if (isExcluded(data)) { skipped += 1; continue; }
     try {
-      const values = await embedText(buildEmbedText(data.title, data.description));
+      const values = await embedText(buildEmbedText(data.title, data.description), embedKey);
       if (!values) { skipped += 1; continue; }
       await doc.ref.update({ [EMBED_FIELD]: toVector(values) });
       embedded += 1;

@@ -20,8 +20,9 @@ describe('pairAcrossProviders', () => {
   it('pairs the same run seen by Strava and HealthKit', () => {
     const pairs = pairAcrossProviders([strava(), healthkit()]);
     expect(pairs).toHaveLength(1);
-    expect(pairs[0].canonical._id).toBe('uid_123');
-    expect(pairs[0].duplicates.map((d) => d._id)).toEqual(['uid_hk_abc']);
+    // HealthKit survives; the Strava copy is set aside.
+    expect(pairs[0].canonical._id).toBe('uid_hk_abc');
+    expect(pairs[0].duplicates.map((d) => d._id)).toEqual(['uid_123']);
   });
 
   it('NEVER pairs two records from the same provider', () => {
@@ -42,15 +43,18 @@ describe('pairAcrossProviders', () => {
     expect(pairAcrossProviders(legs)).toHaveLength(0);
   });
 
-  it('prefers Strava over HealthKit as the survivor', () => {
+  it('prefers HealthKit over Strava as the survivor', () => {
+    // HealthKit is the primary source: the watch records every session, and Strava is
+    // usually a copy of that same recording. Preferring Strava discards the original for
+    // a derivative — and when its authorisation lapses, for nothing.
     const pairs = pairAcrossProviders([healthkit(), strava()]);
-    expect(pairs[0].canonical.provider).toBe('strava');
+    expect(pairs[0].canonical.provider).toBe('healthkit');
   });
 
-  it('prefers parkrun over HealthKit', () => {
+  it('prefers parkrun over everything — it is an officially timed result', () => {
     const pr = { _id: 'pr', provider: 'parkrun', type: 'Run', distance_m: 5000, startDate: T };
-    const pairs = pairAcrossProviders([healthkit(), pr]);
-    expect(pairs[0].canonical._id).toBe('pr');
+    expect(pairAcrossProviders([healthkit(), pr])[0].canonical._id).toBe('pr');
+    expect(pairAcrossProviders([strava(), pr])[0].canonical._id).toBe('pr');
   });
 
   it('keeps genuinely separate sessions apart', () => {
@@ -82,13 +86,16 @@ describe('pairAcrossProviders', () => {
   });
 
   it('claims each duplicate once, even with several candidates in the window', () => {
+    // Both Strava rows fall to the higher-ranked HealthKit one, and neither is claimed
+    // twice — the guard that stops a record being counted as a duplicate of two survivors.
     const pairs = pairAcrossProviders([
       strava({ _id: 's1', startDate: T }),
       strava({ _id: 's2', startDate: T + mins(10) }),
       healthkit({ _id: 'hk', startDate: T + mins(5) }),
     ]);
     const claimed = pairs.flatMap((p) => p.duplicates.map((d) => d._id));
-    expect(claimed).toEqual(['hk']);
+    expect(claimed.sort()).toEqual(['s1', 's2']);
+    expect(new Set(claimed).size).toBe(claimed.length);
   });
 
   it('ignores records with no start time', () => {
@@ -99,11 +106,22 @@ describe('pairAcrossProviders', () => {
 describe('buildMergePatch', () => {
   const zones = { z1Time_s: 300, z2Time_s: 900, z3Time_s: 600, z4Time_s: 0, z5Time_s: 0 };
 
-  it('takes zone time from the HealthKit twin when Strava has none', () => {
+  it('takes zone time from a twin when the survivor has none', () => {
     const patch = buildMergePatch(strava(), [healthkit({ hrZones: zones, maxHrUsed: 186 })]);
     expect(patch.hrZones).toEqual(zones);
     expect(patch.maxHrUsed).toBe(186);
     expect(patch.zoneSource).toBe('healthkit');
+  });
+
+  it('takes a distance from the twin when the survivor has none', () => {
+    const patch = buildMergePatch(healthkit({ distance_m: 0 }), [strava({ distance_m: 10000 })]);
+    expect(patch.distance_m).toBe(10000);
+  });
+
+  it('never overwrites a distance the survivor already has', () => {
+    // A strength session has no distance and must not acquire one from a mismatched twin.
+    const patch = buildMergePatch(healthkit({ distance_m: 9950 }), [strava({ distance_m: 10000 })]);
+    expect(patch.distance_m).toBeUndefined();
   });
 
   it('never overwrites zone time the survivor already has', () => {
@@ -111,11 +129,6 @@ describe('buildMergePatch', () => {
     const patch = buildMergePatch(canonical, [healthkit({ hrZones: { z1Time_s: 1 }, maxHrUsed: 190 })]);
     expect(patch.hrZones).toBeUndefined();
     expect(patch.maxHrUsed).toBeUndefined();
-  });
-
-  it('never overwrites the distance — Strava is canonical for it', () => {
-    const patch = buildMergePatch(strava(), [healthkit({ distance_m: 12000 })]);
-    expect(patch.distance_m).toBeUndefined();
   });
 
   it('fills a missing duration from the twin', () => {

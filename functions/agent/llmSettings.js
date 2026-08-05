@@ -320,7 +320,47 @@ async function _fetchLiveModels(provider, apiKey) {
     }));
   }
 
+  if (provider === 'openrouter') {
+    // Public endpoint — the key is sent anyway so the response reflects anything scoped to the
+    // account, but it is not required.
+    const resp = await fetch('https://openrouter.ai/api/v1/models', {
+      headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const models = (data.data || []).map((m) => ({
+      id: m.id,
+      name: m.name || m.id,
+      contextWindow: m.context_length ?? null,
+      tier: _openRouterTier(m),
+      description: null,
+    }));
+    // OpenRouter lists several hundred models. Unsorted, that is a dropdown nobody can use, so
+    // 'auto' (the recommended default) leads and the rest are alphabetical by id.
+    models.sort((a, b) => {
+      if (a.id === 'openrouter/auto') return -1;
+      if (b.id === 'openrouter/auto') return 1;
+      return a.id.localeCompare(b.id);
+    });
+    return models;
+  }
+
   return null;
+}
+
+/**
+ * Infers a tier from OpenRouter's per-token pricing, since it exposes no tier field.
+ * Thresholds are prompt price in USD per token; $3/M and $0.50/M are the rough boundaries
+ * between premium, standard and fast across the models BOB is likely to route to.
+ */
+function _openRouterTier(model) {
+  const prompt = Number(model?.pricing?.prompt);
+  if (!Number.isFinite(prompt)) return 'standard';
+  if (prompt === 0) return 'fast';
+  if (prompt >= 0.000003) return 'premium';
+  if (prompt >= 0.0000005) return 'standard';
+  return 'fast';
 }
 
 // ---------------------------------------------------------------------------

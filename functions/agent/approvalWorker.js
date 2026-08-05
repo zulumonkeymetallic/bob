@@ -152,6 +152,9 @@ async function _executeOne(db, action, ownerUid) {
     case 'delete_calendar_block':
       return _deleteCalendarBlock(db, payload, ownerUid);
 
+    case 'authorise_agent_action':
+      return _authoriseAgentAction(db, payload, ownerUid);
+
     default:
       throw new Error(`Unknown action type: ${type}`);
   }
@@ -277,6 +280,53 @@ async function _deleteCalendarBlock(db, { blockId }, ownerUid) {
     deletedAt: admin.firestore.FieldValue.serverTimestamp(),
     syncState: 'dirty',
   });
+}
+
+/**
+ * Record that Jim authorised an action Hermes proposed but must carry out itself.
+ *
+ * Raised by ~/.hermes/scripts/agent_action_gate.py when the agent hits a spend, publish,
+ * or outbound action. BOB deliberately does NOT perform the action here: it has no
+ * ad-buying, publishing, or mail-sending integration, and inventing one behind an
+ * approval button would put real-world side effects on a code path whose other handlers
+ * only ever move a due date. Approval records consent; Hermes reads the approved state on
+ * its next cycle and acts, with its own tooling and its own audit trail.
+ *
+ * The activity_stream row is the durable record of who authorised what and when — the
+ * point of the gate is that this question has an answer later.
+ */
+async function _authoriseAgentAction(db, payload, ownerUid) {
+  const { actionType, summary, amountPence = null, storyId = null } = payload || {};
+  if (!actionType) throw new Error('actionType required for authorise_agent_action');
+  if (!summary) throw new Error('summary required for authorise_agent_action');
+
+  if (storyId) {
+    const storySnap = await db.collection('stories').doc(String(storyId)).get();
+    if (storySnap.exists && storySnap.data()?.ownerUid !== ownerUid) {
+      throw new Error(`Story ${storyId} does not belong to user`);
+    }
+  }
+
+  const activityRef = db.collection('activity_stream').doc();
+  const amountNote = Number.isFinite(amountPence) && amountPence !== null
+    ? ` (£${(amountPence / 100).toFixed(2)})`
+    : '';
+
+  await activityRef.set({
+    id: activityRef.id,
+    entityId: storyId || activityRef.id,
+    entityType: storyId ? 'story' : 'agent_action',
+    activityType: 'automation_activity',
+    userId: ownerUid,
+    ownerUid,
+    description: `Authorised agent action: ${actionType} — ${summary}${amountNote}`,
+    source: 'ai',
+    persona: 'personal',
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  return { authorised: actionType, activityId: activityRef.id };
 }
 
 // ---------------------------------------------------------------------------

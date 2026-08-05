@@ -41,6 +41,7 @@ const THEME_ID_LABELS = {
   6: 'Hobbies & Interests', 7: 'Travel & Adventure', 8: 'Home & Living',
   9: 'Spiritual & Personal Growth', 10: 'Chores', 11: 'Rest & Recovery',
   12: 'Work (Main Gig)', 13: 'Sleep', 14: 'Random', 15: 'Side Gig',
+  16: 'Business Experiments',
 };
 
 /** Legacy names still present in the data, mapped to their current theme id. */
@@ -48,6 +49,7 @@ const LEGACY_THEME_IDS = {
   Health: 1, Growth: 9, Wealth: 3, Tribe: 5, Home: 8, Career: 2, Learning: 4,
   Finance: 3, Financial: 3, General: 0, Work: 12, 'Work (Main Gig)': 12,
   'Main Gig': 12, 'Side Gig': 15, SideGig: 15, 'Side-Gig': 15, Sleep: 13, Random: 14,
+  'Business Experiments': 16, Business: 16, Experiments: 16,
 };
 
 /** A theme value of any shape (id, numeric string, name, legacy name) to its folder label. */
@@ -120,6 +122,66 @@ async function findOrCreateFolder(drive, name, parentId) {
 }
 
 /**
+ * A folder already belonging to this entity, found anywhere in Drive by its ref prefix.
+ *
+ * findOrCreateFolder only matches an exact name inside one parent, which misses two real cases
+ * and silently creates a duplicate in both:
+ *   1. The folder exists but sits somewhere else — filed by hand, or created before the theme
+ *      level existed, so `GR-92377 — …` is not under {Theme}/ where the exact search looks.
+ *   2. The entity was renamed. buildFolderName then produces a different string, the exact search
+ *      misses, and the original folder is orphaned with all its files still in it.
+ *
+ * The ref is the stable identity here — titles and locations are not — so adoption is keyed on it.
+ * Drive's `contains` is a loose substring match, hence the startsWith filter: `GR-9` must not
+ * adopt `GR-92377`'s folder.
+ */
+async function findFolderByRef(drive, ref) {
+  if (!ref) return null;
+  const escapedRef = String(ref).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  try {
+    const res = await drive.files.list({
+      q: `name contains '${escapedRef}' and mimeType='${FOLDER_MIME}' and trashed=false`,
+      fields: 'files(id, name)',
+      spaces: 'drive',
+      pageSize: 10,
+    });
+    const match = (res.data.files || []).find((f) => String(f.name || '').startsWith(String(ref)));
+    return match ? match.id : null;
+  } catch (err) {
+    // Adoption is an optimisation, not a requirement. A failed search must fall through to
+    // creating the folder rather than failing the whole resolve.
+    console.warn(`[driveHierarchy] ref search failed for ${ref}:`, err.message);
+    return null;
+  }
+}
+
+/**
+ * The entity's folder id and its ref, without creating anything.
+ *
+ * The panel in the edit modals needs to know whether a folder exists in order to decide between
+ * showing files and offering to create one. It cannot call ensureEntityFolder to find out —
+ * that creates the folder as a side effect, which would mean every goal anyone merely opened
+ * grew a Drive folder.
+ */
+async function lookupEntityFolder(uid, entityType, entityId) {
+  const collection = entityType === 'goal' ? 'goals' : entityType === 'story' ? 'stories' : 'tasks';
+  const db = admin.firestore();
+  const snap = await db.collection(collection).doc(String(entityId)).get();
+  if (!snap.exists) throw new Error(`${entityType} ${entityId} not found`);
+  const data = snap.data();
+
+  if (data.driveFolderId) {
+    return { folderId: data.driveFolderId, ref: data.ref || null, adopted: false };
+  }
+
+  // No stored id, but a folder may still exist from a previous life. Report it so the UI can
+  // offer "link this" rather than "create one", without writing anything yet.
+  const drive = await getDriveClient(uid);
+  const found = await findFolderByRef(drive, data.ref);
+  return { folderId: found, ref: data.ref || null, adopted: Boolean(found) };
+}
+
+/**
  * `GR-1T1033 — Get to 12% body fat`.
  *
  * Em dash separator and the title left readable rather than slugified: these are folders a
@@ -131,6 +193,18 @@ async function findOrCreateFolder(drive, name, parentId) {
 function buildFolderName(ref, title) {
   const safeTitle = String(title || 'Untitled').replace(/[/\\]/g, ' ').slice(0, 80).trim();
   return ref ? `${ref} — ${safeTitle}` : safeTitle;
+}
+
+/**
+ * The entity's folder: adopt an existing one found by ref, else the normal name-in-parent
+ * resolve. Adoption deliberately does not move the folder under {Theme}/ — the files are where
+ * the user put them, and silently relocating someone's Drive contents is a bigger intervention
+ * than declining to make a second folder.
+ */
+async function adoptOrCreateFolder(drive, ref, name, parentId) {
+  const adopted = await findFolderByRef(drive, ref);
+  if (adopted) return adopted;
+  return findOrCreateFolder(drive, name, parentId);
 }
 
 /** BOB-Files, created at the Drive root once. */
@@ -152,7 +226,7 @@ async function ensureGoalFolderWithDrive(drive, db, goalId) {
 
   const themeFolderId = await ensureThemeFolder(drive, goal.theme);
   const folderName = buildFolderName(goal.ref, goal.title);
-  const folderId = await findOrCreateFolder(drive, folderName, themeFolderId);
+  const folderId = await adoptOrCreateFolder(drive, goal.ref, folderName, themeFolderId);
   await db.collection('goals').doc(goalId).set(
     { driveFolderId: folderId, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
     { merge: true }
@@ -187,7 +261,7 @@ async function ensureStoryFolder(uid, storyId) {
   }
 
   const folderName = buildFolderName(story.ref, story.title);
-  const folderId = await findOrCreateFolder(drive, folderName, parentFolderId);
+  const folderId = await adoptOrCreateFolder(drive, story.ref, folderName, parentFolderId);
   await db.collection('stories').doc(storyId).set(
     { driveFolderId: folderId, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
     { merge: true }
@@ -219,7 +293,7 @@ async function ensureTaskFolder(uid, taskId) {
         }
         if (!storyParentId) storyParentId = await ensureThemeFolder(drive, UNLINKED_STORIES_THEME);
         const storyFolderName = buildFolderName(story.ref, story.title);
-        parentFolderId = await findOrCreateFolder(drive, storyFolderName, storyParentId);
+        parentFolderId = await adoptOrCreateFolder(drive, story.ref, storyFolderName, storyParentId);
         await db.collection('stories').doc(task.parentId).set(
           { driveFolderId: parentFolderId, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
           { merge: true }
@@ -232,7 +306,7 @@ async function ensureTaskFolder(uid, taskId) {
   }
 
   const folderName = buildFolderName(task.ref, task.title);
-  const folderId = await findOrCreateFolder(drive, folderName, parentFolderId);
+  const folderId = await adoptOrCreateFolder(drive, task.ref, folderName, parentFolderId);
   await db.collection('tasks').doc(taskId).set(
     { driveFolderId: folderId, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
     { merge: true }
@@ -284,6 +358,8 @@ module.exports = {
   ensureStoryFolder,
   ensureTaskFolder,
   ensureEntityFolder,
+  lookupEntityFolder,
+  findFolderByRef,
   listFolder,
   getDriveClient,
   // Exported for the alignment tests and for anything that needs to predict a folder name

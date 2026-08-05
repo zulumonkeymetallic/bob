@@ -587,7 +587,7 @@ async function callGeminiActionRefinement({ uid, actions }) {
     'Keep at most 12 actions. Be conservative and practical. Output raw JSON with no markdown fences.',
   ].join('\n');
   const user = `Candidates: ${JSON.stringify(actions.slice(0, 40))}`;
-  const text = await callLLM(system, user);
+  const text = await callLLM(system, user, undefined, { userId: uid, purpose: 'finance_commentary' });
   const parsed = extractJson(text);
   const list = Array.isArray(parsed?.actions) ? parsed.actions : [];
   if (!list.length) return null;

@@ -400,7 +400,7 @@ exports.onTaskWrite = onDocumentWritten({
             const systemPrompt = `Estimate the time in minutes for this task. Return ONLY a number.`;
             const userPrompt = `Task: ${after.title}\nDescription: ${after.description || ''}`;
 
-            const result = await callLLMFreeFirst(systemPrompt, userPrompt, { purpose: 'task_minute_estimate' });
+            const result = await callLLMFreeFirst(systemPrompt, userPrompt, { purpose: 'task_minute_estimate', userId });
             const minutes = parseInt(result.replace(/[^0-9]/g, ''));
 
             if (!isNaN(minutes) && minutes > 0) {

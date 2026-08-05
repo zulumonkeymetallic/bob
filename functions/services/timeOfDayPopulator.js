@@ -177,7 +177,7 @@ Respond with ONLY one word: morning, afternoon, or evening.
 - evening: 19:00-04:59 (dinner, bedtime routines, retainer, TV, reading)
 
 If unclear, respond morning.`;
-      const text = (await callLLM('', prompt) || '').toLowerCase().trim();
+      const text = (await callLLM('', prompt, undefined, { userId, purpose: 'planCalendar' }) || '').toLowerCase().trim();
       if (text.includes('afternoon')) return 'afternoon';
       if (text.includes('evening')) return 'evening';
       return 'morning';

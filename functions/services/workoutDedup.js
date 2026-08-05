@@ -29,13 +29,13 @@
  *
  * ## Precedence
  *
- * Strava is canonical for distance and GPS — it has the corrected track and the elevation.
- * HealthKit is canonical for heart-rate zones (WS1 D2), because it sees pool swims, gym
- * work and turbo sessions that never reach Strava at all, and because on-device sampling
- * does not depend on Strava exposing a stream.
+ * parkrun, then HealthKit, then Strava — see PROVIDER_RANK for why. HealthKit is the
+ * primary source: it records every session including the ones Strava never sees, and
+ * Strava is usually a copy of the same recording.
  *
- * So the survivor is the Strava row, and anything it lacks that its HealthKit twin has —
- * zone time above all — is merged onto it before the twin is set aside.
+ * The survivor absorbs whatever it lacks that a twin has, so a Strava-only field — a
+ * corrected GPS distance on a record where HealthKit has none — is still carried across
+ * rather than lost. A merge never overwrites a value the survivor already holds.
  */
 
 const admin = require('firebase-admin');
@@ -49,8 +49,24 @@ const { activityFromWorkout } = require('../utils/activityTaxonomy');
  */
 const DEDUP_WINDOW_MS = 30 * 60 * 1000;
 
-/** Higher wins. Strava carries the corrected distance and the GPS track. */
-const PROVIDER_RANK = { strava: 3, parkrun: 2, healthkit: 1 };
+/**
+ * Higher wins.
+ *
+ * **parkrun > healthkit > strava**, and the order is deliberate.
+ *
+ * A parkrun result is an officially timed one for that event — nothing else beats it for
+ * the run it describes.
+ *
+ * HealthKit is next, and outranks Strava, because it is the source that is always present:
+ * the watch records every session, including the pool swims, gym work and turbo rides that
+ * never reach Strava at all. Strava is usually a *copy* of the same watch recording, so
+ * preferring it means discarding the original for a derivative — and when Strava
+ * authorisation lapses, as it has, preferring it means preferring nothing.
+ *
+ * This was strava > parkrun > healthkit, which made sense while Strava was the only source
+ * BOB could see. It is the wrong default once the phone is writing workouts itself.
+ */
+const PROVIDER_RANK = { parkrun: 3, healthkit: 2, strava: 1 };
 
 function providerOf(workout) {
   return String(workout.provider || workout.source || '').toLowerCase();
@@ -129,10 +145,18 @@ function pairAcrossProviders(workouts) {
  * What the canonical record should absorb from the ones being set aside.
  *
  * Only fields it is *missing*. A merge must never overwrite a value the survivor already
- * has, or Strava's corrected distance would be replaced by the watch's raw one.
+ * holds — the winner won for a reason, and a "better" field from a lower-ranked record is
+ * still the one its provider chose to report, not a correction.
  */
 function buildMergePatch(canonical, others) {
   const patch = {};
+  // Distance, only when the survivor has none. A HealthKit strength or indoor session
+  // genuinely has no distance and must not acquire one; this covers the case where the
+  // watch recorded a session without distance and the twin did.
+  if (!Number(canonical.distance_m || 0)) {
+    const donor = others.find((w) => Number(w.distance_m || 0) > 0);
+    if (donor) patch.distance_m = Number(donor.distance_m);
+  }
   if (!hasZones(canonical)) {
     const donor = others.find(hasZones);
     if (donor) {

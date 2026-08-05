@@ -15677,8 +15677,20 @@ async function _getFitnessOverview(uid, days) {
       if (excludeWithDadFromMetrics && workoutHasDadMarker(w)) return false;
       return true;
     });
+  // HealthKit counts here too.
+  //
+  // A second provider filter sat three lines below the one already widened above, and
+  // silently undid it: `rawWorkouts` admitted healthkit and then this line dropped it
+  // again. **This** is the array the predictions, totals, weekly series and zone
+  // aggregates are built from, so widening only the first filter changed nothing.
+  //
+  // It matters more now that HealthKit is the primary source: pool swims, gym sessions and
+  // turbo rides never reach Strava at all, and with Strava authorisation failing it is the
+  // only source producing anything.
   const workouts = rawWorkouts
-    .filter(w => (w.startDate || 0) >= sinceMs && (w.provider === 'strava' || w.provider === 'parkrun'))
+    .filter(w => (w.startDate || 0) >= sinceMs
+      && ['strava', 'parkrun', 'healthkit'].includes(w.provider)
+      && w.isDuplicate !== true)
     .sort((a, b) => (a.startDate || 0) - (b.startDate || 0));
   const hrvSnap = await db.collection('metrics_hrv').where('ownerUid', '==', uid).limit(1000).get();
   const hrv = hrvSnap.docs
@@ -16153,7 +16165,12 @@ async function _getRunFitnessAnalysis(uid, days) {
     .map(d => ({ id: d.id, ...d.data() }))
     .filter((workout) => !(excludeWithDadFromMetrics && workoutHasDadMarker(workout)));
   const parkruns = all.filter(x => x.provider === 'parkrun' && (x.startDate || 0) >= sinceMs);
-  const runs = all.filter(x => x.provider === 'strava' && (x.startDate || 0) >= sinceMs && (x.type === 'Run' || x.run === true));
+  // Any provider's run, not only Strava's — a parkrun is matched against whatever recorded
+  // it, and with HealthKit primary that is usually the watch rather than Strava.
+  const runs = all.filter(x => ['strava', 'healthkit'].includes(x.provider)
+    && (x.startDate || 0) >= sinceMs
+    && x.isDuplicate !== true
+    && (String(x.type || x.sportType || '').toLowerCase().includes('run') || x.run === true));
   const pairs = [];
   for (const p of parkruns) {
     const pStart = p.startDate || 0;

@@ -27,6 +27,7 @@
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
 const admin = require('firebase-admin');
 const { VertexAI } = require('@google-cloud/vertexai');
+const llmCredentials = require('../utils/llmCredentials');
 
 if (!admin.apps.length) admin.initializeApp();
 
@@ -571,9 +572,46 @@ exports.sendAssistantMessageV2 = onCall(
         parts: [{ text: m.content }],
       }));
 
-    // Init Vertex AI
-    const vertexAI = new VertexAI({ project: PROJECT, location: LOCATION });
-    const generativeModel = vertexAI.getGenerativeModel({
+    // Whose key pays for this conversation.
+    //
+    // Vertex here runs on ADC and bills the BOB project, so under bring-your-own-key it is
+    // reachable only by the accounts in llmCredentials.exemptUids(). Everyone else runs on
+    // their own AI Studio key — same model, same tool declarations, different transport and
+    // different bill.
+    //
+    // Ask BOB needs native function calling to be worth anything (the nine tools below are the
+    // whole feature), and the OpenAI/Anthropic tool formats are not wired up yet, so a user on
+    // one of those providers is told plainly rather than silently given a tool-less assistant.
+    const exempt = llmCredentials.isExempt(uid);
+    let userGeminiKey = null;
+    if (!exempt) {
+      const profileSnap = await db.collection('profiles').doc(uid).get();
+      const profile = profileSnap.exists ? (profileSnap.data() || {}) : {};
+      const keys = profile.aiApiKeys || {};
+      userGeminiKey = String(
+        keys.gemini || keys['google-ai-studio'] || keys.google ||
+        (!profile.aiApiKeys ? profile.aiApiKey : '') || ''
+      ).trim() || null;
+
+      if (!userGeminiKey) {
+        const code = llmCredentials.CODES.MISSING_KEY;
+        await llmCredentials.recordLLMStatus(uid, {
+          ok: false,
+          provider: 'gemini',
+          model: MODEL,
+          code,
+          purpose: 'assistant',
+          message: 'Ask BOB needs your own Google Gemini API key. Add one in Settings → AI.',
+        });
+        throw new HttpsError(
+          'failed-precondition',
+          'Ask BOB needs your own Google Gemini API key. Add one in Settings → AI.',
+          { code, provider: 'gemini' },
+        );
+      }
+    }
+
+    const modelConfig = {
       model: MODEL,
       systemInstruction: { role: 'system', parts: [{ text: SYSTEM_PROMPT }] },
       tools: [{ functionDeclarations: TOOL_DECLARATIONS }],
@@ -581,7 +619,16 @@ exports.sendAssistantMessageV2 = onCall(
         temperature: 0.2,
         maxOutputTokens: 2048,
       },
-    });
+    };
+
+    let generativeModel;
+    if (userGeminiKey) {
+      const { GoogleGenerativeAI } = require('@google/generative-ai');
+      generativeModel = new GoogleGenerativeAI(userGeminiKey).getGenerativeModel(modelConfig);
+    } else {
+      const vertexAI = new VertexAI({ project: PROJECT, location: LOCATION });
+      generativeModel = vertexAI.getGenerativeModel(modelConfig);
+    }
 
     const chat = generativeModel.startChat({ history: chatHistory });
 
@@ -591,9 +638,19 @@ exports.sendAssistantMessageV2 = onCall(
     let toolsUsed = [];
 
     for (let turn = 0; turn < MAX_TOOL_TURNS; turn++) {
-      const result = turn === 0
-        ? await chat.sendMessage(currentMessage)
-        : await chat.sendMessage(currentMessage);
+      let result;
+      try {
+        result = await chat.sendMessage(currentMessage);
+      } catch (err) {
+        // Classify before rethrowing so the user gets "your key was rejected" or "you have no
+        // credit left" in the app, rather than a generic internal error.
+        const { code, message: reason } = await llmCredentials.reportFailure(uid, err, {
+          provider: userGeminiKey ? 'gemini' : 'vertex',
+          model: MODEL,
+          purpose: 'assistant',
+        });
+        throw new HttpsError('unavailable', reason, { code });
+      }
 
       const candidate = result.response?.candidates?.[0];
       if (!candidate) { finalReply = 'No response from model.'; break; }
@@ -640,11 +697,17 @@ exports.sendAssistantMessageV2 = onCall(
       createdAt: now,
     });
 
+    await llmCredentials.recordLLMStatus(uid, {
+      ok: true,
+      provider: userGeminiKey ? 'gemini' : 'vertex',
+      model: MODEL,
+    });
+
     return {
       ok: true,
       reply: finalReply,
       toolsUsed,
-      source: 'vertex',
+      source: userGeminiKey ? 'gemini' : 'vertex',
     };
   },
 );

@@ -22,6 +22,7 @@ const DEFAULT_THEMES = [
   { id: 'Side Gig', name: 'Side Gig', label: 'Side Gig', order: 14, colorId: '2' },                // sage
   { id: 'Sleep', name: 'Sleep', label: 'Sleep', order: 15, colorId: '1' },                   // calm lavender
   { id: 'Random', name: 'Random', label: 'Random', order: 16, colorId: '8' },                  // graphite
+  { id: 'Business Experiments', name: 'Business Experiments', label: 'Business Experiments', order: 17, colorId: '10' }, // basil green
 ];
 
 async function loadThemesForUser(uid) {
