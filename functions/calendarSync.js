@@ -1069,6 +1069,40 @@ function parseEventTime(timeObj) {
   return null;
 }
 
+// ─── Authorship marker ───────────────────────────────────────────────────────
+
+/**
+ * The first line BOB stamps on every Google event it creates.
+ *
+ * This is the identity join between the two outbound paths. iOS already writes it —
+ * `CalendarSyncService.ekNotes` leads with it and `isBOBAuthored` matches it — and it
+ * survives Apple's sync of a local `EKEvent` up to Google. The server wrote nothing, so a
+ * BOB event arriving from the other path was indistinguishable from one Jim created
+ * himself, and got imported back as a fresh block.
+ *
+ * Must stay the FIRST line, and identical on both platforms.
+ */
+const BOB_EVENT_MARKER = 'BOB Planning Block';
+
+function withBobMarker(description) {
+  const body = String(description || '').trim();
+  if (body.startsWith(BOB_EVENT_MARKER)) return body;
+  return body ? `${BOB_EVENT_MARKER}\n\n${body}` : BOB_EVENT_MARKER;
+}
+
+/**
+ * Did BOB create this Google event?
+ *
+ * Checked before importing a Google event as a new block, so an event this app pushed —
+ * by either path — is never re-imported as though the user had made it. The description
+ * is user-editable, so this is a best-effort marker and not a guarantee; callers should
+ * prefer an id match where one is available and fall back to this.
+ */
+function isBobAuthoredGoogleEvent(event) {
+  const description = String(event?.description || '').trimStart();
+  return description.startsWith(BOB_EVENT_MARKER);
+}
+
 function getGoogleOAuthConfig() {
   const projectId = process.env.GCLOUD_PROJECT;
   const region = 'europe-west2';
@@ -1706,7 +1740,7 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
       const eventSource = isValidUrl(eventDeepLink) ? { title: 'BOB', url: eventDeepLink } : undefined;
       const fullEvent = {
         summary: summaryText,
-        description: enrichedDesc || 'BOB calendar block',
+        description: withBobMarker(enrichedDesc || 'BOB calendar block'),
         start: { dateTime: new Date(startMs).toISOString(), timeZone: 'UTC' },
         end: { dateTime: new Date(endMs).toISOString(), timeZone: 'UTC' },
         colorId: resolveGoogleEventColorId({ themeId: themeIdForBlock, themeLabel, themes, eventColors: googleEventColors }),
@@ -2006,7 +2040,7 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
       const eventSource = isValidUrl(eventDeepLink) ? { title: 'BOB', url: eventDeepLink } : undefined;
       const updateEvent = {
         summary: summaryText,
-        description: enrichedDesc2 || 'BOB calendar block',
+        description: withBobMarker(enrichedDesc2 || 'BOB calendar block'),
         start: { dateTime: new Date(startMs).toISOString(), timeZone: 'UTC' },
         end: { dateTime: new Date(endMs).toISOString(), timeZone: 'UTC' },
         colorId: resolveGoogleEventColorId({ themeId: themeIdForBlock, themeLabel, themes, eventColors: googleEventColors }),
@@ -2459,6 +2493,18 @@ exports.onCalendarBlockWrite = onDocumentWritten({ document: 'calendar_blocks/{b
   const ownerForGate = after?.ownerUid || before?.ownerUid || null;
   if (!(await serverPushEnabled(ownerForGate))) return;
 
+  // One block, one pusher.
+  //
+  // Both outbound paths can run at once — server via the Google API, iOS via EventKit and
+  // Apple's own sync — but never for the same block, because an EKEvent synced up gets a
+  // Google id BOB never sees and the two copies could not be reconciled afterwards.
+  //
+  // `pushOwner` is set when the block is created: on device → 'ios', server-side → 'server'.
+  // Each path handles only its own lane. A block with no owner is treated as the server's,
+  // which is the safe default for everything the nightly chain and the coach create.
+  const pushOwner = String((after || before)?.pushOwner || 'server').toLowerCase();
+  if (pushOwner !== 'server') return;
+
   if (!after) {
     // Delete
     if (before && before.googleEventId) {
@@ -2651,6 +2697,23 @@ async function pullGoogleEventsForUser(uid, { windowStart, windowEnd }) {
           } else {
             counts.skipped += 1;
           }
+          continue;
+        }
+
+        // A BOB-authored event is not an external one.
+        //
+        // With two outbound paths live, an event this app created can arrive here from the
+        // *other* one: iOS writes an EKEvent into a local calendar, Apple syncs it up to
+        // Google, and it comes back down this import looking like something Jim entered
+        // himself. Mirroring it would create a second block for a session that already has
+        // one, and the pair would then diverge.
+        //
+        // The id match above catches events this path pushed (they carry a googleEventId
+        // we recorded). This catches the ones that went up the other way, where BOB never
+        // saw the id Google assigned — the marker is the only join available.
+        if (isBobAuthoredGoogleEvent(event)) {
+          counts.skipped += 1;
+          syncResults.push({ eventId: event.id, action: 'skipped_bob_authored' });
           continue;
         }
 
