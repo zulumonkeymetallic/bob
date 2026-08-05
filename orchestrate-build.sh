@@ -122,19 +122,56 @@ build_web() {
     
     log_info "Version: $web_version (base: $web_base_version) | Commit: $web_commit"
     
-    # Install deps
+    # Install deps.
+    #
+    # Non-fatal, deliberately: an eresolve conflict is common here and the existing
+    # node_modules is usually fine to build against. It is logged loudly rather than
+    # swallowed — on 2026-08-05 this failed for real and nothing said so, because the
+    # `| tail` swallowed both the output and the exit status.
     log_info "Installing dependencies..."
-    npm install --prefix react-app 2>&1 | tail -5 >&2
-    
-    # Build React
+    local npm_log
+    npm_log="$(mktemp -t bob_npm_install)"
+    set +e
+    npm install --prefix react-app > "$npm_log" 2>&1
+    local npm_status=$?
+    set -e
+    tail -5 "$npm_log" >&2
+    if [ $npm_status -ne 0 ]; then
+        log_warning "npm install failed (exit $npm_status) — building against the existing node_modules. Log: $npm_log"
+    fi
+
+    # Build React.
+    #
+    # THIS EXIT CODE IS LOAD-BEARING. `npm run build … | tail -10` returned *tail's*
+    # status, so a failed build sailed past `set -e` — and the very next step is
+    # `firebase deploy --only hosting`, which ships whatever is still sitting in
+    # react-app/build from the previous run. A compile error would therefore have
+    # redeployed the last good bundle and reported a successful release, with the version
+    # banner updated and none of the code in it.
     log_info "Building React application..."
+    local build_log
+    build_log="$(mktemp -t bob_react_build)"
+    set +e
     REACT_APP_BUILD_TIME="$BUILD_TIMESTAMP" \
     REACT_APP_BUILD_ID="$BUILD_ID" \
     REACT_APP_BASE_VERSION="$web_base_version" \
     REACT_APP_VERSION="$web_version" \
     REACT_APP_GIT_COMMIT="$web_commit" \
-    npm run build --prefix react-app 2>&1 | tail -10 >&2
-    
+    npm run build --prefix react-app > "$build_log" 2>&1
+    local build_status=$?
+    set -e
+    tail -10 "$build_log" >&2
+    if [ $build_status -ne 0 ]; then
+        log_error "React build FAILED (exit $build_status) — refusing to deploy a stale bundle."
+        grep -E "Failed to compile|error|ERROR" "$build_log" | head -10 >&2
+        log_error "Full log: $build_log"
+        return 1
+    fi
+    if [ ! -f react-app/build/index.html ]; then
+        log_error "React build reported success but produced no build/index.html — refusing to deploy."
+        return 1
+    fi
+
     # Inject build info into index.html
     log_info "Injecting build metadata..."
     cat >> react-app/build/index.html <<EOF
@@ -352,19 +389,38 @@ build_mac() {
     local mac_version=$(get_version "mac")
     local mac_commit=$(get_git_commit "$BOB_MAC_SYNC_ROOT")
     local build_start=$(date +%s)
+    local mac_installed=false
     
     log_info "Version: $mac_version | Commit: $mac_commit"
     
     if [ "$DRY_RUN" != "true" ]; then
-        # Build with Cargo or Swift depending on project setup
+        # Build with Cargo or Swift depending on project setup.
+        #
+        # Exit code checked, same reason as build_web and build_ios: `cmd | tail` returns
+        # tail's status, so a failed compile used to fall straight through to the copy step
+        # and reinstall the previous binary as though it were the new one.
+        local mac_log
+        mac_log="$(mktemp -t bob_mac_build)"
+        local mac_status=0
         if [ -f "Cargo.toml" ]; then
             log_info "Building Rust project..."
-            cargo build --release 2>&1 | tail -10 >&2
+            set +e
+            cargo build --release > "$mac_log" 2>&1
+            mac_status=$?
+            set -e
             local binary_path="target/release/bob-mac-sync"
         else
             log_info "Building Swift project..."
-            swift build -c release 2>&1 | tail -10 >&2
+            set +e
+            swift build -c release > "$mac_log" 2>&1
+            mac_status=$?
+            set -e
             local binary_path=".build/release/bob-mac-sync"
+        fi
+        tail -10 "$mac_log" >&2
+        if [ $mac_status -ne 0 ]; then
+            log_error "Mac Sync build FAILED (exit $mac_status) — not installing. Log: $mac_log"
+            return 1
         fi
         
         # Code sign
@@ -378,7 +434,11 @@ build_mac() {
         if [ -f "$binary_path" ]; then
             cp "$binary_path" /Applications/BOB-SyncService
             chmod +x /Applications/BOB-SyncService
+            mac_installed=true
             log_success "Installed to /Applications/BOB-SyncService"
+        else
+            log_error "Build reported success but produced no $binary_path — nothing installed."
+            return 1
         fi
         
         # Remove old 7-day signed version if newer build exists
@@ -395,7 +455,7 @@ build_mac() {
     
     log_success "Mac build complete (${build_duration}s)"
     
-    printf '%s\n' "$mac_version|$mac_commit|${build_duration}s|$BUILD_TIMESTAMP"
+    printf '%s\n' "$mac_version|$mac_commit|${build_duration}s|$BUILD_TIMESTAMP|$mac_installed"
 }
 
 # ============================================================================
@@ -430,9 +490,9 @@ create_build_pr() {
 - Mac Build: $MAC_DURATION  
 
 ### Artifacts
-- 🌐 Web: Deployed to Firebase Hosting
+- 🌐 Web: $([ -n "${WEB_VERSION:-}" ] && echo "Deployed to Firebase Hosting (${WEB_VERSION})" || echo 'not built')
 - 📱 iOS: $([ "${IOS_INSTALLED:-false}" = "true" ] && echo 'Installed to /Applications/BOB-Mac.app' || echo 'not built')
-- 💻 Mac Sync: Installed to /Applications/BOB-SyncService
+- 💻 Mac Sync: $([ "${MAC_INSTALLED:-false}" = "true" ] && echo 'Installed to /Applications/BOB-SyncService' || echo 'not built')
 
 **GitHub Links:**
 - [Web Repo](https://github.com/jim/bob/commit/$WEB_COMMIT)
@@ -599,12 +659,12 @@ case $BUILD_TARGET in
         IFS='|' read -r IOS_VERSION IOS_COMMIT IOS_DURATION IOS_TIMESTAMP IOS_INSTALLED < <(build_ios)
         ;;
     mac)
-        IFS='|' read -r MAC_VERSION MAC_COMMIT MAC_DURATION MAC_TIMESTAMP < <(build_mac)
+        IFS='|' read -r MAC_VERSION MAC_COMMIT MAC_DURATION MAC_TIMESTAMP MAC_INSTALLED < <(build_mac)
         ;;
     all)
         IFS='|' read -r WEB_VERSION WEB_COMMIT WEB_DURATION WEB_TIMESTAMP < <(build_web)
         IFS='|' read -r IOS_VERSION IOS_COMMIT IOS_DURATION IOS_TIMESTAMP IOS_INSTALLED < <(build_ios)
-        IFS='|' read -r MAC_VERSION MAC_COMMIT MAC_DURATION MAC_TIMESTAMP < <(build_mac)
+        IFS='|' read -r MAC_VERSION MAC_COMMIT MAC_DURATION MAC_TIMESTAMP MAC_INSTALLED < <(build_mac)
         ;;
 esac
 
