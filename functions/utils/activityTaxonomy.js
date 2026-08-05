@@ -60,8 +60,12 @@ function activityFromSport(raw) {
   if (s.includes('walk')) return 'walk';
   if (s.includes('run')) return 'run';
   if (s.includes('cycl') || s.includes('ride') || s.includes('bike')) return 'bike_outdoor';
+  // `s&c` and `s & c` are how the theme planner's subThemes label strength and
+  // conditioning; without them a configured S&C slot falls through to `other` and the
+  // scheduler cannot match a session to it.
   if (s.includes('strength') || s.includes('weight') || s.includes('gym')
-      || s.includes('crossfit') || s.includes('resistance')) return 'strength';
+      || s.includes('crossfit') || s.includes('resistance')
+      || s === 's&c' || s === 's & c' || s.includes('conditioning')) return 'strength';
   if (s.includes('climb') || s.includes('bould')) return 'climb';
   if (s.includes('sauna')) return 'sauna';
   return 'other';

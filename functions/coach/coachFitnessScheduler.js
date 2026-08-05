@@ -19,6 +19,7 @@ const { DateTime } = require('luxon');
 const ical = require('node-ical');
 const { RRule } = require('rrule');
 const { resolveActivePhase: resolveActivePhaseShared } = require('./phaseResolver');
+const { activityFromSport } = require('../utils/activityTaxonomy');
 
 const TZ = 'Europe/London';
 const REGION = 'europe-west2';
@@ -57,13 +58,103 @@ async function logCoachEvent(uid, event, metadata = {}) {
  * Throws on timeout or network error.
  */
 async function fetchICal(url) {
-  // node-ical.async.fromURL returns a promise
+  // A browser User-Agent, because some providers reject the default outright.
+  //
+  // WodBoard returns 403 Forbidden to a request without one and 200 with it — verified
+  // 2026-08-05 against Jim's live feed. node-ical sends no User-Agent of its own, so the
+  // CrossFit programme had been failing at the transport layer, landing in the catch
+  // below and logging a count of zero that was indistinguishable from an empty plan.
+  //
+  // `webcal://` is a display scheme, not a transport one; it has to be rewritten or the
+  // fetch fails before it starts.
+  const fetchUrl = String(url || '').replace(/^webcal:\/\//i, 'https://');
   return Promise.race([
-    ical.async.fromURL(url),
+    ical.async.fromURL(fetchUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+          + 'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      },
+    }),
     new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(`iCal fetch timeout: ${url}`)), 15000)
+      setTimeout(() => reject(new Error(`iCal fetch timeout: ${fetchUrl}`)), 15000)
     ),
   ]);
+}
+
+// ─── The athlete's own weekly windows ────────────────────────────────────────
+
+/**
+ * Health & Fitness slots from `theme_allocations`, keyed by canonical activity.
+ *
+ * These are the hours Jim actually chose — Tuesday 06:30 is his swimming lesson, the
+ * 05:30 slots are S&C before work. The scheduler used to ignore all of it and place every
+ * session at one of three literals (06:00 CrossFit, 06:30 runner, 07:00 swim/bike), so a
+ * run prescribed for Thursday landed at half six in the morning when the slot he set aside
+ * for running is half six at night.
+ *
+ * `dayOfWeek` is stored 0=Sunday … 6=Saturday (see WeeklyThemePlanner.tsx and
+ * nightlyOrchestration.js:115). Luxon counts 1=Monday … 7=Sunday, so the conversion is
+ * `weekday % 7` — Sunday's 7 wrapping to 0.
+ */
+async function loadHealthSlots(firestore, uid) {
+  const snap = await firestore.collection('theme_allocations').doc(uid).get().catch(() => null);
+  const allocations = snap?.exists ? (snap.data()?.allocations || []) : [];
+  const slots = [];
+  for (const alloc of allocations) {
+    if (!String(alloc?.theme || '').toLowerCase().includes('health')) continue;
+    const subTheme = String(alloc?.subTheme || '').trim();
+    if (!subTheme) continue;
+    const day = Number(alloc.dayOfWeek);
+    if (!Number.isFinite(day)) continue;
+    const [sh, sm] = String(alloc.startTime || '').split(':');
+    const [eh, em] = String(alloc.endTime || '').split(':');
+    const startMinutes = Number(sh) * 60 + Number(sm || 0);
+    const endMinutes = Number(eh) * 60 + Number(em || 0);
+    if (!Number.isFinite(startMinutes) || !Number.isFinite(endMinutes) || endMinutes <= startMinutes) continue;
+    slots.push({
+      dayOfWeek: day,
+      startMinutes,
+      durationMin: endMinutes - startMinutes,
+      subTheme,
+      activity: activityFromSport(subTheme),
+    });
+  }
+  return slots;
+}
+
+/** The slot for an activity on a given date, or null. */
+function slotOnDay(slots, activity, dt) {
+  const dayKey = dt.weekday % 7;
+  return slots.find((s) => s.activity === activity && s.dayOfWeek === dayKey) || null;
+}
+
+/** Any slot for an activity, whatever day — used to borrow a sensible hour. */
+function anySlotFor(slots, activity) {
+  return slots.find((s) => s.activity === activity) || null;
+}
+
+/**
+ * Start time for a session, preferring the athlete's own window.
+ *
+ * Order: his slot on that exact day, then his usual hour for that activity on any day,
+ * then the caller's fallback. A programme decides *what* and *which day*; his allocations
+ * decide the hour.
+ */
+function startForSession(slots, activity, dt, fallbackHHMM) {
+  const slot = slotOnDay(slots, activity, dt) || anySlotFor(slots, activity);
+  if (slot) {
+    return {
+      start: dt.startOf('day').plus({ minutes: slot.startMinutes }),
+      durationMin: slot.durationMin,
+      source: 'theme_allocation',
+    };
+  }
+  const [h, m] = fallbackHHMM.split(':');
+  return {
+    start: dt.startOf('day').set({ hour: Number(h), minute: Number(m) }),
+    durationMin: null,
+    source: 'default',
+  };
 }
 
 /**
@@ -100,15 +191,30 @@ function parseICalEvents(rawEvents, windowStart, windowEnd) {
 
     const dtend = (event.end instanceof Date) ? event.end
       : (event.dtend instanceof Date ? event.dtend : null);
-    const durationMin = dtend
+
+    // An all-day entry has no duration to take.
+    //
+    // Runna mixes the two: most sessions are timed ("12km Long Run", 70 minutes) but some
+    // are date-only, and iCal represents those as DTEND on the following day — 1,440
+    // minutes. Taken literally that produced a 24-hour training block: "Broken Miles •
+    // 8km, 18:30 Friday to 18:30 Saturday".
+    //
+    // `datetype` is node-ical's own marker ('date' vs 'date-time'); the 24-hour check is
+    // a belt-and-braces fallback for feeds that omit it. Null means "unknown", and the
+    // caller substitutes the athlete's own slot length instead of inventing one here.
+    const isAllDay = event.datetype === 'date'
+      || (dtend && (dtend.getTime() - dtstart.getTime()) >= 24 * 60 * 60 * 1000);
+    const rawDurationMin = dtend
       ? Math.round((dtend.getTime() - dtstart.getTime()) / 60000)
-      : 60;
+      : null;
+    const durationMin = isAllDay ? null : rawDurationMin;
 
     const makeEntry = (dateObj) => ({
       date: DateTime.fromJSDate(dateObj).setZone(TZ).toISODate(),
       title: (event.summary || 'Untitled').trim(),
       description: (event.description || '').trim(),
-      durationMin: Math.max(1, durationMin),
+      durationMin: durationMin === null ? null : Math.max(1, durationMin),
+      allDay: isAllDay,
       rawSummary: event.summary || '',
     });
 
@@ -318,6 +424,10 @@ async function _scheduleBlocksForUser(uid, profile) {
   const phaseIndex = phaseResult?.phaseIndex ?? 0;
   const targets = phaseSessionTargets(phaseIndex);
 
+  // The athlete's own weekly windows. Sessions are placed inside these wherever one
+  // exists for the activity; the hardcoded hours below are only a fallback now.
+  const healthSlots = await loadHealthSlots(firestore, uid);
+
   const batch = firestore.batch();
   let created = 0;
   let skipped = 0;
@@ -329,8 +439,14 @@ async function _scheduleBlocksForUser(uid, profile) {
       skipped++;
       continue;
     }
-    const startDt = DateTime.fromISO(`${event.date}T06:30:00`, { zone: TZ });
-    const endDt = startDt.plus({ minutes: event.durationMin });
+    // The programme decides what and which day; his own Run window decides the hour.
+    const placement = startForSession(
+      healthSlots, 'run', DateTime.fromISO(event.date, { zone: TZ }), '06:30',
+    );
+    const startDt = placement.start;
+    // The programme's own duration wins — a 12km long run is not a 60-minute slot. The
+    // slot only supplies a length when the programme did not state one.
+    const endDt = startDt.plus({ minutes: event.durationMin || placement.durationMin || 60 });
     const ref = firestore.collection('calendar_blocks').doc();
     batch.set(ref, {
       ownerUid: uid,
@@ -340,6 +456,8 @@ async function _scheduleBlocksForUser(uid, profile) {
       source: 'coach_runner',
       entityType: 'fitness',
       theme: 'health',
+      activity: 'run',
+      placementSource: placement.source,
       aiGenerated: true,
       description: event.description || '',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -355,8 +473,12 @@ async function _scheduleBlocksForUser(uid, profile) {
   for (const event of crossFitEvents.slice(0, SCHEDULE_DAYS)) {
     // Mark as busy but don't duplicate if already present
     if (!busyDates.has(event.date)) {
-      const startDt = DateTime.fromISO(`${event.date}T06:00:00`, { zone: TZ });
-      const endDt = startDt.plus({ minutes: event.durationMin || 60 });
+      // Strength, in his own S&C window where he has one — the 05:30 slots before work.
+      const placement = startForSession(
+        healthSlots, 'strength', DateTime.fromISO(event.date, { zone: TZ }), '06:00',
+      );
+      const startDt = placement.start;
+      const endDt = startDt.plus({ minutes: event.durationMin || placement.durationMin || 60 });
       const ref = firestore.collection('calendar_blocks').doc();
       batch.set(ref, {
         ownerUid: uid,
@@ -366,6 +488,8 @@ async function _scheduleBlocksForUser(uid, profile) {
         source: 'coach_crossfit',
         entityType: 'fitness',
         theme: 'health',
+        activity: 'strength',
+        placementSource: placement.source,
         aiGenerated: true,
         description: event.description || '',
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -380,72 +504,81 @@ async function _scheduleBlocksForUser(uid, profile) {
   const swimNeeded = Math.max(0, targets.swim - existingSwimCount.thisWeek);
   const bikeNeeded = Math.max(0, targets.bike - existingBikeCount.thisWeek);
 
-  if (swimNeeded > 0 || bikeNeeded > 0) {
-    // Find free days this week (Mon-Sun) that don't have a fitness block
-    const freeDays = [];
+  /**
+   * Where a session of this activity could go over the next seven days.
+   *
+   * His own slots first, in date order — Tuesday 06:30 for a swim, Saturday 18:00 for a
+   * bike. Only when he has configured none for that activity does this fall back to the
+   * old behaviour: any free day at 07:00, weekends preferred for the bike.
+   *
+   * The fallback is deliberately kept rather than deleted. A user with no theme plan at
+   * all still needs somewhere to put a session, and that is what it was written for; it
+   * was only ever wrong as the *primary* path.
+   */
+  const candidatePlacements = (activity, defaultDurationMin, preferWeekend) => {
+    const days = [];
     for (let i = 0; i < 7; i++) {
-      const day = nowDt.startOf('week').plus({ days: i });
+      const day = nowDt.plus({ days: i }).startOf('day');
       const dayStr = day.toISODate();
-      if (dayStr >= today && !busyDates.has(dayStr)) {
-        freeDays.push({ dayStr, weekday: day.weekday }); // 1=Mon, 7=Sun
-      }
+      if (dayStr < today) continue;
+      days.push({ day, dayStr });
     }
 
-    // Prefer weekends for bike (Sat=6, Sun=7), weekdays for swim
-    const bikeDays = freeDays.filter(d => d.weekday >= 6).concat(freeDays.filter(d => d.weekday < 6));
-    const swimDays = freeDays.filter(d => d.weekday < 6).concat(freeDays.filter(d => d.weekday >= 6));
+    const own = [];
+    for (const { day, dayStr } of days) {
+      const slot = slotOnDay(healthSlots, activity, day);
+      if (!slot) continue;
+      own.push({
+        dayStr,
+        start: day.plus({ minutes: slot.startMinutes }),
+        durationMin: slot.durationMin || defaultDurationMin,
+        placementSource: 'theme_allocation',
+      });
+    }
+    if (own.length > 0) return own;
 
-    let swimScheduled = 0;
-    let bikeScheduled = 0;
+    const ordered = preferWeekend
+      ? days.filter(d => d.day.weekday >= 6).concat(days.filter(d => d.day.weekday < 6))
+      : days.filter(d => d.day.weekday < 6).concat(days.filter(d => d.day.weekday >= 6));
+    return ordered.map(({ day, dayStr }) => ({
+      dayStr,
+      start: day.set({ hour: 7, minute: 0 }),
+      durationMin: defaultDurationMin,
+      placementSource: 'default',
+    }));
+  };
 
-    for (const { dayStr } of bikeDays) {
-      if (bikeScheduled >= bikeNeeded) break;
-      if (busyDates.has(dayStr)) continue;
-      const startDt = DateTime.fromISO(`${dayStr}T07:00:00`, { zone: TZ });
-      const endDt = startDt.plus({ minutes: 90 });
+  const fillSessions = (activity, needed, emoji, label, defaultDurationMin, preferWeekend) => {
+    let scheduled = 0;
+    for (const placement of candidatePlacements(activity, defaultDurationMin, preferWeekend)) {
+      if (scheduled >= needed) break;
+      if (busyDates.has(placement.dayStr)) continue;
+      const endDt = placement.start.plus({ minutes: placement.durationMin });
       const ref = firestore.collection('calendar_blocks').doc();
       batch.set(ref, {
         ownerUid: uid,
-        title: `🚴 Bike — ${phaseResult?.phase?.title || `Phase ${phaseIndex}`}`,
-        start: startDt.toMillis(),
+        title: `${emoji} ${label} — ${phaseResult?.phase?.title || `Phase ${phaseIndex}`}`,
+        start: placement.start.toMillis(),
         end: endDt.toMillis(),
         source: 'coach_triathlon',
         entityType: 'fitness',
         theme: 'health',
+        activity,
+        placementSource: placement.placementSource,
         aiGenerated: true,
-        description: `Coach-scheduled bike session (${phaseResult?.phase?.title || `Phase ${phaseIndex}`})`,
+        description: `Coach-scheduled ${label.toLowerCase()} session (${phaseResult?.phase?.title || `Phase ${phaseIndex}`})`,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
-      busyDates.add(dayStr);
-      bikeScheduled++;
+      busyDates.add(placement.dayStr);
+      scheduled++;
       created++;
     }
+    return scheduled;
+  };
 
-    for (const { dayStr } of swimDays) {
-      if (swimScheduled >= swimNeeded) break;
-      if (busyDates.has(dayStr)) continue;
-      const startDt = DateTime.fromISO(`${dayStr}T07:00:00`, { zone: TZ });
-      const endDt = startDt.plus({ minutes: 60 });
-      const ref = firestore.collection('calendar_blocks').doc();
-      batch.set(ref, {
-        ownerUid: uid,
-        title: `🏊 Swim — ${phaseResult?.phase?.title || `Phase ${phaseIndex}`}`,
-        start: startDt.toMillis(),
-        end: endDt.toMillis(),
-        source: 'coach_triathlon',
-        entityType: 'fitness',
-        theme: 'health',
-        aiGenerated: true,
-        description: `Coach-scheduled swim session (${phaseResult?.phase?.title || `Phase ${phaseIndex}`})`,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-      busyDates.add(dayStr);
-      swimScheduled++;
-      created++;
-    }
-  }
+  if (bikeNeeded > 0) fillSessions('bike_outdoor', bikeNeeded, '🚴', 'Bike', 90, true);
+  if (swimNeeded > 0) fillSessions('swim', swimNeeded, '🏊', 'Swim', 60, false);
 
   if (created > 0) {
     await batch.commit();
