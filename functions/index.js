@@ -207,6 +207,7 @@ const { parseTimeStringToTimeOfDay, populateBlankTimeOfDay, inferTimeOfDayFromCo
 
 // Import Fitness KPI Sync service
 const { syncAllUsersFitnessKpis, syncUserFitnessKpis } = require('./services/fitnessKpiSync');
+const { aggregateMetricValuesForUser } = require('./services/metricValueAggregation');
 
 // Import Focus Goals functions
 try {
@@ -389,11 +390,29 @@ exports.updateGoalTargetYears = schedulerV2.onSchedule(
   });
 
 // Nightly fitness KPI sync: updates goal KPI progress from Strava/HealthKit workouts
+//
+// The aggregation runs first and is not optional. `metric_values` is what
+// `resolveObservationSource` reads for every healthkit and strava KPI, and nothing had
+// ever written it — so the resolver's primary path always returned null and every
+// distance-based fitness KPI fell through to a profile scalar or to nothing at all.
 const syncFitnessKpis = async () => {
   try {
+    const profiles = await admin.firestore().collection('profiles').get();
+    let aggregated = 0;
+    for (const profile of profiles.docs) {
+      try {
+        const stats = await aggregateMetricValuesForUser(profile.id);
+        aggregated += stats.written;
+      } catch (e) {
+        // One user's workout history must not stop everyone else's KPIs updating.
+        console.error(`[metricValues] aggregation failed uid=${profile.id}:`, e?.message || e);
+      }
+    }
+    console.log(`✅ metric_values aggregation completed: ${aggregated} rows written`);
+
     const result = await syncAllUsersFitnessKpis();
     console.log(`✅ Fitness KPI sync completed: ${result.totalSynced} goals updated`);
-    return result;
+    return { ...result, metricValuesWritten: aggregated };
   } catch (e) {
     console.error('[fitnessKpiSync] failed', e?.message || e);
     throw e;
@@ -412,11 +431,31 @@ exports.syncFitnessKpisNow = httpsV2.onCall({ region: 'europe-west2' }, async (r
     throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   }
   try {
+    const aggregation = await aggregateMetricValuesForUser(uid);
     const result = await syncUserFitnessKpis(uid);
-    return { ok: true, ...result };
+    return { ok: true, ...result, aggregation };
   } catch (e) {
     console.error('[fitnessKpiSync] user sync failed:', e);
     throw new httpsV2.HttpsError('internal', e?.message || 'Sync failed');
+  }
+});
+
+/**
+ * Rebuild `metric_values` for the caller from `metrics_workouts`, without touching goal
+ * KPIs. Useful after a Strava backfill or a max-HR change, where the workout rows have
+ * moved but the goals have not.
+ */
+exports.aggregateMetricValuesNow = httpsV2.onCall({ region: 'europe-west2' }, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) {
+    throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  }
+  try {
+    const lookbackDays = Number(req?.data?.lookbackDays) || undefined;
+    return { ok: true, ...(await aggregateMetricValuesForUser(uid, { lookbackDays })) };
+  } catch (e) {
+    console.error('[metricValues] manual aggregation failed:', e);
+    throw new httpsV2.HttpsError('internal', e?.message || 'Aggregation failed');
   }
 });
 
@@ -13655,33 +13694,85 @@ exports.syncStrava = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_
 });
 
 // Retrieve HR stream for an activity and compute zone times; store on metrics_workouts doc
-async function getUserMaxHr(uid) {
+
+/**
+ * The athlete's max HR, and where it came from.
+ *
+ * The source matters as much as the number. Every zone boundary is a percentage of
+ * this value, so a guessed max produces a zone distribution that looks precise and
+ * is not — `220 - age` and a measured max can differ by 10bpm, which moves a whole
+ * band. Surfaces are expected to badge anything that is not `profile` as
+ * provisional rather than presenting it as measurement.
+ */
+async function resolveUserMaxHr(uid) {
   const prof = await admin.firestore().collection('profiles').doc(uid).get();
   const d = prof.exists ? prof.data() : {};
-  const maxHr = Number(d?.maxHr) || null;
-  if (maxHr) return maxHr;
+  const stated = Number(d?.maxHr) || null;
+  if (stated) return { maxHr: stated, source: 'profile' };
   const age = Number(d?.age || (d?.birthYear ? (new Date().getFullYear() - Number(d.birthYear)) : null)) || null;
-  return age ? Math.round(220 - age) : 190; // fallback
+  if (age) {
+    console.warn(`[maxHr] uid=${uid} has no profiles.maxHr; falling back to 220-age=${Math.round(220 - age)}`);
+    return { maxHr: Math.round(220 - age), source: 'age_estimate' };
+  }
+  console.warn(`[maxHr] uid=${uid} has neither profiles.maxHr nor an age; falling back to 190`);
+  return { maxHr: 190, source: 'default' };
 }
 
+/**
+ * Zone boundaries as percentages of max HR.
+ *
+ * Zone 1 starts at zero, not at 50% of max. It used to have a 50% floor, and a reading
+ * below that floor matched no zone at all — `findIndex` returned -1, and the if/else
+ * chain in `enrichActivityHr` ended in a bare `else` that credited it to **Zone 5**. So
+ * every warm-up, cool-down, traffic-light stop and dropped-sensor moment under 93bpm was
+ * recorded as maximal effort. Zone 5 was the second-largest band in the 90-day totals,
+ * and a good deal of it was standing still.
+ *
+ * There is no band beneath Zone 1, so nothing should ever fall outside the set.
+ */
 function hrZonesFromMax(maxHr) {
   return [
-    { name: 'Z1', min: 0.50 * maxHr, max: 0.60 * maxHr },
+    { name: 'Z1', min: 0, max: 0.60 * maxHr },
     { name: 'Z2', min: 0.60 * maxHr, max: 0.70 * maxHr },
     { name: 'Z3', min: 0.70 * maxHr, max: 0.80 * maxHr },
     { name: 'Z4', min: 0.80 * maxHr, max: 0.90 * maxHr },
-    { name: 'Z5', min: 0.90 * maxHr, max: 1.00 * maxHr + 1 },
+    { name: 'Z5', min: 0.90 * maxHr, max: Infinity },
   ];
 }
 
-async function enrichActivityHr(uid, activityId) {
+async function enrichActivityHr(uid, activityId, options = {}) {
   const db = admin.firestore();
   const docId = `${uid}_${activityId}`;
   const ref = db.collection('metrics_workouts').doc(docId);
   const snap = await ref.get();
   if (!snap.exists) return { ok: false, reason: 'not_found' };
   const data = snap.data();
-  if (data.hrZones && data.hrZones.z1Time_s != null) return { ok: true, reason: 'already_enriched' };
+
+  // Resolved once by the caller during a backfill; falls back to a per-activity
+  // read when this is invoked on its own.
+  const resolvedMax = Number(options.maxHr)
+    ? { maxHr: Number(options.maxHr), source: options.maxHrSource || 'profile' }
+    : await resolveUserMaxHr(uid);
+  const maxHr = resolvedMax.maxHr;
+
+  // Skip only when the stored zones were computed against the *current* max HR.
+  //
+  // This used to return early on any existing `hrZones`, which made correcting
+  // `profiles.maxHr` a no-op over history: every stored split kept whatever the old
+  // fallback produced — `220 - age`, or the hardcoded 190 — and the zone charts went
+  // on reporting a distribution nobody had measured. Passing `force` did not help
+  // either: that flag only bypassed `enrichRecentStravaHr`'s own filter, and this
+  // return still fired underneath it.
+  //
+  // `maxHrUsed` is written on every enriched document precisely so this comparison
+  // is possible. A document carrying zones but no `maxHrUsed` predates that field and
+  // is treated as stale.
+  const zonesMatchCurrentMax = data.hrZones
+    && data.hrZones.z1Time_s != null
+    && Number(data.maxHrUsed) === maxHr;
+  if (zonesMatchCurrentMax && options.force !== true) {
+    return { ok: true, reason: 'already_enriched' };
+  }
 
   const accessToken = await getStravaAccessToken(uid);
   let streams;
@@ -13708,22 +13799,27 @@ async function enrichActivityHr(uid, activityId) {
     return { ok: false, reason: 'empty_stream' };
   }
 
-  const maxHr = await getUserMaxHr(uid);
   const zones = hrZonesFromMax(maxHr);
   const totals = { z1Time_s: 0, z2Time_s: 0, z3Time_s: 0, z4Time_s: 0, z5Time_s: 0 };
+  // A gap longer than this is a sensor dropout, not time spent at that heart rate.
+  // Crediting a three-minute silence to whatever was last seen invents intensity.
+  const MAX_GAP_S = 30;
   for (let i = 1; i < tm.length; i++) {
-    const dt = Math.max(1, (tm[i] - tm[i - 1]));
+    const dt = Math.min(Math.max(1, tm[i] - tm[i - 1]), MAX_GAP_S);
     const h = hr[Math.min(i, hr.length - 1)];
     const zIdx = zones.findIndex(z => h >= z.min && h < z.max);
-    if (zIdx === 0) totals.z1Time_s += dt;
-    else if (zIdx === 1) totals.z2Time_s += dt;
-    else if (zIdx === 2) totals.z3Time_s += dt;
-    else if (zIdx === 3) totals.z4Time_s += dt;
-    else totals.z5Time_s += dt;
+    // With Z1 starting at zero and Z5 unbounded above, every reading matches a zone —
+    // but index defensively rather than falling through to Z5, which is what used to
+    // happen to anything below Z1's old 50% floor.
+    const key = ['z1Time_s', 'z2Time_s', 'z3Time_s', 'z4Time_s', 'z5Time_s'][zIdx] || 'z1Time_s';
+    totals[key] += dt;
   }
   const patch = {
     hrZones: totals,
     maxHrUsed: maxHr,
+    // So a surface can badge a distribution derived from a guessed max as
+    // provisional rather than presenting it as a measurement.
+    maxHrSource: resolvedMax.source,
     hrZonesUnavailable: admin.firestore.FieldValue.delete(),
     hrZonesUnavailableReason: admin.firestore.FieldValue.delete(),
     hrZonesUnavailableAt: admin.firestore.FieldValue.delete(),
@@ -13751,6 +13847,8 @@ async function enrichRecentStravaHr(uid, days = 30, options = {}) {
   console.log('[enrichStravaHR] uid', uid, 'days', safeDays, 'force', force, 'maxActivities', maxActivities);
   const since = Date.now() - safeDays * 24 * 60 * 60 * 1000;
   const db = admin.firestore();
+  // Once for the whole run, rather than a profile read per activity.
+  const { maxHr, source: maxHrSource } = await resolveUserMaxHr(uid);
   const q = await db.collection('metrics_workouts')
     .where('ownerUid', '==', uid)
     .where('provider', '==', 'strava')
@@ -13769,7 +13867,12 @@ async function enrichRecentStravaHr(uid, days = 30, options = {}) {
     if ((w.startDate || 0) < since) continue;
     if (!w.hasHeartrate && !w.avgHeartrate) continue;
     eligible++;
-    if (!force && (w.hrZones || w.hrZonesUnavailable === true)) {
+    // Zones computed against a different max HR do not count as "existing" — they
+    // are wrong, and a change to profiles.maxHr must pull them back through. Zones
+    // that could not be computed at all (private activity, no stream) stay skipped:
+    // a new max HR does not conjure a heart-rate stream.
+    const zonesMatchCurrentMax = w.hrZones && Number(w.maxHrUsed) === maxHr;
+    if (!force && (zonesMatchCurrentMax || w.hrZonesUnavailable === true)) {
       skippedExisting++;
       continue;
     }
@@ -13777,11 +13880,11 @@ async function enrichRecentStravaHr(uid, days = 30, options = {}) {
     scanned++;
     const actId = String(w.stravaActivityId || '').trim();
     if (!actId) continue;
-    const r = await enrichActivityHr(uid, actId).catch(() => null);
+    const r = await enrichActivityHr(uid, actId, { maxHr, maxHrSource, force }).catch(() => null);
     if (r?.ok) enriched++;
   }
   const remaining = Math.max(0, eligible - skippedExisting - scanned);
-  return { ok: true, enriched, scanned, eligible, skippedExisting, remaining };
+  return { ok: true, enriched, scanned, eligible, skippedExisting, remaining, maxHr, maxHrSource };
 }
 
 // Enrich recent Strava runs with HR zone breakdown

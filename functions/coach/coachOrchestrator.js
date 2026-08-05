@@ -146,13 +146,16 @@ async function generateCoachBriefingLLM(uid, firestore, ctx) {
     const lines = [
       "Generate this morning's coaching briefing for the athlete.",
       '',
-      `Today's readiness: ${ctx.readinessPct}% (${String(ctx.readinessLabel || '').toUpperCase()})`,
+      ctx.readinessPct === null || ctx.readinessPct === undefined
+        ? "Today's readiness: not available — no HRV or sleep recorded for the last night. Do not infer readiness; say so and coach the session as planned."
+        : `Today's readiness: ${ctx.readinessPct}% (${String(ctx.readinessLabel || '').toUpperCase()})`,
       `HRV: ${ctx.hrvToday !== null ? `${Math.round(ctx.hrvToday)}ms` : 'n/a'} | Sleep: ${ctx.sleepToday !== null ? `${ctx.sleepToday.toFixed(1)}h` : 'n/a'}`,
       `Scheduled session: ${ctx.todayBlockTitle || 'None scheduled'}`,
       `Macro targets: P:${ctx.proteinG}g  C:${ctx.carbG}g  F:${ctx.fatG}g`,
       `Tomorrow training type: ${String(ctx.tomorrowTrainingType || 'rest').replace('_', ' ')}`,
-      ctx.stepsToday !== null && ctx.stepsToday !== undefined
-        ? `Steps so far today: ${Number(ctx.stepsToday).toLocaleString()} / ${Number(ctx.stepsTarget || 12000).toLocaleString()}` : null,
+      ctx.stepsYesterday !== null && ctx.stepsYesterday !== undefined
+        ? `Steps yesterday: ${Number(ctx.stepsYesterday).toLocaleString()} / ${Number(ctx.stepsTarget || 12000).toLocaleString()} daily target`
+        : null,
       withTarget(ctx.weeklyRunKm, kpiTargets.runKmTarget, 'km') ? `Weekly run volume: ${withTarget(ctx.weeklyRunKm, kpiTargets.runKmTarget, 'km')}` : null,
       withTarget(ctx.weeklySwimKm, kpiTargets.swimKmTarget, 'km') ? `Weekly swim volume: ${withTarget(ctx.weeklySwimKm, kpiTargets.swimKmTarget, 'km')}` : null,
       withTarget(ctx.weeklyBikeKm, kpiTargets.bikeKmTarget, 'km') ? `Weekly bike volume: ${withTarget(ctx.weeklyBikeKm, kpiTargets.bikeKmTarget, 'km')}` : null,
@@ -297,13 +300,33 @@ async function _runOrchestratorForUser(uid) {
   const profileSnap = await firestore.collection('profiles').doc(uid).get();
   const profile = profileSnap.data() || {};
 
-  // 2. HRV + sleep — prefer health_metrics (written by iOS), fall back to fitness_overview
-  const [hmSnap, fitnessOverviewSnap] = await Promise.all([
+  // 2. HRV + sleep — from health_metrics (written by iOS)
+  //
+  // This read today's document only, and this function runs at 04:00. At 04:00 "today"
+  // is four hours old and the night is not over: Apple writes HRV and a sleep duration
+  // for a night once that night *ends*, and the phone then syncs them during the
+  // morning. So `hrvMs` and `sleepDurationH` were reliably null here — coach_daily for
+  // 1, 2 and 3 August 2026 all record `hrvToday: null, sleepToday: null`.
+  //
+  // Reading the most recent day that actually carries data, rather than a date key
+  // chosen by when the job happens to run, makes the signal independent of the
+  // schedule. `readinessBasisDate` records which night it came from so a stale basis
+  // is visible rather than implied.
+  const yesterdayKey = `${uid}_${todayDt.minus({ days: 1 }).toISODate()}`;
+  const [hmSnap, hmPrevSnap, fitnessOverviewSnap] = await Promise.all([
     firestore.collection('health_metrics').doc(docId).get(),
+    firestore.collection('health_metrics').doc(yesterdayKey).get(),
     firestore.collection('fitness_overview').doc(uid).get(),
   ]);
-  const hm = hmSnap.exists ? hmSnap.data() : {};
+  const hmToday = hmSnap.exists ? hmSnap.data() : {};
+  const hmPrev = hmPrevSnap.exists ? hmPrevSnap.data() : {};
   const fitnessOverview = fitnessOverviewSnap.exists ? fitnessOverviewSnap.data() : {};
+
+  const hasRecovery = (m) => m && (m.hrvMs != null || m.sleepDurationH != null);
+  const hm = hasRecovery(hmToday) ? hmToday : (hasRecovery(hmPrev) ? hmPrev : {});
+  const readinessBasisDate = hasRecovery(hmToday)
+    ? today
+    : (hasRecovery(hmPrev) ? todayDt.minus({ days: 1 }).toISODate() : null);
 
   const hrvToday = hm.hrvMs ?? null;
   const sleepToday = hm.sleepDurationH ?? null;
@@ -326,21 +349,42 @@ async function _runOrchestratorForUser(uid) {
       : null;
   }
 
-  // 4. Readiness score R
-  // If Apple Health provides a readiness score (0-100), use it as the primary signal.
-  // Otherwise compute from HRV + sleep.
-  const appleReadiness = profile.healthkitReadinessScore ?? null; // 0-100
-  let readinessScore;
-  if (appleReadiness !== null) {
-    readinessScore = Math.min(1.0, appleReadiness / 100);
-  } else {
-    const w1 = 0.6, w2 = 0.4;
-    const hrvRatio = (hrvToday !== null && hrv7dAvg && hrv7dAvg > 0)
-      ? hrvToday / hrv7dAvg : 1.0;
-    const sleepRatio = (sleepToday !== null) ? sleepToday / 8.0 : 1.0;
+  // 4. Readiness score R — computed from HRV and sleep, or not at all.
+  //
+  // This used to prefer `profile.healthkitReadinessScore` and short-circuit the
+  // calculation entirely whenever that field held anything. Nothing has written it
+  // since the iOS app stopped mirroring readiness up (see the comment in
+  // HealthKitSyncService.pushToFirestore — readiness is computed server-side, so the
+  // phone deliberately keeps its own local-only). The field froze at 59, and 59/100
+  // is 'red', so the coach declared Jim unrecovered every single day, for months,
+  // from a number that could not move. A stale scalar must never outrank live data.
+  //
+  // The old fallback was equally unsound: with no HRV and no sleep it used ratios of
+  // 1.0 for both and produced a perfect 1.0 — a maximum readiness score derived
+  // entirely from an absence of measurement. An unknown is now an unknown.
+  const w1 = 0.6, w2 = 0.4;
+  const hrvRatio = (hrvToday !== null && hrv7dAvg && hrv7dAvg > 0)
+    ? hrvToday / hrv7dAvg : null;
+  const sleepRatio = (sleepToday !== null) ? sleepToday / 8.0 : null;
+
+  let readinessScore = null;
+  let readinessBasis = 'none';
+  if (hrvRatio !== null && sleepRatio !== null) {
     readinessScore = Math.min(1.0, w1 * hrvRatio + w2 * sleepRatio);
+    readinessBasis = 'hrv_and_sleep';
+  } else if (hrvRatio !== null) {
+    // One signal, renormalised to its own weight rather than silently scored as if
+    // the missing half were perfect.
+    readinessScore = Math.min(1.0, hrvRatio);
+    readinessBasis = 'hrv_only';
+  } else if (sleepRatio !== null) {
+    readinessScore = Math.min(1.0, sleepRatio);
+    readinessBasis = 'sleep_only';
   }
-  const readinessLabel = readinessScore >= 0.8 ? 'green' : readinessScore >= 0.6 ? 'amber' : 'red';
+
+  const readinessLabel = readinessScore === null
+    ? 'unknown'
+    : readinessScore >= 0.8 ? 'green' : readinessScore >= 0.6 ? 'amber' : 'red';
 
   // 5. Find next fitness calendar block
   const nowMs = Date.now();
@@ -376,7 +420,17 @@ async function _runOrchestratorForUser(uid) {
     const blockData = fitnessBlock.data();
     todayBlockTitle = blockData.title || 'Training';
 
-    if (readinessScore < 0.6) {
+    // `readinessScore === null` is now possible and must not adapt anything.
+    //
+    // Guarded explicitly rather than left to the comparisons below: in JavaScript
+    // `null < 0.6` is true, because null coerces to 0. Unguarded, a day with no HRV
+    // and no sleep would take the *most* severe branch and rewrite the session to
+    // "Rest / Active Recovery" — prescribing rest from an absence of measurement,
+    // which is precisely the failure this change exists to remove. The briefing still
+    // names today's session; it simply does not second-guess it.
+    if (readinessScore === null) {
+      adaptationAction = 'none_readiness_unknown';
+    } else if (readinessScore < 0.6) {
       adaptationAction = 'rest_recovery';
       adaptedBlockId = fitnessBlock.id;
       await fitnessBlock.ref.update({
@@ -570,7 +624,10 @@ async function _runOrchestratorForUser(uid) {
   }
 
   // 12b. Pre-render briefing text
-  const readinessPct = Math.round(readinessScore * 100);
+  // Null, not 0. `Math.round(null * 100)` is 0, and "readiness 0%" reads as a
+  // measured collapse rather than as no measurement at all.
+  const readinessPct = readinessScore === null ? null : Math.round(readinessScore * 100);
+  const readinessDisplay = readinessPct === null ? 'n/a' : `${readinessPct}%`;
   const progParts = [];
   if (todayProgramme?.runner) {
     progParts.push(`Run: ${todayProgramme.runner.title} (${todayProgramme.runner.durationMin}min)`);
@@ -602,9 +659,23 @@ async function _runOrchestratorForUser(uid) {
   }
   const volumeLine = weeklyNudges.length > 0 ? `\n⚠️ Volume: ${weeklyNudges.join('. ')}` : '';
 
-  // 12d. Steps today
-  const stepsToday = profile.healthkitStepsToday ?? profile.stepsToday ?? null;
-  const stepsLine = stepsToday !== null ? `\nSteps: ${stepsToday.toLocaleString()} / ${stepsTarget.toLocaleString()}` : '';
+  // 12d. Steps — yesterday's completed total, not "so far today"
+  //
+  // `profile.healthkitStepsToday` is a mirror the phone overwrites as it syncs. This
+  // job runs at 04:00, so the mirror holds the tail of *yesterday*, and the briefing
+  // presented it as today's progress. It is also why coach_daily for 1, 2 and 3
+  // August each recorded exactly 5,675 steps: three consecutive readings of one
+  // number that had stopped moving.
+  //
+  // Nothing sensible can be said about "steps so far today" at 04:00 — the answer is
+  // approximately zero. What is genuinely known is how yesterday finished, so that is
+  // what gets reported, labelled as yesterday. WS6's evening checkpoint is where a
+  // live intra-day figure belongs, read at a time when it means something.
+  const stepsYesterday = hmPrev.stepsToday
+    ?? profile.healthkitStepsToday ?? profile.stepsToday ?? null;
+  const stepsLine = stepsYesterday !== null
+    ? `\nSteps yesterday: ${stepsYesterday.toLocaleString()} / ${stepsTarget.toLocaleString()}`
+    : '';
 
   // 12e. Generate the briefing via LLM with the triathlon coach persona +
   // focus-goal awareness. Falls back to the programmatic template if the LLM
@@ -621,7 +692,7 @@ async function _runOrchestratorForUser(uid) {
     carbG,
     fatG,
     tomorrowTrainingType,
-    stepsToday,
+    stepsYesterday,
     weeklyRunKm,
     weeklySwimKm,
     weeklyBikeKm: weeklyBikeKmCtx,
@@ -633,11 +704,11 @@ async function _runOrchestratorForUser(uid) {
 
   const fallbackBriefing =
     `🏊 AI Coach Briefing\n` +
-    `HRV: ${hrvToday !== null ? `${Math.round(hrvToday)}ms` : 'n/a'} (${readinessLabel === 'green' ? '🟢' : readinessLabel === 'amber' ? '🟡' : '🔴'} ${readinessPct}%). ` +
+    `HRV: ${hrvToday !== null ? `${Math.round(hrvToday)}ms` : 'n/a'} (${readinessLabel === 'green' ? '🟢' : readinessLabel === 'amber' ? '🟡' : readinessLabel === 'red' ? '🔴' : '⚪️'} ${readinessDisplay}). ` +
     `Sleep: ${sleepToday !== null ? `${sleepToday.toFixed(1)}h` : 'n/a'}.\n` +
     `Today: ${todayBlockTitle}.\n` +
     `Targets: P:${proteinG}g C:${carbG}g F:${fatG}g\n` +
-    `R-Score: ${(readinessScore).toFixed(2)}` +
+    `R-Score: ${readinessScore === null ? 'n/a — no HRV or sleep recorded' : readinessScore.toFixed(2)}` +
     stepsLine +
     programmeLine +
     volumeLine;
@@ -650,6 +721,11 @@ async function _runOrchestratorForUser(uid) {
     date: today,
     readinessScore,
     readinessLabel,
+    // Which night the score came from, and which signals were available. Both null
+    // and a real score look the same downstream without this; a score standing on
+    // sleep alone is not the same claim as one standing on HRV and sleep together.
+    readinessBasis,
+    readinessBasisDate,
     hrvToday,
     hrv7dAvg: hrv7dAvg !== null ? Math.round(hrv7dAvg) : null,
     sleepToday,
@@ -674,7 +750,12 @@ async function _runOrchestratorForUser(uid) {
     // Lets the UI say "2 of 7 days synced" rather than presenting a partial week as whole.
     weeklyVolumeDaysCovered: weekSport?.daysCovered ?? 0,
     weeklyVolumeHasData: weekSport?.hasData === true,
-    stepsToday: profile.healthkitStepsToday ?? profile.stepsToday ?? null,
+    // `stepsToday` is retained because iOS reads that key (CoachDaily.swift:56), but
+    // what it carries at 04:00 is yesterday's completed total — see 12d. `stepsYesterday`
+    // is the honestly-named field; consumers should migrate to it and the old key can
+    // then go.
+    stepsToday: stepsYesterday,
+    stepsYesterday,
     currentBodyFatPct: bodyFatPct,
     currentWeightKg: weightKg,
     briefingText,

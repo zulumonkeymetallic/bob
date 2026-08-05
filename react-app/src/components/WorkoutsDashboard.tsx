@@ -17,6 +17,7 @@ import {
   TimeScale
 } from 'chart.js';
 import FitnessKpiGrid from './fitness/FitnessKpiGrid';
+import { activityFromWorkout, groupFor } from '../utils/activityTaxonomy';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, TimeScale);
 
@@ -161,27 +162,44 @@ type ActivityCompositionKey =
   | 'mobility'
   | 'other';
 
+/**
+ * The three-way sport filter at the top of this page.
+ *
+ * Walks and hikes used to return 'run' here, so filtering to Run included every walk and
+ * a 12km hike counted as running distance. They now return 'other' and drop out of the
+ * three sport filters — which is correct for a *run* filter, and the reason the activity
+ * composition chart below (which does have walk and hike) is the place to see them.
+ */
 function getWorkoutSport(w: WorkoutDoc): WorkoutSportMode | 'other' {
-  if (w.provider === 'parkrun') return 'run';
   if (w.run === true) return 'run';
-  const type = String(w.type || w.sportType || '').toLowerCase();
-  if (type.includes('swim')) return 'swim';
-  if (type.includes('ride') || type.includes('bike') || type.includes('cycling')) return 'bike';
-  if (type.includes('run') || type.includes('walk') || type.includes('hike')) return 'run';
+  const group = groupFor(activityFromWorkout(w));
+  if (group === 'run') return 'run';
+  if (group === 'swim') return 'swim';
+  if (group === 'cycle') return 'bike';
   return 'other';
 }
 
 function classifyWorkoutActivityType(w: WorkoutDoc): ActivityCompositionKey {
-  if (w.provider === 'parkrun') return 'run';
+  // CrossFit and mobility are presentation categories this chart draws that the canonical
+  // taxonomy folds into `strength` and `other`, so they are matched first, on the wider
+  // haystack (which includes the title, where "CrossFit" usually appears).
   const haystack = `${String(w.type || '')} ${String(w.sportType || '')} ${String(w.title || '')} ${String(w.name || '')} ${String(w.event || '')}`.toLowerCase();
-  if (haystack.includes('crossfit')) return 'crossfit';
-  if (haystack.includes('strength') || haystack.includes('weights') || haystack.includes('resistance') || haystack.includes('gym')) return 'strength';
-  if (haystack.includes('yoga') || haystack.includes('pilates') || haystack.includes('mobility') || haystack.includes('stretch')) return 'mobility';
-  if (haystack.includes('swim')) return 'swim';
-  if (haystack.includes('ride') || haystack.includes('bike') || haystack.includes('cycling')) return 'bike';
-  if (haystack.includes('walk') || haystack.includes('hike')) return 'walk';
-  if (haystack.includes('run')) return 'run';
-  return getWorkoutSport(w);
+  if (w.provider !== 'parkrun') {
+    if (haystack.includes('crossfit')) return 'crossfit';
+    if (haystack.includes('yoga') || haystack.includes('pilates') || haystack.includes('mobility') || haystack.includes('stretch')) return 'mobility';
+  }
+  const activity = activityFromWorkout(w);
+  switch (groupFor(activity)) {
+    case 'run': return 'run';
+    case 'swim': return 'swim';
+    case 'cycle': return 'bike';
+    case 'walk': return 'walk';
+    // Hike has no slice of its own on this chart; it belongs with walking rather than
+    // with running, which is where it used to land.
+    case 'hike': return 'walk';
+    case 'strength': return 'strength';
+    default: return 'other';
+  }
 }
 
 function workoutMatchesSport(w: WorkoutDoc, sportMode: SportMode): boolean {

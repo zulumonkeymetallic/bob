@@ -115,6 +115,8 @@ const SettingsPage: React.FC = () => {
   const [targetWeightKg, setTargetWeightKg] = useState('');
   const [targetBodyFatPct, setTargetBodyFatPct] = useState('');
   const [targetStepsPerDay, setTargetStepsPerDay] = useState('');
+  // Not a target — a measurement. Every HR zone boundary is a percentage of it.
+  const [maxHr, setMaxHr] = useState('');
   const [targetDistanceKmPerDay, setTargetDistanceKmPerDay] = useState('');
   const [targetWorkoutMinutesPerWeek, setTargetWorkoutMinutesPerWeek] = useState('');
   const [targetAwakeHoursPerDay, setTargetAwakeHoursPerDay] = useState('');
@@ -336,6 +338,7 @@ const SettingsPage: React.FC = () => {
           setTargetWeightKg(p.targetWeightKg != null ? String(p.targetWeightKg) : (p.healthTargetWeightKg != null ? String(p.healthTargetWeightKg) : ''));
           setTargetBodyFatPct(p.targetBodyFatPct != null ? String(p.targetBodyFatPct) : (p.healthTargetBodyFatPct != null ? String(p.healthTargetBodyFatPct) : ''));
           setTargetStepsPerDay(p.targetStepsPerDay != null ? String(p.targetStepsPerDay) : (p.dailyStepTarget != null ? String(p.dailyStepTarget) : (p.healthTargetStepsPerDay != null ? String(p.healthTargetStepsPerDay) : '')));
+          setMaxHr(p.maxHr != null ? String(p.maxHr) : '');
           setTargetDistanceKmPerDay(p.targetDistanceKmPerDay != null ? String(p.targetDistanceKmPerDay) : (p.dailyDistanceTargetKm != null ? String(p.dailyDistanceTargetKm) : (p.healthTargetDistanceKmPerDay != null ? String(p.healthTargetDistanceKmPerDay) : '')));
           setTargetWorkoutMinutesPerWeek(p.weeklyWorkoutTargetMinutes != null ? String(p.weeklyWorkoutTargetMinutes) : (p.targetWorkoutMinutesPerWeek != null ? String(p.targetWorkoutMinutesPerWeek) : (p.healthTargetWorkoutMinutesWeekly != null ? String(p.healthTargetWorkoutMinutesWeekly) : '')));
           setTargetAwakeHoursPerDay(p.awakeHoursPerDay != null ? String(p.awakeHoursPerDay) : (p.targetAwakeHoursPerDay != null ? String(p.targetAwakeHoursPerDay) : (p.healthAwakeHoursPerDay != null ? String(p.healthAwakeHoursPerDay) : '')));
@@ -1184,6 +1187,15 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                           </Col>
                           <Col md={3}>
                             <Form.Group>
+                              <Form.Label style={{ color: colors.primary }}>Max Heart Rate (bpm)</Form.Label>
+                              <Form.Control type="number" step="1" min="120" max="230" placeholder="e.g., 186" value={maxHr} onChange={(e) => setMaxHr(e.target.value)} />
+                              <Form.Text muted>
+                                All five HR zones derive from this. Left blank it is guessed from your age, and every zone chart is guessed with it. Changing it re-computes your zone history on the next enrichment run.
+                              </Form.Text>
+                            </Form.Group>
+                          </Col>
+                          <Col md={3}>
+                            <Form.Group>
                               <Form.Label style={{ color: colors.primary }}>Distance Target (km/day)</Form.Label>
                               <Form.Control type="number" step="0.1" placeholder="e.g., 5" value={targetDistanceKmPerDay} onChange={(e) => setTargetDistanceKmPerDay(e.target.value)} />
                             </Form.Group>
@@ -1257,6 +1269,10 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                                     targetStepsPerDay: targetStepsPerDay.trim() !== '' ? Number(targetStepsPerDay) : null,
                                     dailyStepTarget: targetStepsPerDay.trim() !== '' ? Number(targetStepsPerDay) : null,
                                     healthTargetStepsPerDay: targetStepsPerDay.trim() !== '' ? Number(targetStepsPerDay) : null,
+                                    // Read by resolveUserMaxHr (functions/index.js) for every HR zone
+                                    // calculation. Null here means "guess it", which is what produced
+                                    // a zone history nobody had measured.
+                                    maxHr: maxHr.trim() !== '' ? Number(maxHr) : null,
                                     targetDistanceKmPerDay: targetDistanceKmPerDay.trim() !== '' ? Number(targetDistanceKmPerDay) : null,
                                     dailyDistanceTargetKm: targetDistanceKmPerDay.trim() !== '' ? Number(targetDistanceKmPerDay) : null,
                                     healthTargetDistanceKmPerDay: targetDistanceKmPerDay.trim() !== '' ? Number(targetDistanceKmPerDay) : null,
@@ -1329,6 +1345,7 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                                   const parsedTargetWeightKg = targetWeightKg.trim() !== '' ? Number(targetWeightKg) : null;
                                   const parsedTargetBodyFatPct = targetBodyFatPct.trim() !== '' ? Number(targetBodyFatPct) : null;
                                   const parsedTargetStepsPerDay = targetStepsPerDay.trim() !== '' ? Number(targetStepsPerDay) : null;
+                                  const parsedMaxHr = maxHr.trim() !== '' ? Number(maxHr) : null;
                                   const parsedTargetDistanceKmPerDay = targetDistanceKmPerDay.trim() !== '' ? Number(targetDistanceKmPerDay) : null;
                                   const parsedTargetWorkoutMinutesPerWeek = targetWorkoutMinutesPerWeek.trim() !== '' ? Number(targetWorkoutMinutesPerWeek) : null;
                                   const parsedTargetAwakeHoursPerDay = targetAwakeHoursPerDay.trim() !== '' ? Number(targetAwakeHoursPerDay) : null;
@@ -1356,6 +1373,7 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
                                     targetStepsPerDay: parsedTargetStepsPerDay,
                                     dailyStepTarget: parsedTargetStepsPerDay,
                                     healthTargetStepsPerDay: parsedTargetStepsPerDay,
+                                    maxHr: parsedMaxHr,
                                     targetDistanceKmPerDay: parsedTargetDistanceKmPerDay,
                                     dailyDistanceTargetKm: parsedTargetDistanceKmPerDay,
                                     healthTargetDistanceKmPerDay: parsedTargetDistanceKmPerDay,
