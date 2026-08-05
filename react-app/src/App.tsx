@@ -85,8 +85,6 @@ import SprintKanbanPageV2 from './components/SprintKanbanPageV2';
 import TasksManagement from './components/TasksManagement';
 import SprintPlanningMatrix from './components/SprintPlanningMatrix';
 import WorkoutsDashboard from './components/WorkoutsDashboard';
-import MetricsPage from './components/MetricsPage';
-import AiCoachPage from './components/coach/AiCoachPage';
 import CoachHubPage from './components/coach/CoachHubPage';
 import FitnessTabBar from './components/coach/FitnessTabBar';
 import HealthHubPage from './components/health/HealthHubPage';
@@ -537,15 +535,19 @@ function AppContent() {
             <Route path="/wplanner/year" element={<LegacyPlannerRedirect level="year" />} />
             <Route path="/wplanner/gantt" element={<LegacyPlannerRedirect level="gantt" />} />
             <Route path="/planner/sprint-capacity" element={<Navigate to="/sprints/capacity" replace />} />
-            {/* Health Hub — unified tabbed page */}
+            {/* Health Hub — the single health surface. Tabs: Coach | Metrics | Workouts | Zones. */}
             <Route path="/health" element={<HealthHubPage />} />
             <Route path="/health/:tab" element={<HealthHubPage />} />
-            {/* /fitness kept as direct MetricsPage — user explicitly wants these boxes at this URL */}
-            <Route path="/fitness" element={<MetricsPage />} />
-            <Route path="/metrics" element={<MetricsPage />} />
-            <Route path="/coach" element={<CoachHubPage />} />
+            {/* /fitness and /metrics land on the Metrics tab rather than a second copy of
+                MetricsPage. Same boxes, same content, one address. */}
+            <Route path="/fitness" element={<Navigate to="/health/metrics" replace />} />
+            <Route path="/metrics" element={<Navigate to="/health/metrics" replace />} />
+            {/* /coach keeps the FINANCE coach, which is not health. The fitness coach now
+                lives in the hub, rendered once. */}
+            <Route path="/coach" element={<Navigate to="/coach/finance" replace />} />
+            <Route path="/coach/ai" element={<Navigate to="/health/coach" replace />} />
             <Route path="/coach/:tab" element={<CoachHubPage />} />
-            <Route path="/ai-coach" element={<Navigate to="/coach" replace />} />
+            <Route path="/ai-coach" element={<Navigate to="/health/coach" replace />} />
             <Route path="/fitness/full" element={<Navigate to="/health/workouts" replace />} />
             <Route path="/workouts" element={<Navigate to="/health/workouts" replace />} />
             <Route path="/running-results" element={<Navigate to="/health/workouts" replace />} />

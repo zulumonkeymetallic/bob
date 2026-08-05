@@ -25,15 +25,29 @@ interface TabDef {
   matches: (pathname: string) => boolean;
 }
 
+// Health is one entry, not two.
+//
+// Fitness and Coach were separate tabs pointing at separate sections. Both now live in
+// the health hub, so a single Health tab lands on it — and the hub opens on its Coach tab
+// on a phone, so the coach is still exactly one tap from here.
+//
+// Finance Coach keeps its own address at /coach/finance and is reached from the finance
+// section, not from this bar.
 const TABS: TabDef[] = [
   { key: 'home',    label: 'Home',    Icon: Home,       path: '/dashboard', matches: p => p === '/' || p.startsWith('/dashboard') },
-  { key: 'fitness', label: 'Fitness', Icon: Heart,      path: '/fitness',   matches: p => p.startsWith('/fitness') },
-  { key: 'coach',   label: 'Coach',   Icon: Dumbbell,   path: '/coach',     matches: p => p.startsWith('/coach') || p.startsWith('/ai-coach') },
+  {
+    key: 'health', label: 'Health', Icon: Heart, path: '/health',
+    matches: p => p.startsWith('/health') || p.startsWith('/fitness') || p.startsWith('/metrics')
+      || p.startsWith('/workouts') || p === '/ai-coach' || p.startsWith('/ai-coach/'),
+  },
+  { key: 'coach',   label: 'Finance', Icon: Dumbbell,  path: '/coach/finance', matches: p => p.startsWith('/coach') },
   { key: 'goals',   label: 'Goals',   Icon: Target,     path: '/goals',     matches: p => p.startsWith('/goals') },
   { key: 'tasks',   label: 'Tasks',   Icon: ListChecks, path: '/tasks',     matches: p => p.startsWith('/tasks') || p.startsWith('/task/') },
 ];
 
-const SHOW_ON = TABS.flatMap(t => [t.path]);
+// The bar shows on any path a tab claims, not only on the tab's own path — otherwise it
+// vanishes the moment you switch to /health/zones or /health/workouts.
+const SHOW_ON = ['/dashboard', '/health', '/fitness', '/metrics', '/workouts', '/coach', '/goals', '/tasks'];
 
 export const FitnessTabBar: React.FC = () => {
   const location = useLocation();
