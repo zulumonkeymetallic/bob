@@ -93,7 +93,7 @@ const PlanActionBar: React.FC<PlanActionBarProps> = ({ className }) => {
   const buttonVariant = (target: 'dashboard' | 'planner' | 'kanban' | 'coach' | 'roadmap') => {
     if (target === 'dashboard') return location.pathname.startsWith('/dashboard') ? 'primary' : 'outline-secondary';
     if (target === 'planner') return location.pathname.startsWith('/planner') ? 'primary' : 'outline-secondary';
-    if (target === 'coach') return location.pathname.startsWith('/coach') ? 'primary' : 'outline-secondary';
+    if (target === 'coach') return location.pathname.startsWith('/health/coach') ? 'primary' : 'outline-secondary';
     if (target === 'roadmap') return (location.pathname.startsWith('/canvas') || location.pathname.startsWith('/visual-canvas')) ? 'primary' : 'outline-secondary';
     return location.pathname.startsWith('/sprints/kanban') ? 'primary' : 'outline-secondary';
   };
@@ -152,7 +152,7 @@ const PlanActionBar: React.FC<PlanActionBarProps> = ({ className }) => {
       <Button size="sm" variant={buttonVariant('roadmap')} onClick={() => navigate(buildPlannerPath('roadmap'))} title="Goal roadmap">
         <MapIcon size={14} /><span className="d-none d-xl-inline ms-1">Roadmap</span>
       </Button>
-      <Button size="sm" variant={buttonVariant('coach')} onClick={() => navigate('/coach')} title="Coach hub">
+      <Button size="sm" variant={buttonVariant('coach')} onClick={() => navigate('/health/coach')} title="Fitness coach">
         <Brain size={14} /><span className="d-none d-xl-inline ms-1">Coach</span>
       </Button>
       <Dropdown>

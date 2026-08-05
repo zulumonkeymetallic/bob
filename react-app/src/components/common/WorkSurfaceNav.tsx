@@ -11,7 +11,9 @@ const LINKS = [
   // distinct from the "Roadmap" link above, which points at the Gantt chart instead.
   // Per Jim, 2026-07-23.
   { label: 'Plan', path: '/canvas?layout=roadmap', icon: MapIcon },
-  { label: 'Coach', path: '/coach', icon: Brain },
+  // The fitness coach, which now lives in the health hub. `/coach` alone would land on
+  // the Finance coach — a different thing, and not what this button has ever meant.
+  { label: 'Coach', path: '/health/coach', icon: Brain },
 ] as const;
 
 interface WorkSurfaceNavProps {

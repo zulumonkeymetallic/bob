@@ -134,10 +134,10 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
         // 'Finance Dashboard' -> /dashboard/finance lived here too, but that path is
         // only a redirect to /finance/dashboard, which the Finance group already lists.
         { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
-        { label: 'Fitness', path: '/fitness', icon: 'heartbeat' },
+        // Fitness and Metrics were two entries that now land on the same hub tab.
+        { label: 'Health', path: '/health', icon: 'heartbeat' },
         { label: 'Kanban Board', path: '/sprints/kanban', icon: 'columns' },
         { label: 'Calendar', path: '/calendar', icon: 'calendar' },
-        { label: 'Metrics', path: '/metrics', icon: 'tachometer-alt' },
       ]
     },
     // Coach — Health folded in here (was its own top-level group) per Jim, 2026-07-23.
@@ -146,9 +146,13 @@ const SidebarLayout: React.FC<SidebarLayoutProps> = ({ children, onSignOut }) =>
       icon: 'brain',
       lucideIcon: Brain,
       items: [
-        { label: 'AI Coach', path: '/coach', icon: 'brain' },
+        // Deep links into the hub's tabs, so the sidebar reaches each surface directly
+        // rather than always landing on whichever tab the hub defaults to.
+        { label: 'Fitness Coach', path: '/health/coach', icon: 'brain' },
+        { label: 'Metrics', path: '/health/metrics', icon: 'tachometer-alt' },
+        { label: 'Workouts', path: '/health/workouts', icon: 'running' },
+        { label: 'HR Zones', path: '/health/zones', icon: 'heartbeat' },
         { label: 'Finance Coach', path: '/coach/finance', icon: 'chart-line' },
-        { label: 'Health Hub', path: '/health', icon: 'heartbeat' },
         { label: 'Habit Tracking', path: '/dashboard/habit-tracking', icon: 'check-square' },
         { label: 'Running Heatmap', path: '/running/heatmap', icon: 'map-marked-alt' },
       ]
