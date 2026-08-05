@@ -352,15 +352,39 @@ async function resolveActivePhase(firestore, uid, umbrellaGoalId) {
   return { phaseIndex: resolved.phaseIndex, phase: resolved.phase };
 }
 
-/** Phase → weekly swim/bike targets */
-function phaseSessionTargets(phaseIndex) {
-  const targets = [
+/**
+ * Weekly session counts for the active phase.
+ *
+ * Read from `trainingPlan.weeklySessions` on the phase goal — data, editable in the app,
+ * per phase. The hardcoded table this replaces covered swim and bike only, at one or two
+ * sessions each, and knew nothing of run, strength, walk, climb or hike. It also bore no
+ * relation to what Jim had configured: it asked for one swim a week where his own plan has
+ * two, and one bike where he has three.
+ *
+ * The literals survive as a fallback for a phase with no trainingPlan yet, so a user who
+ * has configured nothing still gets something.
+ */
+function phaseSessionTargets(phaseIndex, phase) {
+  const configured = phase?.trainingPlan?.weeklySessions;
+  if (configured && typeof configured === 'object') {
+    return {
+      swim: Number(configured.swim) || 0,
+      // Both bike variants count toward the same weekly target — a ride is a ride
+      // whether or not the wheels moved.
+      bike: (Number(configured.bike_outdoor) || 0) + (Number(configured.bike_indoor) || 0),
+      run: Number(configured.run) || 0,
+      strength: Number(configured.strength) || 0,
+      walk: Number(configured.walk) || 0,
+      source: 'trainingPlan',
+    };
+  }
+  const fallback = [
     { swim: 1, bike: 1 }, // Phase 0 — Base
     { swim: 2, bike: 2 }, // Phase 1 — Build
     { swim: 2, bike: 3 }, // Phase 2 — Peak
     { swim: 1, bike: 1 }, // Phase 3 — Taper
   ];
-  return targets[phaseIndex] ?? targets[0];
+  return { ...(fallback[phaseIndex] ?? fallback[0]), source: 'default_table' };
 }
 
 async function _scheduleBlocksForUser(uid, profile) {
@@ -422,7 +446,7 @@ async function _scheduleBlocksForUser(uid, profile) {
   // Resolve active phase
   const phaseResult = await resolveActivePhase(firestore, uid, ironmanUmbrellaGoalId);
   const phaseIndex = phaseResult?.phaseIndex ?? 0;
-  const targets = phaseSessionTargets(phaseIndex);
+  const targets = phaseSessionTargets(phaseIndex, phaseResult?.phase);
 
   // The athlete's own weekly windows. Sessions are placed inside these wherever one
   // exists for the activity; the hardcoded hours below are only a fallback now.
@@ -590,6 +614,10 @@ async function _scheduleBlocksForUser(uid, profile) {
     phaseIndex,
     swimNeeded,
     bikeNeeded,
+    // Whether the counts came from the phase's trainingPlan or the fallback table —
+    // otherwise a phase with no plan looks identical to one with a deliberate plan.
+    targetSource: targets.source,
+    healthSlots: healthSlots.length,
   });
 
   console.log(`[coachScheduler] uid=${uid} scheduled ${created} blocks, skipped ${skipped}`);
