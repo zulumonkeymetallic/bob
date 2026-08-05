@@ -15867,6 +15867,78 @@ async function _getFitnessOverview(uid, days) {
   const predictedBike30miSec = bestBike30mi ? Number(bestBike30mi.normalizedSec) : null;
   const predictedBikeSource = (bestBike50k?.provider || bestBike30mi?.provider || null);
 
+  // ── Marathon ────────────────────────────────────────────────────────────────
+  //
+  // Gated, and with a stiffer exponent, because Riegel does not hold this far.
+  //
+  // The 1.06 exponent is validated to roughly 2x the source distance; a 5k extrapolated to
+  // a marathon is 8.4x, and taking the single fastest effort in the window makes it worse
+  // — on 2026-08-05 the fastest run in Jim's 90-day window was 1.37km, which would have
+  // produced a confident marathon time from a nine-minute jog.
+  //
+  // So: a long run of at least MARATHON_MIN_LONG_RUN_KM must exist in the window, and the
+  // exponent rises to 1.10 for the extrapolation. `basis` records which effort it came
+  // from, so a suspicious number can be traced rather than trusted.
+  const MARATHON_KM = 42.195;
+  const MARATHON_MIN_LONG_RUN_KM = 15;
+  const MARATHON_EXPONENT = 1.10;
+  const longestRunKm = workouts.reduce((max, w) => (
+    classifySport(w) === 'run' ? Math.max(max, km(w.distance_m)) : max
+  ), 0);
+  let predictedMarathonSec = null;
+  let marathonBasis = null;
+  if (longestRunKm >= MARATHON_MIN_LONG_RUN_KM) {
+    const normalizedMarathon = buildNormalizedPredictions('run', MARATHON_KM, {
+      minKm: MARATHON_MIN_LONG_RUN_KM, maxKm: 60, exponent: MARATHON_EXPONENT,
+    });
+    const bestMarathon = bestNormalized(normalizedMarathon);
+    predictedMarathonSec = bestMarathon ? Number(bestMarathon.normalizedSec) : null;
+    marathonBasis = bestMarathon
+      ? { distanceKm: Number(bestMarathon.distanceKm?.toFixed?.(2) ?? bestMarathon.distanceKm), startDate: bestMarathon.startDate || null, exponent: MARATHON_EXPONENT }
+      : null;
+  }
+  const marathonUnavailableReason = predictedMarathonSec === null
+    ? (longestRunKm >= MARATHON_MIN_LONG_RUN_KM
+      ? 'no_qualifying_effort'
+      : `longest run in window is ${longestRunKm.toFixed(1)}km; need ${MARATHON_MIN_LONG_RUN_KM}km`)
+    : null;
+
+  // ── Ironman ─────────────────────────────────────────────────────────────────
+  //
+  // Not a Riegel extrapolation — a per-leg model, because the legs interact.
+  //
+  // Swim 3.86km in open water is slower than pool pace; the bike is a long steady effort
+  // rather than a 50k time trial; and the marathon off the bike is run on tired legs,
+  // conventionally 20–30% slower than a standalone one. Transitions are real minutes and
+  // are counted rather than ignored.
+  //
+  // Every leg needs a prediction of its own, so this is null unless all three exist —
+  // an Ironman estimate built from two legs and a guess is not an estimate.
+  const IRONMAN = {
+    swimKm: 3.86,
+    bikeKm: 180.25,
+    runKm: MARATHON_KM,
+    openWaterPenalty: 1.10,   // vs pool pace
+    longBikePenalty: 1.12,    // vs a 50k effort, per km
+    fatiguedRunPenalty: 1.25, // marathon off the bike
+    transitionSec: 600,       // T1 + T2 combined
+  };
+  let ironmanSec = null;
+  let ironmanLegs = null;
+  if (predictedSwim800mSec && predictedBike50kSec && predictedMarathonSec) {
+    const swimSec = (predictedSwim800mSec / 0.8) * IRONMAN.swimKm * IRONMAN.openWaterPenalty;
+    const bikeSec = (predictedBike50kSec / FIFTY_KM) * IRONMAN.bikeKm * IRONMAN.longBikePenalty;
+    const runSec = predictedMarathonSec * IRONMAN.fatiguedRunPenalty;
+    ironmanSec = Math.round(swimSec + bikeSec + runSec + IRONMAN.transitionSec);
+    ironmanLegs = {
+      swimSec: Math.round(swimSec),
+      bikeSec: Math.round(bikeSec),
+      runSec: Math.round(runSec),
+      transitionSec: IRONMAN.transitionSec,
+      assumptions: IRONMAN,
+    };
+  }
+
   let trendDirection = 'flat';
   let trendSec = null;
   let trendPct = null;
@@ -15952,6 +16024,16 @@ async function _getFitnessOverview(uid, days) {
       bike50kDisplay: fmtSecs(predictedBike50kSec),
       bike30miSec: predictedBike30miSec != null ? Math.round(predictedBike30miSec) : null,
       bike30miDisplay: fmtSecs(predictedBike30miSec),
+      // Marathon and Ironman carry their basis, or the reason they are absent. These are
+      // long extrapolations and a number without provenance invites planning against it.
+      marathonSec: predictedMarathonSec != null ? Math.round(predictedMarathonSec) : null,
+      marathonDisplay: fmtSecs(predictedMarathonSec),
+      marathonBasis,
+      marathonUnavailableReason,
+      ironmanSec,
+      ironmanDisplay: fmtSecs(ironmanSec),
+      ironmanLegs,
+      longestRunKm: Number(longestRunKm.toFixed(2)),
       trendDirection,
       trendSec,
       trendPct,
