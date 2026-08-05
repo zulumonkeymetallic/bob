@@ -575,6 +575,7 @@ function AppContent() {
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings/profile" element={<Navigate to="/settings?tab=profile" replace />} />
             <Route path="/settings/ai" element={<LLMSettings />} />
+            <Route path="/settings/themes" element={<Navigate to="/settings?tab=themes" replace />} />
             <Route path="/settings/finance" element={<Navigate to="/settings?tab=finance" replace />} />
             <Route path="/settings/notifications" element={<Navigate to="/settings?tab=notifications" replace />} />
             <Route path="/settings/privacy-security" element={<Navigate to="/settings?tab=privacy" replace />} />

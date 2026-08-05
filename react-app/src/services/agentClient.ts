@@ -179,7 +179,12 @@ export interface VertexAssistantResponse {
   ok: boolean;
   reply: string;
   toolsUsed?: string[];
-  source: 'vertex';
+  /**
+   * Which transport answered. 'vertex' is BOB's own infrastructure and is now reached only by
+   * the bring-your-own-key exempt accounts; everyone else runs on their own AI Studio key and
+   * gets 'gemini'.
+   */
+  source: 'vertex' | 'gemini';
 }
 
 export async function submitAssistantAgentRequestV2({

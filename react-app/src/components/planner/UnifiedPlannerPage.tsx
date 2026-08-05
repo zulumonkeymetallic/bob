@@ -101,6 +101,7 @@ const FALLBACK_THEME_COLORS: Record<string, string> = {
   Home: '#f97316',
   'Work (Main Gig)': '#0f172a',
   'Side Gig': '#14b8a6',
+  'Business Experiments': '#84cc16',
   'Work Shift': '#0f172a',
 };
 

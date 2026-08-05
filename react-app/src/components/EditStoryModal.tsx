@@ -14,6 +14,7 @@ import { normalizePriorityValue } from '../utils/priorityUtils';
 import { parsePointsValue, TASK_DEFAULT_POINTS } from '../utils/points';
 import TagInput from './common/TagInput';
 import ActivityStreamPanel from './common/ActivityStreamPanel';
+import DriveFilesPanel from './shared/DriveFilesPanel';
 import ModernTaskTable from './ModernTaskTable';
 import { cascadeStoryPersona } from '../utils/personaCascade';
 import { useNavigate } from 'react-router-dom';
@@ -1106,6 +1107,11 @@ const EditStoryModal: React.FC<EditStoryModalProps> = ({
               entityId={story?.id}
               entityType="story"
               referenceNumber={story?.ref || (story as any)?.referenceNumber}
+            />
+            <DriveFilesPanel
+              entityType="story"
+              entityId={story?.id}
+              entityLabel={story?.ref || story?.title || 'Story'}
             />
           </Col>
         </Row>

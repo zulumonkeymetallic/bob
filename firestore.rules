@@ -99,6 +99,15 @@ service cloud.firestore {
       // Allow a user to read/write only their own theme settings doc
       allow read, write: if isSignedIn() && request.auth.uid == uid;
     }
+
+    // Last outcome of this user's AI calls — drives AiStatusBanner ("your key was rejected",
+    // "you have no credit left"). Read-only to the client: only Cloud Functions write it, via
+    // the Admin SDK, which bypasses these rules. A client that could write it could hide a
+    // billing failure from itself.
+    match /ai_status/{uid} {
+      allow read: if isSignedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
     
     // Core v3.0.8 collections with enhanced logging
     match /sprints/{id}   {

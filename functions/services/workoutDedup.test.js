@@ -1,5 +1,6 @@
 const {
   pairAcrossProviders,
+  unmarkedDuplicateIds,
   buildMergePatch,
   DEDUP_WINDOW_MS,
 } = require('./workoutDedup');
@@ -100,6 +101,28 @@ describe('pairAcrossProviders', () => {
 
   it('ignores records with no start time', () => {
     expect(pairAcrossProviders([strava(), healthkit({ startDate: 0 })])).toHaveLength(0);
+  });
+});
+
+describe('unmarkedDuplicateIds', () => {
+  it('names the loser so the overview can skip it before the nightly pass runs', () => {
+    // The window this closes: a HealthKit workout pushed from the phone at lunchtime sits
+    // beside its Strava twin unmarked until 03:00, and every total sums both. The mileage
+    // reads double all afternoon and then silently halves overnight.
+    const ids = unmarkedDuplicateIds([strava(), healthkit()]);
+    expect([...ids]).toEqual(['uid_123']);
+  });
+
+  it('reads `id` as well as `_id` — index.js maps documents the other way', () => {
+    const ids = unmarkedDuplicateIds([
+      { id: 's', provider: 'strava', type: 'Run', distance_m: 10000, startDate: T },
+      { id: 'h', provider: 'healthkit', type: 'run', activity: 'run', startDate: T + mins(2) },
+    ]);
+    expect([...ids]).toEqual(['s']);
+  });
+
+  it('is empty when nothing is paired', () => {
+    expect(unmarkedDuplicateIds([strava(), healthkit({ startDate: T + mins(600) })]).size).toBe(0);
   });
 });
 

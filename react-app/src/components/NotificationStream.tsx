@@ -25,6 +25,7 @@ import GlobalGoalFocusBanner from './GlobalGoalFocusBanner';
 import GlobalFitnessKpiBanner from './GlobalFitnessKpiBanner';
 import GlobalHealthProgressBanner from './GlobalHealthProgressBanner';
 import GlobalIntegrationStatus from './GlobalIntegrationStatus';
+import AiStatusBanner from './AiStatusBanner';
 import { useSidebar } from '../contexts/SidebarContext';
 import { useDeviceInfo } from '../utils/deviceDetection';
 
@@ -223,7 +224,14 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
           <X size={14} />
         </button>
       </div>
-      {/* First: the stream's other sections all tell you something is wrong or overdue.
+      {/* Above even "what do I pick up now": if AI is off or the user's key has failed, most
+          of what follows (priorities, the daily plan, the coach) is running blind or not at
+          all, so it needs saying first. Not gated on screen size — it is a blocking setup
+          state, not a desktop nicety. */}
+      <StreamSection id="aiStatus" onVisibilityChange={handleVisibilityChange}>
+        <AiStatusBanner />
+      </StreamSection>
+      {/* Then: the stream's other sections all tell you something is wrong or overdue.
           This one answers "what do I pick up now", so it leads. */}
       <StreamSection id="workOnNext" onVisibilityChange={handleVisibilityChange}>
         <WorkOnNextBanner />

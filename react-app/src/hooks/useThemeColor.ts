@@ -72,6 +72,15 @@ const getDefaultThemesFromCss = (): ThemeSettings['themes'] => ({
     dark: getCssVarValue('--theme-sidegig-dark', '#0f766e'),
     darker: getCssVarValue('--theme-sidegig-darker', '#115e59')
   },
+  'Business Experiments': {
+    name: 'Business Experiments',
+    primary: getCssVarValue('--theme-business-primary', '#84cc16'),
+    secondary: getCssVarValue('--theme-business-dark', '#65a30d'),
+    light: getCssVarValue('--theme-business-light', '#d9f99d'),
+    lighter: getCssVarValue('--theme-business-lighter', '#ecfccb'),
+    dark: getCssVarValue('--theme-business-dark', '#65a30d'),
+    darker: getCssVarValue('--theme-business-darker', '#4d7c0f')
+  },
   Sleep: {
     name: 'Sleep',
     primary: getCssVarValue('--theme-sleep-primary', '#6366f1'),

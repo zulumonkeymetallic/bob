@@ -6,7 +6,11 @@ import { getCssVarValue } from '../utils/themeVars';
 // a bump is stale by definition — it's a full-array snapshot of the old, colliding defaults,
 // not an intentional customisation — so useGlobalThemes/ThemeColorManager ignore any saved
 // palette whose stamped version is behind this one and fall back to the current defaults.
-export const GLOBAL_THEME_PALETTE_VERSION = 2;
+// Bumped to 3 when Business Experiments (id 16) was added. A saved palette is a full-array
+// snapshot, not a merge, so without this bump an existing global_themes/{uid} document would
+// still be a 16-element array and the new theme would never render for anyone who had ever
+// opened Settings.
+export const GLOBAL_THEME_PALETTE_VERSION = 3;
 
 export interface GlobalTheme {
   id: number;
@@ -219,6 +223,20 @@ export const GLOBAL_THEMES: GlobalTheme[] = [
     lightColor: getCssVarValue('--theme-sidegig-light', '#99f6e4'),
     textColor: contrastText(getCssVarValue('--theme-sidegig-primary', '#14b8a6')),
     description: 'Secondary income or side projects'
+  },
+  {
+    id: 16,
+    name: 'Business Experiments',
+    label: 'Business Experiments',
+    // Lime is the one genuinely unused hue left in this palette — every green here is either
+    // dark (Learning #198754) or teal-shifted (Family #20c997, Travel #0e9594, Side Gig #14b8a6).
+    // Given how many collisions the comments above record, "distinct from all 16" mattered more
+    // than picking something on-brand.
+    color: getCssVarValue('--theme-business-primary', '#84cc16'),
+    darkColor: getCssVarValue('--theme-business-dark', '#65a30d'),
+    lightColor: getCssVarValue('--theme-business-light', '#d9f99d'),
+    textColor: contrastText(getCssVarValue('--theme-business-primary', '#84cc16')),
+    description: 'Agentic AI consultancy build-out and time-boxed business experiments'
   }
 ];
 
@@ -241,7 +259,10 @@ export const LEGACY_THEME_MAP = {
   'SideGig': 15,
   'Side-Gig': 15,
   'Sleep': 13,
-  'Random': 14
+  'Random': 14,
+  'Business Experiments': 16,
+  'Business': 16,
+  'Experiments': 16
 };
 
 export const LEGACY_ID_TO_NEW_ID = {

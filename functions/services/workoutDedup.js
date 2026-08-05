@@ -142,6 +142,32 @@ function pairAcrossProviders(workouts) {
 }
 
 /**
+ * The ids of records that are duplicates **right now**, marked or not.
+ *
+ * The `isDuplicate` flag is written by the nightly pass. Between a HealthKit push at
+ * lunchtime and that pass at 03:00, a Strava twin and a HealthKit twin are both unmarked
+ * and every consumer sums both — the mileage doubles for the rest of the day and then
+ * silently corrects overnight, which is the worst of both worlds because nobody sees the
+ * correction happen.
+ *
+ * Running the same pairing in memory closes that window without a write. The stored flag
+ * stops being a correctness prerequisite and becomes what it should be: an audit record and
+ * an optimisation.
+ *
+ * Accepts either key — this module maps documents to `_id`, `index.js` maps them to `id`.
+ */
+function unmarkedDuplicateIds(workouts) {
+  const ids = new Set();
+  for (const { duplicates } of pairAcrossProviders(workouts)) {
+    for (const d of duplicates) {
+      const id = d._id ?? d.id;
+      if (id) ids.add(id);
+    }
+  }
+  return ids;
+}
+
+/**
  * What the canonical record should absorb from the ones being set aside.
  *
  * Only fields it is *missing*. A merge must never overwrite a value the survivor already
@@ -279,6 +305,7 @@ async function dedupeWorkoutsForUser(userId, options = {}) {
 module.exports = {
   DEDUP_WINDOW_MS,
   pairAcrossProviders,
+  unmarkedDuplicateIds,
   buildMergePatch,
   dedupeWorkoutsForUser,
 };

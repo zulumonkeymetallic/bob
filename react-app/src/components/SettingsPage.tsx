@@ -7,7 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useThemeAwareColors, getContrastTextColor } from '../hooks/useThemeAwareColors';
 import { GLOBAL_THEMES, GLOBAL_THEME_PALETTE_VERSION, GlobalTheme } from '../constants/globalThemes';
-import { Settings, Palette, Database, Wand2, KeyRound, Clipboard, FileCode, Plug, User, Bell, Shield, FlaskConical } from 'lucide-react';
+import { Settings, Palette, Database, Wand2, KeyRound, Clipboard, FileCode, Plug, User, Bell, Shield, FlaskConical, type LucideIcon } from 'lucide-react';
 import LLMSettings from './settings/LLMSettings';
 import { useThemeDebugger } from '../utils/themeDebugger';
 import IntegrationSettings from './IntegrationSettings';
@@ -48,6 +48,39 @@ const TAB_TO_PANE: Record<SettingsTab, SettingsPaneKey> = {
   system: 'system',
   diagnostics: 'diagnostics',
 };
+
+// The nav is keyed by pane so the active pill actually highlights: Tab.Container's activeKey
+// has to be a pane key to select the right Tab.Pane, and Bootstrap only marks a Nav.Link
+// active when its eventKey matches that same activeKey. Keying the links by tab instead left
+// Profile, Notifications, Privacy and Developer with no highlighted pill at all.
+const PANE_TO_TAB: Record<SettingsPaneKey, SettingsTab> = {
+  system:       'profile',
+  ai:           'ai',
+  themes:       'themes',
+  integrations: 'integrations',
+  finance:      'finance',
+  reminders:    'notifications',
+  diagnostics:  'privacy',
+  database:     'developer',
+};
+
+// Single source of truth for the nav. `description` is shown under the page title so each
+// section says what it is for rather than leaving the user to guess from a one-word label.
+const SECTIONS: {
+  tab: SettingsTab;
+  label: string;
+  description: string;
+  icon: LucideIcon;
+}[] = [
+  { tab: 'profile',       label: 'Profile',       icon: User,         description: 'Your details, location, timezone and health targets.' },
+  { tab: 'ai',            label: 'AI',            icon: Wand2,        description: 'Choose a provider, add your API key, and pick a model per feature.' },
+  { tab: 'themes',        label: 'Themes',        icon: Palette,      description: 'Rename life themes and set the colour each one uses across BOB.' },
+  { tab: 'integrations',  label: 'Integrations',  icon: Plug,         description: 'Connect Google, Monzo, Strava, Telegram and the rest.' },
+  { tab: 'finance',       label: 'Finance',       icon: Database,     description: 'Monzo connection, budgets and categorisation.' },
+  { tab: 'notifications', label: 'Notifications', icon: Bell,         description: 'Reminders, digests and what BOB is allowed to nudge you about.' },
+  { tab: 'privacy',       label: 'Privacy',       icon: Shield,       description: 'Diagnostics captured on this device, and what leaves it.' },
+  { tab: 'developer',     label: 'Developer',     icon: FlaskConical, description: 'Data migrations, maintenance jobs and theme debugging.' },
+];
 
 const normalizeTab = (value: string | null): SettingsTab => {
   const normalized = String(value || '').trim().toLowerCase();
@@ -167,9 +200,14 @@ const SettingsPage: React.FC = () => {
     }
   }, [location.search, activeTab]);
 
+  const activePane = TAB_TO_PANE[activeTab];
+  const activeSection = SECTIONS.find((s) => s.tab === PANE_TO_TAB[activePane]);
+
+  // The nav emits pane keys (see PANE_TO_TAB), but the URL keeps the canonical tab names —
+  // /settings?tab=profile is the documented route and what App.tsx's redirects point at.
   const handleTabSelect = (key: string | null) => {
     if (!key) return;
-    const tab = normalizeTab(key);
+    const tab = PANE_TO_TAB[key as SettingsPaneKey] ?? normalizeTab(key);
     if (tab !== activeTab) {
       setActiveTab(tab);
     }
@@ -542,128 +580,50 @@ const SettingsPage: React.FC = () => {
 
   return (
     <Container fluid className="py-4">
-      <Row>
-        <Col>
-          <div className="d-flex justify-content-between align-items-center mb-4">
-            <h2 style={{ color: colors.primary }} className="mb-0">
-              <Settings size={28} className="me-2" />
-              Settings
-            </h2>
-            <Button 
-              variant="outline-info" 
-              size="sm"
-              onClick={(e) => {
-                createClickHandler()(e);
-                scanPageForInconsistencies();
-              }}
-            >
-              🔍 Debug Theme
-            </Button>
-          </div>
-        </Col>
-      </Row>
-
       <Row className="mb-4">
         <Col>
-          <Card>
-            <Card.Body>
-              <h5 className="mb-2">Settings Sections</h5>
-              <p className="text-muted small mb-3">Flattened IA: Profile, AI, Integrations, Finance, Notifications, Privacy/Security, and Developer.</p>
-              <div className="d-flex flex-wrap gap-2">
-                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/profile')}>Profile</Button>
-                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/ai')}>AI</Button>
-                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/integrations')}>Integrations</Button>
-                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/finance')}>Finance</Button>
-                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/notifications')}>Notifications</Button>
-                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/privacy-security')}>Privacy/Security</Button>
-                <Button variant="outline-primary" size="sm" onClick={() => navigate('/settings/developer')}>Developer</Button>
-              </div>
-            </Card.Body>
-          </Card>
+          <h2 style={{ color: colors.primary }} className="mb-1">
+            <Settings size={28} className="me-2" />
+            Settings
+          </h2>
+          <p className="text-muted mb-0">{activeSection?.description}</p>
         </Col>
       </Row>
 
-      <Tab.Container activeKey={TAB_TO_PANE[activeTab]} onSelect={handleTabSelect}>
-        <Row>
-          <Col sm={3}>
-            <Nav variant="pills" className="flex-column">
-              <Nav.Item>
-                <Nav.Link 
-                  eventKey="profile" 
-                  style={{ color: colors.primary }}
-                  onClick={createClickHandler()}
-                >
-                  <User size={20} className="me-2" />
-                  Profile
-                </Nav.Link>
-              </Nav.Item>
-              <Nav.Item>
-                <Nav.Link 
-                  eventKey="ai" 
-                  style={{ color: colors.primary }}
-                  onClick={createClickHandler()}
-                >
-                  <Wand2 size={20} className="me-2" />
-                  AI
-                </Nav.Link>
-              </Nav.Item>
-              <Nav.Item>
-                <Nav.Link 
-                  eventKey="integrations" 
-                  style={{ color: colors.primary }}
-                  onClick={createClickHandler()}
-                >
-                  <Plug size={20} className="me-2" />
-                  Integrations
-                </Nav.Link>
-              </Nav.Item>
-              <Nav.Item>
-                <Nav.Link 
-                  eventKey="finance" 
-                  style={{ color: colors.primary }}
-                  onClick={createClickHandler()}
-                >
-                  <Database size={20} className="me-2" />
-                  Finance
-                </Nav.Link>
-              </Nav.Item>
-              <Nav.Item>
-                <Nav.Link 
-                  eventKey="notifications"
-                  style={{ color: colors.primary }}
-                  onClick={createClickHandler()}
-                >
-                  <Bell size={20} className="me-2" />
-                  Notifications
-                </Nav.Link>
-              </Nav.Item>
-              <Nav.Item>
-                <Nav.Link 
-                  eventKey="privacy" 
-                  style={{ color: colors.primary }}
-                  onClick={createClickHandler()}
-                >
-                  <Shield size={20} className="me-2" />
-                  Privacy/Security
-                </Nav.Link>
-              </Nav.Item>
-              <Nav.Item>
-                <Nav.Link
-                  eventKey="developer"
-                  style={{ color: colors.primary }}
-                  onClick={createClickHandler()}
-                >
-                  <FlaskConical size={20} className="me-2" />
-                  Developer
-                  {(diagnosticsEntries.length > 0 || migrationStats.needsMigration) && (
-                    <Badge bg="info" className="ms-2">{diagnosticsEntries.length + (migrationStats.needsMigration ? 1 : 0)}</Badge>
-                  )}
-                </Nav.Link>
-              </Nav.Item>
+      <Tab.Container activeKey={activePane} onSelect={handleTabSelect}>
+        <Row className="g-4">
+          <Col xs={12} lg={3}>
+            {/* Horizontal scroller on small screens, vertical rail from lg up. A stacked
+                full-width pill list pushed the actual settings a screen and a half down
+                on mobile. */}
+            <Nav
+              variant="pills"
+              className="flex-row flex-lg-column flex-nowrap flex-lg-wrap overflow-auto pb-2 pb-lg-0 gap-1"
+            >
+              {SECTIONS.map(({ tab, label, icon: Icon }) => {
+                const pane = TAB_TO_PANE[tab];
+                const badgeCount = tab === 'developer'
+                  ? diagnosticsEntries.length + (migrationStats.needsMigration ? 1 : 0)
+                  : 0;
+                return (
+                  <Nav.Item key={tab}>
+                    <Nav.Link
+                      eventKey={pane}
+                      className="text-nowrap d-flex align-items-center"
+                      style={{ color: activePane === pane ? undefined : colors.primary }}
+                      onClick={createClickHandler()}
+                    >
+                      <Icon size={18} className="me-2 flex-shrink-0" />
+                      {label}
+                      {badgeCount > 0 && <Badge bg="info" className="ms-2">{badgeCount}</Badge>}
+                    </Nav.Link>
+                  </Nav.Item>
+                );
+              })}
             </Nav>
           </Col>
-          
-          <Col sm={9}>
+
+          <Col xs={12} lg={9}>
             <Tab.Content>
               {/* Themes & Colors Tab */}
               <Tab.Pane eventKey="themes">
@@ -879,6 +839,28 @@ firebase deploy --only functions:remindersPush,functions:remindersPull --project
 
               {/* Database Migration Tab */}
               <Tab.Pane eventKey="database">
+                <Card className="mb-3" style={{ backgroundColor: backgrounds.card, border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}` }}>
+                  <Card.Header style={{ backgroundColor: backgrounds.surface, color: colors.primary }}>
+                    <h4 className="mb-0">Theme Debugging</h4>
+                    <small style={{ color: colors.secondary }}>
+                      Scans the current page for elements whose colours ignore the active theme
+                    </small>
+                  </Card.Header>
+                  <Card.Body>
+                    <Button
+                      variant="outline-info"
+                      size="sm"
+                      onClick={(e) => {
+                        createClickHandler()(e);
+                        scanPageForInconsistencies();
+                      }}
+                    >
+                      Scan this page
+                    </Button>
+                    <div className="small text-muted mt-2 mb-0">Results are written to the browser console.</div>
+                  </Card.Body>
+                </Card>
+
                 <Card style={{ backgroundColor: backgrounds.card, border: `1px solid ${isDark ? '#374151' : '#e5e7eb'}` }}>
                   <Card.Header style={{ backgroundColor: backgrounds.surface, color: colors.primary }}>
                     <h4 className="mb-0">Database Migration</h4>

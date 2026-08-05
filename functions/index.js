@@ -212,7 +212,7 @@ const { parseTimeStringToTimeOfDay, populateBlankTimeOfDay, inferTimeOfDayFromCo
 // Import Fitness KPI Sync service
 const { syncAllUsersFitnessKpis, syncUserFitnessKpis } = require('./services/fitnessKpiSync');
 const { aggregateMetricValuesForUser } = require('./services/metricValueAggregation');
-const { dedupeWorkoutsForUser } = require('./services/workoutDedup');
+const { dedupeWorkoutsForUser, unmarkedDuplicateIds } = require('./services/workoutDedup');
 const { resolveAndPersistForOwner } = require('./services/kpiResolution');
 
 // Import Focus Goals functions
@@ -15677,6 +15677,14 @@ async function _getFitnessOverview(uid, days) {
       if (excludeWithDadFromMetrics && workoutHasDadMarker(w)) return false;
       return true;
     });
+  // Pairs the nightly pass has not marked yet.
+  //
+  // `isDuplicate` is written at 03:00. A HealthKit workout pushed from the phone at
+  // lunchtime sits alongside its Strava twin unmarked until then, and both are summed —
+  // so the day's mileage reads double and then quietly halves overnight. Re-running the
+  // same pairing in memory costs nothing and closes the window; the stored flag stays as
+  // the audit record.
+  const liveDuplicates = unmarkedDuplicateIds(rawWorkouts);
   // HealthKit counts here too.
   //
   // A second provider filter sat three lines below the one already widened above, and
@@ -15690,7 +15698,8 @@ async function _getFitnessOverview(uid, days) {
   const workouts = rawWorkouts
     .filter(w => (w.startDate || 0) >= sinceMs
       && ['strava', 'parkrun', 'healthkit'].includes(w.provider)
-      && w.isDuplicate !== true)
+      && w.isDuplicate !== true
+      && !liveDuplicates.has(w.id))
     .sort((a, b) => (a.startDate || 0) - (b.startDate || 0));
   const hrvSnap = await db.collection('metrics_hrv').where('ownerUid', '==', uid).limit(1000).get();
   const hrv = hrvSnap.docs

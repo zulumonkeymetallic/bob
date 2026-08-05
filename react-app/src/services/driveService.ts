@@ -93,6 +93,43 @@ export async function ensureDriveFolder(
   }
 }
 
+export interface DriveLookup {
+  /** null when no folder exists yet — the caller should offer to create one. */
+  folderId: string | null;
+  ref: string | null;
+  /** True when the folder was found by ref rather than read from `driveFolderId`. */
+  adopted: boolean;
+  webViewLink: string | null;
+}
+
+/**
+ * Whether this entity has a folder, without creating one.
+ *
+ * The panel renders on every modal open, so it must not call ensureDriveFolder to find out —
+ * that creates the folder as a side effect and would grow a Drive tree for every item merely
+ * opened. Creation stays an explicit user action.
+ */
+export async function lookupDriveFolder(
+  entityType: DriveEntityType,
+  entityId: string,
+): Promise<DriveLookup> {
+  try {
+    const callable = httpsCallable<
+      { entityType: DriveEntityType; entityId: string },
+      { ok: boolean } & DriveLookup
+    >(functions, 'lookupDriveFolder');
+    const res = await callable({ entityType, entityId });
+    return {
+      folderId: res.data.folderId ?? null,
+      ref: res.data.ref ?? null,
+      adopted: Boolean(res.data.adopted),
+      webViewLink: res.data.webViewLink ?? null,
+    };
+  } catch (err) {
+    throw normalise(err);
+  }
+}
+
 /** One level of a folder — sub-folders first, then files by most recently modified. */
 export async function listDriveFolder(
   folderId: string,

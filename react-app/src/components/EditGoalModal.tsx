@@ -12,6 +12,7 @@ import { useActivityTracking } from '../hooks/useActivityTracking';
 import { toDate } from '../utils/firestoreAdapters';
 import TagInput from './common/TagInput';
 import ActivityStreamPanel from './common/ActivityStreamPanel';
+import DriveFilesPanel from './shared/DriveFilesPanel';
 import ModernStoriesTable from './ModernStoriesTable';
 import ModernTaskTable from './ModernTaskTable';
 import { usePersona } from '../contexts/PersonaContext';
@@ -1722,6 +1723,11 @@ const EditGoalModal: React.FC<EditGoalModalProps> = ({ goal, onClose, show, curr
               entityId={goal?.id}
               entityType="goal"
               referenceNumber={(goal as any)?.ref || (goal as any)?.referenceNumber}
+            />
+            <DriveFilesPanel
+              entityType="goal"
+              entityId={goal?.id}
+              entityLabel={(goal as any)?.ref || goal?.title || 'Goal'}
             />
           </div>
         </div>

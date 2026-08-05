@@ -12,7 +12,7 @@ import { useAuth } from '../../contexts/AuthContext';
 // Types
 // ---------------------------------------------------------------------------
 
-type Provider = 'gemini' | 'openai' | 'anthropic';
+type Provider = 'gemini' | 'openai' | 'anthropic' | 'openrouter';
 
 interface ModelOption {
   id: string;
@@ -51,10 +51,27 @@ const DEFAULT_PERSONALITY: Personality = {
   verbosity: 5,
 };
 
-const PROVIDERS: { id: Provider; label: string; color: string; logo: string }[] = [
-  { id: 'gemini',    label: 'Google Gemini',    color: '#4285F4', logo: '🔵' },
-  { id: 'openai',    label: 'OpenAI / ChatGPT', color: '#10A37F', logo: '🟢' },
-  { id: 'anthropic', label: 'Anthropic (Claude)', color: '#D97706', logo: '🟠' },
+const PROVIDERS: { id: Provider; label: string; color: string; keyUrl: string; keyHint: string }[] = [
+  {
+    id: 'gemini', label: 'Google Gemini', color: '#4285F4',
+    keyUrl: 'https://aistudio.google.com/apikey',
+    keyHint: 'Starts with AIza. Ask BOB needs this one — it is the only provider wired for tool calling.',
+  },
+  {
+    id: 'anthropic', label: 'Anthropic (Claude)', color: '#D97706',
+    keyUrl: 'https://console.anthropic.com/settings/keys',
+    keyHint: 'Starts with sk-ant-. Requires credit on your Anthropic account.',
+  },
+  {
+    id: 'openai', label: 'OpenAI / ChatGPT', color: '#10A37F',
+    keyUrl: 'https://platform.openai.com/api-keys',
+    keyHint: 'Starts with sk-. Requires billing enabled on your OpenAI account.',
+  },
+  {
+    id: 'openrouter', label: 'OpenRouter', color: '#6467F2',
+    keyUrl: 'https://openrouter.ai/keys',
+    keyHint: 'Starts with sk-or-. One key, most models — use openrouter/auto to let it choose.',
+  },
 ];
 
 const PERSONALITY_DIMS: { key: keyof Personality; label: string; low: string; high: string }[] = [
@@ -79,7 +96,7 @@ const TIER_BADGE: Record<string, string> = {
 
 // Per-provider API keys — each provider can have its own key
 type ApiKeys = Record<Provider, string>;
-const EMPTY_KEYS: ApiKeys = { gemini: '', openai: '', anthropic: '' };
+const EMPTY_KEYS: ApiKeys = { gemini: '', openai: '', anthropic: '', openrouter: '' };
 
 // Per-feature model routing
 type FeatureKey = 'telegram' | 'journal' | 'digest' | 'story' | 'taskEnrich' | 'planning' | 'finance';
@@ -142,6 +159,10 @@ const LLMSettings: React.FC = () => {
 
   // Convenience: key for the currently selected provider
   const apiKey = apiKeys[provider] ?? '';
+  const activeProvider = PROVIDERS.find((p) => p.id === provider);
+  // Drives the "BOB needs your own key" warning: any key at all means AI can run for at least
+  // one provider, so the blanket warning would be wrong.
+  const hasAnyKey = PROVIDERS.some((p) => (apiKeys[p.id] ?? '').trim().length > 0);
 
   // Model list
   const [modelList, setModelList] = useState<ModelOption[]>([]);
@@ -275,7 +296,7 @@ const LLMSettings: React.FC = () => {
     try {
       // Serialise per-provider keys (store null for empty entries)
       const serialisedKeys: Record<string, string | null> = {};
-      for (const p of ['gemini', 'openai', 'anthropic'] as Provider[]) {
+      for (const p of PROVIDERS.map((x) => x.id)) {
         serialisedKeys[p] = apiKeys[p]?.trim() || null;
       }
 
@@ -339,20 +360,44 @@ const LLMSettings: React.FC = () => {
         {/* ------------------------------------------------------------------ */}
         <Tab eventKey="provider" title="Provider & Model">
 
+          {/* BYOK is the whole model now — say so before the user hunts for a free tier. */}
+          {!hasAnyKey && (
+            <Alert variant="warning" className="mb-3">
+              <strong>BOB needs your own API key.</strong>
+              <div className="mt-1">
+                AI features stay switched off until you add one below. You pay your provider directly for
+                what you use — BOB doesn't resell or mark up model access, and there is no shared key.
+              </div>
+            </Alert>
+          )}
+
           {/* Provider selector */}
           <Card className="mb-3">
             <Card.Header><strong>AI Provider</strong></Card.Header>
             <Card.Body>
               <Row className="g-2">
                 {PROVIDERS.map((p) => (
-                  <Col key={p.id} md={4}>
+                  <Col key={p.id} xs={6} lg={3}>
                     <div
-                      className={`p-3 rounded border text-center cursor-pointer ${provider === p.id ? 'border-primary bg-primary bg-opacity-10' : ''}`}
+                      className={`p-3 rounded border h-100 text-center ${provider === p.id ? 'border-primary bg-primary bg-opacity-10' : ''}`}
                       style={{ cursor: 'pointer' }}
                       onClick={() => setProvider(p.id)}
+                      role="button"
+                      aria-pressed={provider === p.id}
                     >
-                      <div style={{ fontSize: '1.8rem' }}>{p.logo}</div>
-                      <div className="fw-semibold mt-1" style={{ fontSize: '0.9rem' }}>{p.label}</div>
+                      <div
+                        className="mx-auto rounded-circle"
+                        style={{ width: 20, height: 20, backgroundColor: p.color }}
+                        aria-hidden="true"
+                      />
+                      <div className="fw-semibold mt-2" style={{ fontSize: '0.9rem' }}>{p.label}</div>
+                      <Badge
+                        bg={apiKeys[p.id] ? 'success' : 'secondary'}
+                        className="mt-2"
+                        style={{ fontSize: '0.65rem' }}
+                      >
+                        {apiKeys[p.id] ? 'Key saved' : 'No key'}
+                      </Badge>
                     </div>
                   </Col>
                 ))}
@@ -362,24 +407,15 @@ const LLMSettings: React.FC = () => {
 
           {/* Per-provider API Key */}
           <Card className="mb-3">
-            <Card.Header className="d-flex justify-content-between align-items-center">
-              <div>
-                <strong>API Key — {PROVIDERS.find((p) => p.id === provider)?.label}</strong>
-                <small className="text-muted ms-2">Each provider stores its own key independently.</small>
-              </div>
-              {(['gemini', 'openai', 'anthropic'] as Provider[]).map((p) => (
-                apiKeys[p] ? (
-                  <Badge key={p} bg="success" className="ms-1" style={{ fontSize: '0.65rem' }}>
-                    {p} ✓
-                  </Badge>
-                ) : null
-              ))}
+            <Card.Header>
+              <strong>API Key — {activeProvider?.label}</strong>
+              <small className="text-muted ms-2">Each provider stores its own key independently.</small>
             </Card.Header>
             <Card.Body>
               <div className="d-flex gap-2">
                 <Form.Control
                   type={showKey ? 'text' : 'password'}
-                  placeholder={`Paste your ${PROVIDERS.find((p) => p.id === provider)?.label} API key`}
+                  placeholder={`Paste your ${activeProvider?.label} API key`}
                   value={apiKey}
                   onChange={(e) => setApiKeys((prev) => ({ ...prev, [provider]: e.target.value }))}
                   style={{ fontFamily: apiKey ? 'monospace' : 'inherit' }}
@@ -397,14 +433,22 @@ const LLMSettings: React.FC = () => {
                   disabled={modelsLoading}
                   style={{ whiteSpace: 'nowrap' }}
                 >
-                  {modelsLoading ? <Spinner size="sm" animation="border" /> : '↻ Refresh'}
+                  {modelsLoading ? <Spinner size="sm" animation="border" /> : 'Refresh'}
                 </Button>
               </div>
-              <Form.Text className="text-muted">
-                {provider === 'gemini'    && <>Get a key at <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer">aistudio.google.com</a>. Leave blank to use BOB's shared Gemini key.</>}
-                {provider === 'openai'    && <>Get a key at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer">platform.openai.com</a></>}
-                {provider === 'anthropic' && <>Get a key at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">console.anthropic.com</a></>}
+              <Form.Text className="text-muted d-block mt-2">
+                Get a key at{' '}
+                <a href={activeProvider?.keyUrl} target="_blank" rel="noreferrer">
+                  {activeProvider?.keyUrl.replace(/^https:\/\//, '')}
+                </a>
+                . {activeProvider?.keyHint}
               </Form.Text>
+              {!apiKey && (
+                <Alert variant="secondary" className="mt-3 mb-0 py-2 small">
+                  No key saved for {activeProvider?.label}. Anything routed to this provider — including any
+                  feature below set to it — will fail until you add one.
+                </Alert>
+              )}
             </Card.Body>
           </Card>
 
@@ -706,7 +750,7 @@ const LLMSettings: React.FC = () => {
                         <td>
                           <div className="fw-semibold">{label}</div>
                           <div className="text-muted" style={{ fontSize: '0.75rem' }}>{description}</div>
-                          {tip && <div className="text-info" style={{ fontSize: '0.7rem', marginTop: 2 }}>💡 {tip}</div>}
+                          {tip && <div className="text-info" style={{ fontSize: '0.7rem', marginTop: 2 }}>{tip}</div>}
                         </td>
                         <td>
                           <Form.Select
@@ -716,7 +760,11 @@ const LLMSettings: React.FC = () => {
                           >
                             <option value="">— global default —</option>
                             {PROVIDERS.map((p) => (
-                              <option key={p.id} value={p.id}>{p.logo} {p.label}</option>
+                              // Flagged inline because routing a feature to a provider with no
+                              // key now silently disables that feature rather than falling back.
+                              <option key={p.id} value={p.id}>
+                                {p.label}{(apiKeys[p.id] ?? '').trim() ? '' : ' (no key)'}
+                              </option>
                             ))}
                           </Form.Select>
                         </td>

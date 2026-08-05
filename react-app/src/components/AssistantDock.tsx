@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Badge, Button, Form, Spinner } from 'react-bootstrap';
+import { useNavigate } from 'react-router-dom';
 import { submitAssistantAgentRequestV2 } from '../services/agentClient';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -27,7 +28,12 @@ const AssistantDock: React.FC<AssistantDockProps> = ({ open, onClose }) => {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set when the failure is a credential problem the user can fix in Settings → AI, rather
+  // than a transient provider fault.
+  const [needsKey, setNeedsKey] = useState(false);
+  const [source, setSource] = useState<'vertex' | 'gemini' | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -50,11 +56,19 @@ const AssistantDock: React.FC<AssistantDockProps> = ({ open, onClose }) => {
         history: messages.slice(-10),
       });
 
+      setSource(data.source ?? null);
       setMessages(prev => [
         ...prev,
         { role: 'assistant', content: data.reply, toolsUsed: data.toolsUsed },
       ]);
     } catch (e: any) {
+      // The callable carries a `code` in its details for credential failures
+      // (see functions/utils/llmCredentials.js CODES).
+      const code = e?.details?.code;
+      setNeedsKey(
+        code === 'missing_key' || code === 'invalid_key' || code === 'no_credit' ||
+        e?.code === 'functions/failed-precondition',
+      );
       setError(e?.message || 'Failed to get a response.');
     } finally {
       setSending(false);
@@ -73,7 +87,13 @@ const AssistantDock: React.FC<AssistantDockProps> = ({ open, onClose }) => {
       <div className="d-flex align-items-center justify-content-between p-3" style={{ borderBottom: '1px solid var(--bs-border-color)' }}>
         <div className="d-flex align-items-center gap-2">
           <strong>BOB Assistant</strong>
-          <Badge bg="success" style={{ fontSize: '0.65rem' }}>Vertex AI</Badge>
+          {/* Reflects what actually answered rather than a hardcoded 'Vertex AI': under
+              bring-your-own-key most users now run on their own Gemini key. */}
+          {source && (
+            <Badge bg="success" style={{ fontSize: '0.65rem' }}>
+              {source === 'vertex' ? 'Vertex AI' : 'Your Gemini key'}
+            </Badge>
+          )}
         </div>
         <div className="d-flex gap-2">
           {messages.length > 0 && (
@@ -129,7 +149,24 @@ const AssistantDock: React.FC<AssistantDockProps> = ({ open, onClose }) => {
           </div>
         )}
 
-        {error && <Alert variant="danger" className="py-2 px-3 mb-0" style={{ fontSize: '0.825rem' }}>{error}</Alert>}
+        {error && (
+          <Alert
+            variant={needsKey ? 'warning' : 'danger'}
+            className="py-2 px-3 mb-0"
+            style={{ fontSize: '0.825rem' }}
+          >
+            {error}
+            {/* A missing or rejected key is fixed in one place, so link straight there rather
+                than leaving the user to find it. */}
+            {needsKey && (
+              <div className="mt-2">
+                <Button size="sm" variant="outline-secondary" onClick={() => navigate('/settings?tab=ai')}>
+                  Open AI settings
+                </Button>
+              </div>
+            )}
+          </Alert>
+        )}
 
         <div ref={bottomRef} />
       </div>

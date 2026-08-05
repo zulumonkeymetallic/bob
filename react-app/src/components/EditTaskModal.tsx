@@ -15,6 +15,7 @@ import { useGlobalThemes } from '../hooks/useGlobalThemes';
 import { isStatus } from '../utils/statusHelpers';
 import { normalizePriorityValue } from '../utils/priorityUtils';
 import ActivityStreamPanel from './common/ActivityStreamPanel';
+import DriveFilesPanel from './shared/DriveFilesPanel';
 import TagInput from './common/TagInput';
 import { cascadeTaskPersona } from '../utils/personaCascade';
 import { formatTaskTagLabel } from '../utils/tagDisplay';
@@ -1101,6 +1102,11 @@ const EditTaskModal: React.FC<EditTaskModalProps> = ({ show, task, onHide, onUpd
                 entityId={task?.id}
                 entityType="task"
                 referenceNumber={(task as any)?.ref || (task as any)?.reference || (task as any)?.referenceNumber}
+              />
+              <DriveFilesPanel
+                entityType="task"
+                entityId={task?.id}
+                entityLabel={(task as any)?.ref || task?.title || 'Task'}
               />
             </Col>
           )}
