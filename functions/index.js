@@ -10,6 +10,7 @@ const admin = require("firebase-admin");
 const { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } = require('@google/generative-ai');
 // OpenAI removed (Gemini-only)
 const aiUsageLogger = require("./utils/aiUsageLogger");
+const llmCredentials = require("./utils/llmCredentials");
 const { rrulestr } = require('rrule');
 const { DateTime } = require('luxon');
 const { planSchedule, makeInstanceId: schedulerMakeInstanceId } = require('./scheduler/engine');
@@ -71,8 +72,11 @@ try {
     exports.scheduleCoachFitnessBlocks        = coachModule.scheduleCoachFitnessBlocks;
     exports.triggerPollFitnessProgrammes      = coachModule.triggerPollFitnessProgrammes;
     exports.triggerScheduleCoachFitnessBlocks = coachModule.triggerScheduleCoachFitnessBlocks;
-    exports.checkAfternoonSteps               = coachModule.checkAfternoonSteps;
-    exports.triggerCheckAfternoonSteps        = coachModule.triggerCheckAfternoonSteps;
+    // checkAfternoonSteps retired — superseded by eveningStepCheckpoint. See coach/index.js
+    // for why: undated step mirror, hardcoded target, fixed 30-minute walk whatever the
+    // deficit, and no check that the slot was free.
+    exports.eveningStepCheckpoint             = coachModule.eveningStepCheckpoint;
+    exports.triggerEveningCheckpoint          = coachModule.triggerEveningCheckpoint;
   }
 } catch (e) {
   console.warn('[init] coachModule not loaded', e?.message || e);
@@ -1418,6 +1422,78 @@ exports.ensureDriveFolder = httpsV2.onCall(
       // "Google not connected" is a precondition the user can fix, not a server fault — the
       // UI needs to tell them to reconnect rather than showing a generic failure.
       const message = err?.message || 'Failed to resolve Drive folder';
+      throw new httpsV2.HttpsError(
+        /not connected|not configured/i.test(message) ? 'failed-precondition' : 'internal',
+        message,
+      );
+    }
+  }),
+);
+
+/**
+ * Give every new goal its Drive folder, without the web app having to ask.
+ *
+ * A trigger rather than a call in the create handlers: there are ten-plus places that write a
+ * goal (FAB, AddGoalModal, EditGoalModal, GlobalSearchBar, IntentBroker, BulkCreate, two import
+ * paths, BirthdayMilestoneCard…) and wiring each one would guarantee the set drifts.
+ *
+ * GOALS ONLY, deliberately. Stories and tasks get folders on demand — from the Files panel, or
+ * when the organiser files something into them. The goal folder is the anchor the hierarchy hangs
+ * off and there are ~100 of them; there are 460+ stories and 1100+ tasks, and pre-creating an
+ * empty folder for each would add thousands of empty folders to Drive and burn the per-user API
+ * quota on an import.
+ *
+ * Best-effort throughout: a goal must never fail to exist because Drive was unreachable or Google
+ * was disconnected.
+ */
+exports.createGoalDriveFolder = require('firebase-functions/v2/firestore').onDocumentCreated(
+  { document: 'goals/{goalId}', region: 'europe-west2', secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] },
+  async (event) => {
+    const goal = event.data?.data();
+    if (!goal || !goal.ownerUid) return;
+    if (goal.driveFolderId) return;
+    if (goal.deleted) return;
+
+    try {
+      await driveHierarchy.ensureGoalFolder(goal.ownerUid, event.params.goalId);
+    } catch (err) {
+      const message = err?.message || String(err);
+      // Not connected is the ordinary case for a user who has never linked Google — log it at
+      // info so it does not read as a fault in the logs.
+      const routine = /not connected|not configured/i.test(message);
+      console[routine ? 'info' : 'warn'](
+        `[driveHierarchy] goal folder for ${event.params.goalId} not created: ${message}`,
+      );
+    }
+  },
+);
+
+// Read-only counterpart to ensureDriveFolder. The panel in the edit modals renders on every
+// open, so it cannot use ensureDriveFolder to discover whether a folder exists — that would
+// create one as a side effect for every entity anyone merely looked at.
+exports.lookupDriveFolder = httpsV2.onCall(
+  { secrets: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET] },
+  secureFunction(async (req) => {
+    const uid = req?.auth?.uid;
+    if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+    const entityType = String(req.data?.entityType || '').trim();
+    const entityId = String(req.data?.entityId || '').trim();
+    if (!entityId || !['goal', 'story', 'task'].includes(entityType)) {
+      throw new httpsV2.HttpsError('invalid-argument', 'entityType (goal|story|task) and entityId are required');
+    }
+    try {
+      const result = await driveHierarchy.lookupEntityFolder(uid, entityType, entityId);
+      return {
+        ok: true,
+        folderId: result.folderId,
+        ref: result.ref,
+        adopted: result.adopted,
+        webViewLink: result.folderId
+          ? `https://drive.google.com/drive/folders/${result.folderId}`
+          : null,
+      };
+    } catch (err) {
+      const message = err?.message || 'Failed to look up Drive folder';
       throw new httpsV2.HttpsError(
         /not connected|not configured/i.test(message) ? 'failed-precondition' : 'internal',
         message,
@@ -8618,7 +8694,7 @@ Generate a plan as JSON with:
     {
       "taskId": "task_id_or_null",
       "goalId": "${focusGoalId || 'goal_id_or_null'}",
-      "theme": "General|Health & Fitness|Career & Professional|Finance & Wealth|Learning & Education|Family & Relationships|Hobbies & Interests|Travel & Adventure|Home & Living|Spiritual & Personal Growth|Chores|Work (Main Gig)|Side Gig|Sleep|Random|Routine|Dev Tasks",
+      "theme": "General|Health & Fitness|Career & Professional|Finance & Wealth|Learning & Education|Family & Relationships|Hobbies & Interests|Travel & Adventure|Home & Living|Spiritual & Personal Growth|Chores|Work (Main Gig)|Side Gig|Business Experiments|Sleep|Random|Routine|Dev Tasks",
       "category": "Task Work|Goal Focus|Skill Building|Planning",
       "title": "Block title",
       "start": timestamp,
@@ -9241,6 +9317,7 @@ function themeLabelFromNumber(n) {
     case 13: return 'Sleep';
     case 14: return 'Random';
     case 15: return 'Side Gig';
+    case 16: return 'Business Experiments';
     default: return 'General';
   }
 }
@@ -11464,58 +11541,9 @@ function buildPersonalityInstruction(personality) {
   return `Communication style:\n${parts.map((p) => `- ${p}`).join('\n')}`;
 }
 
-// Maps purpose strings → feature config keys in aiFeatureConfig.
-// Purposes not listed here use the user's global provider/model.
-const PURPOSE_TO_FEATURE = {
-  // Telegram / agent
-  agent_query:                    'telegram',
-  agent_briefing:                 'digest',
-  agent_propose_plan:             'telegram',
-  agent_weekly_review:            'digest',
-
-  // Journal / transcripts
-  journalProcess:                 'journal',
-  transcriptProcess:              'journal',
-  journalEnrich:                  'journal',
-
-  // Morning / weekly digest
-  sendMorningBriefing:            'digest',
-  sendWeeklyReview:               'digest',
-  dailySummaryFocus:              'digest',
-  dailyChecklistBriefing:        'digest',
-
-  // Story & KPI generation
-  storyTasks:                     'story',
-  storyResearchDoc:               'story',
-  deriveFromResearch:             'story',
-  goalChat:                       'story',
-  generateStoriesForGoal:         'story',
-  generateStoryAcceptanceCriteria:'story',
-  autoAcceptanceCriteria:         'story',
-  chatSummary:                    'story',
-
-  // Task enrichment & sizing
-  taskEnrich:                     'taskEnrich',
-  enhanceNewTask:                 'taskEnrich',
-  enhanceTaskDescription:         'taskEnrich',
-  taskSizing:                     'taskEnrich',
-  storySizing:                    'taskEnrich',
-  suggestTaskStoryConversions:    'taskEnrich',
-
-  // Planning & prioritisation
-  priority_now:                   'planning',
-  replan_day:                     'planning',
-  nightlyTaskPrioritization:      'planning',
-  prioritizeBacklog:              'planning',
-  planCalendar:                   'planning',
-  calendarBlockSummary:          'planning',
-  goalResearchPlan:               'planning',
-  goalResearchDoc:                'planning',
-
-  // Finance
-  monzo_ai_category:              'finance',
-  finance_commentary:             'finance',
-};
+// The purpose → feature-key map now lives in utils/llmCredentials so llmHelper resolves the
+// same routing; re-exported here under the original name to keep call sites unchanged.
+const PURPOSE_TO_FEATURE = llmCredentials.PURPOSE_TO_FEATURE;
 
 function providerSupportsOpenRouterFallback(providerName) {
   const provider = String(providerName || '').toLowerCase();
@@ -11549,17 +11577,21 @@ function shouldFallbackToOpenRouter(providerName, error) {
   );
 }
 
-async function callResolvedProvider({ provider, system, user, model, expectJson, temperature, apiKey }) {
+// `allowInfraKey` is what keeps BOB bring-your-own-key. When false — every ordinary user — a
+// call with no `apiKey` fails instead of quietly falling through to the project's own
+// credentials (the env keys, or Vertex ADC for Gemini). Only callLLMJson sets it, and only for
+// the accounts in llmCredentials.exemptUids().
+async function callResolvedProvider({ provider, system, user, model, expectJson, temperature, apiKey, allowInfraKey = false }) {
   if (provider === 'openai') {
-    return callOpenAIChat({ system, user, model, expectJson, temperature, apiKey });
+    return callOpenAIChat({ system, user, model, expectJson, temperature, apiKey, allowInfraKey });
   }
   if (provider === 'anthropic') {
-    return callAnthropic({ system, user, model, expectJson, temperature, apiKey });
+    return callAnthropic({ system, user, model, expectJson, temperature, apiKey, allowInfraKey });
   }
   if (provider === 'openrouter') {
-    return callOpenRouterChat({ system, user, model, expectJson, temperature, apiKey });
+    return callOpenRouterChat({ system, user, model, expectJson, temperature, apiKey, allowInfraKey });
   }
-  return callGemini({ system, user, model, expectJson, temperature, apiKey });
+  return callGemini({ system, user, model, expectJson, temperature, apiKey, allowInfraKey });
 }
 
 function _isAuthError(error) {
@@ -11601,71 +11633,88 @@ async function callLLMJson({ system, user, purpose, userId, expectJson = false, 
   let openRouterApiKey = null;
   let openRouterModel = OPENROUTER_FALLBACK_MODEL;
 
+  let isExemptAccount = false;
+
   if (userId && !userApiKey) {
+    let profileData = {};
     try {
       const db = admin.firestore();
       const profileSnap = await db.collection('profiles').doc(userId).get();
-      if (profileSnap.exists) {
-        const profileData = profileSnap.data() || {};
-        const perProviderKeys = profileData.aiApiKeys || {};
-        const legacyKey = profileData.aiApiKey || null;
-
-        if (profileData.aiProvider) resolvedProvider = profileData.aiProvider;
-        if (profileData.aiModel) resolvedModel = profileData.aiModel;
-
-        const featureKey = PURPOSE_TO_FEATURE[purpose];
-        const featureConfig = featureKey && profileData.aiFeatureConfig?.[featureKey];
-        if (featureConfig) {
-          if (featureConfig.provider) resolvedProvider = featureConfig.provider;
-          if (featureConfig.model) resolvedModel = featureConfig.model;
-        }
-
-        resolvedApiKey =
-          perProviderKeys[resolvedProvider] ||
-          legacyKey ||
-          null;
-
-        openRouterApiKey =
-          perProviderKeys.openrouter ||
-          perProviderKeys['open-router'] ||
-          perProviderKeys.open_router ||
-          null;
-
-        const profileOpenRouterModel = String(
-          profileData?.aiFeatureConfig?.fallback?.openrouterModel ||
-          profileData?.aiFallbackModel?.openrouter ||
-          profileData?.openrouterModel ||
-          ''
-        ).trim();
-        if (profileOpenRouterModel) {
-          openRouterModel = profileOpenRouterModel;
-        }
-
-        if (!personality && profileData.aiPersonality) {
-          personality = profileData.aiPersonality;
-        }
-
-        if (profileData.aiSystemPromptOverride) {
-          system = `${profileData.aiSystemPromptOverride}\n\n${system}`;
-        }
-      }
+      profileData = profileSnap.exists ? (profileSnap.data() || {}) : {};
     } catch (e) {
+      // Deliberately not swallowed into a "carry on with BOB's keys" path: if we cannot read
+      // the profile we cannot prove the user has their own key, and guessing wrong spends the
+      // owner's money. An empty profile makes resolveCredentials throw missing_key below.
       console.warn('[callLLMJson] Profile lookup failed:', e?.message);
+    }
+
+    try {
+      const resolved = llmCredentials.resolveCredentials({
+        profile: profileData,
+        userId,
+        featureKey: PURPOSE_TO_FEATURE[purpose],
+        purpose,
+        defaultProvider: resolvedProvider,
+        defaultModel: resolvedModel,
+      });
+      resolvedProvider = resolved.provider;
+      resolvedModel = resolved.model;
+      resolvedApiKey = resolved.apiKey;
+      isExemptAccount = resolved.exempt;
+    } catch (err) {
+      // No usable key. Record it so the user sees why AI went quiet, then honour the existing
+      // degradation contract rather than crashing the nightly jobs that call this.
+      await llmCredentials.reportFailure(userId, err, {
+        provider: err.provider, model: err.model, purpose,
+      });
+      if (expectJson) return '{}';
+      throw err;
+    }
+
+    // A user's own OpenRouter key is the only fallback we may spend. There is deliberately no
+    // process.env.OPENROUTER_API_KEY here — that was the owner's key, used for every user who
+    // had not configured one.
+    const perProviderKeys = profileData.aiApiKeys || {};
+    openRouterApiKey = String(
+      perProviderKeys.openrouter ||
+      perProviderKeys['open-router'] ||
+      perProviderKeys.open_router ||
+      ''
+    ).trim() || null;
+
+    const profileOpenRouterModel = String(
+      profileData?.aiFeatureConfig?.fallback?.openrouterModel ||
+      profileData?.aiFallbackModel?.openrouter ||
+      profileData?.openrouterModel ||
+      ''
+    ).trim();
+    if (profileOpenRouterModel) {
+      openRouterModel = profileOpenRouterModel;
+    }
+
+    if (!personality && profileData.aiPersonality) {
+      personality = profileData.aiPersonality;
+    }
+
+    if (profileData.aiSystemPromptOverride) {
+      system = `${profileData.aiSystemPromptOverride}\n\n${system}`;
     }
   }
 
-  openRouterApiKey = String(openRouterApiKey || process.env.OPENROUTER_API_KEY || '').trim() || null;
-  if (!openRouterApiKey) {
-    // Secret not injected into this function — add OPENROUTER_API_KEY_SECRET to its secrets array
-    console.warn('[callLLMJson] OPENROUTER_API_KEY unavailable in this function runtime; fallback disabled', { purpose, userId });
+  // Exempt accounts (the owner's automation and the demo user) may still use BOB's own
+  // infrastructure keys; everyone else reached here with a key of their own.
+  if (isExemptAccount) {
+    openRouterApiKey = openRouterApiKey || String(process.env.OPENROUTER_API_KEY || '').trim() || null;
   }
+
   const effectiveSystem = personality ? `${buildPersonalityInstruction(personality)}\n\n${system}` : system;
 
-  // When user has no personal key, route directly to OpenRouter instead of falling back to the system Google key
-  const userHasOwnKey = Boolean(resolvedApiKey);
-  const primaryCandidate = (!userHasOwnKey && openRouterApiKey)
-    ? { provider: 'openrouter', model: openRouterModel || OPENROUTER_FALLBACK_MODEL, apiKey: openRouterApiKey }
-    : { provider: String(resolvedProvider || 'gemini').toLowerCase(), model: resolvedModel, apiKey: resolvedApiKey };
+  const primaryCandidate = {
+    provider: String(resolvedProvider || 'gemini').toLowerCase(),
+    model: resolvedModel,
+    apiKey: resolvedApiKey,
+    allowInfraKey: isExemptAccount,
+  };
 
   const primaryResult = await callWithRetries(primaryCandidate, {
     system: effectiveSystem,
@@ -11676,6 +11725,9 @@ async function callLLMJson({ system, user, purpose, userId, expectJson = false, 
   if (primaryResult.ok) {
     const wrapped = aiUsageLogger.wrapAICall(primaryCandidate.provider, String(primaryCandidate.model || 'unknown'));
     await wrapped(async () => ({ ok: true }), { userId, functionName: purpose, purpose });
+    await llmCredentials.recordLLMStatus(userId, {
+      ok: true, provider: primaryCandidate.provider, model: primaryCandidate.model,
+    });
     return primaryResult.text;
   }
 
@@ -11690,6 +11742,7 @@ async function callLLMJson({ system, user, purpose, userId, expectJson = false, 
       provider: 'openrouter',
       model: openRouterModel || OPENROUTER_FALLBACK_MODEL,
       apiKey: openRouterApiKey,
+      allowInfraKey: isExemptAccount,
     };
     const fallbackResult = await callWithRetries(openRouterCandidate, {
       system: effectiveSystem,
@@ -11700,17 +11753,26 @@ async function callLLMJson({ system, user, purpose, userId, expectJson = false, 
     if (fallbackResult.ok) {
       const wrapped = aiUsageLogger.wrapAICall('openrouter', String(openRouterCandidate.model || 'unknown'));
       await wrapped(async () => ({ ok: true }), { userId, functionName: purpose, purpose });
+      await llmCredentials.recordLLMStatus(userId, {
+        ok: true, provider: 'openrouter', model: openRouterCandidate.model,
+      });
       return fallbackResult.text;
     }
+    await llmCredentials.reportFailure(userId, fallbackResult.error || primaryError, {
+      provider: 'openrouter', model: openRouterCandidate.model, purpose,
+    });
     if (expectJson) return '{}';
     throw fallbackResult.error || primaryError;
   }
 
+  await llmCredentials.reportFailure(userId, primaryError, {
+    provider: primaryCandidate.provider, model: primaryCandidate.model, purpose,
+  });
   if (expectJson) return '{}';
   throw primaryError;
 }
 
-async function callGemini({ system, user, model = GEMINI_MODEL, expectJson, temperature, apiKey: userApiKey = null }) {
+async function callGemini({ system, user, model = GEMINI_MODEL, expectJson, temperature, apiKey: userApiKey = null, allowInfraKey = false }) {
   // User-supplied key → honour it (user-configured AI Studio provider path)
   if (userApiKey) {
     const genAI = new GoogleGenerativeAI(userApiKey);
@@ -11730,7 +11792,16 @@ async function callGemini({ system, user, model = GEMINI_MODEL, expectJson, temp
     return text;
   }
 
-  // No user key → route through Vertex AI (ADC — SGC-visible, BOB's infrastructure)
+  // No user key → Vertex AI over ADC. That is BOB's own infrastructure and bills the project,
+  // so it is reachable only by exempt accounts. For everyone else this is the point where a
+  // missing key has to stop being invisible.
+  if (!allowInfraKey) {
+    throw new llmCredentials.LLMCredentialError(
+      llmCredentials.CODES.MISSING_KEY,
+      llmCredentials.messageForCode(llmCredentials.CODES.MISSING_KEY, 'gemini', model),
+      { provider: 'gemini', model },
+    );
+  }
   const { VertexAI } = require('@google-cloud/vertexai');
   const vertexAI = new VertexAI({ project: 'bob20250810', location: 'europe-west2' });
   const generationConfig = { temperature: temperature ?? 0.2, topP: 0.95, maxOutputTokens: 8192 };
@@ -11746,9 +11817,15 @@ async function callGemini({ system, user, model = GEMINI_MODEL, expectJson, temp
   return text;
 }
 
-async function callAnthropic({ system, user, model = 'claude-haiku-3-5', expectJson, temperature, apiKey: userApiKey = null }) {
-  const apiKey = (userApiKey || process.env.ANTHROPIC_API_KEY || '').trim();
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured');
+async function callAnthropic({ system, user, model = 'claude-haiku-3-5', expectJson, temperature, apiKey: userApiKey = null, allowInfraKey = false }) {
+  const apiKey = (userApiKey || (allowInfraKey ? process.env.ANTHROPIC_API_KEY : '') || '').trim();
+  if (!apiKey) {
+    throw new llmCredentials.LLMCredentialError(
+      llmCredentials.CODES.MISSING_KEY,
+      llmCredentials.messageForCode(llmCredentials.CODES.MISSING_KEY, 'anthropic', model),
+      { provider: 'anthropic', model },
+    );
+  }
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
@@ -11767,9 +11844,15 @@ async function callAnthropic({ system, user, model = 'claude-haiku-3-5', expectJ
   return text;
 }
 
-async function callOpenAIChat({ system, user, model = 'gpt-4o-mini', expectJson, temperature, apiKey: userApiKey = null }) {
-  const apiKey = (userApiKey || process.env.OPENAI_API_KEY || '').trim();
-  if (!apiKey) throw new Error('OPENAI_API_KEY not configured');
+async function callOpenAIChat({ system, user, model = 'gpt-4o-mini', expectJson, temperature, apiKey: userApiKey = null, allowInfraKey = false }) {
+  const apiKey = (userApiKey || (allowInfraKey ? process.env.OPENAI_API_KEY : '') || '').trim();
+  if (!apiKey) {
+    throw new llmCredentials.LLMCredentialError(
+      llmCredentials.CODES.MISSING_KEY,
+      llmCredentials.messageForCode(llmCredentials.CODES.MISSING_KEY, 'openai', model),
+      { provider: 'openai', model },
+    );
+  }
   const url = 'https://api.openai.com/v1/chat/completions';
   const body = {
     model,
@@ -11788,9 +11871,15 @@ async function callOpenAIChat({ system, user, model = 'gpt-4o-mini', expectJson,
   return text;
 }
 
-async function callOpenRouterChat({ system, user, model = OPENROUTER_FALLBACK_MODEL, expectJson, temperature, apiKey: userApiKey = null }) {
-  const apiKey = (userApiKey || process.env.OPENROUTER_API_KEY || '').trim();
-  if (!apiKey) throw new Error('OPENROUTER_API_KEY not configured');
+async function callOpenRouterChat({ system, user, model = OPENROUTER_FALLBACK_MODEL, expectJson, temperature, apiKey: userApiKey = null, allowInfraKey = false }) {
+  const apiKey = (userApiKey || (allowInfraKey ? process.env.OPENROUTER_API_KEY : '') || '').trim();
+  if (!apiKey) {
+    throw new llmCredentials.LLMCredentialError(
+      llmCredentials.CODES.MISSING_KEY,
+      llmCredentials.messageForCode(llmCredentials.CODES.MISSING_KEY, 'openrouter', model),
+      { provider: 'openrouter', model },
+    );
+  }
   const selectedModel = String(model || OPENROUTER_FALLBACK_MODEL).trim();
   const buildBody = ({ enforceJsonMode = true } = {}) => ({
     model: selectedModel,
@@ -22160,7 +22249,7 @@ Generate a concise retrospective summary (3-4 paragraphs) covering:
 
 Keep it professional, actionable, and encourage the team.`;
 
-    const summary = await callLLM('', prompt) || '';
+    const summary = await callLLM('', prompt, undefined, { userId: auth.uid, purpose: 'chatSummary' }) || '';
 
     await aiUsageLogger.logAIUsage(auth.uid, 'openrouter-retro', 'openrouter/auto', prompt, summary);
 

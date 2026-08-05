@@ -688,7 +688,15 @@ async function _runOrchestratorForUser(uid) {
   // approximately zero. What is genuinely known is how yesterday finished, so that is
   // what gets reported, labelled as yesterday. WS6's evening checkpoint is where a
   // live intra-day figure belongs, read at a time when it means something.
-  const stepsYesterday = hmPrev.stepsToday
+  // `healthkitStepsToday`, not `stepsToday`.
+  //
+  // `logHealthMetric` receives `stepsToday` from the device and stores it under
+  // `healthkitStepsToday` — the rename happens in the callable. Reading the inbound name
+  // off the stored document finds nothing, and the `??` chain then fell through to the
+  // profile mirror, which is the stale value this change existed to stop using.
+  // Confirmed against the live documents: healthkitStepsToday 622 / 5470 / 5675, and
+  // stepsToday null on every one.
+  const stepsYesterday = hmPrev.healthkitStepsToday
     ?? profile.healthkitStepsToday ?? profile.stepsToday ?? null;
   const stepsLine = stepsYesterday !== null
     ? `\nSteps yesterday: ${stepsYesterday.toLocaleString()} / ${stepsTarget.toLocaleString()}`
