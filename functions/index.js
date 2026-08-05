@@ -455,6 +455,38 @@ const syncFitnessKpis = async () => {
   }
 };
 
+/**
+ * Recompute `fitness_overview` on demand.
+ *
+ * The overview is derived from `metrics_workouts` and needs no provider call, but the only
+ * paths that rebuilt it were `dailySync` (scheduled) and `syncStrava` — and syncStrava
+ * aborts before reaching the compute when Strava authorisation fails. So a broken provider
+ * token also froze every number derived from workouts BOB already had: predictions,
+ * totals, zone aggregates, the fitness score.
+ *
+ * Separating the two means a provider problem stops new data arriving without also
+ * freezing what is already stored.
+ */
+exports.recomputeFitnessOverviewNow = httpsV2.onCall({
+  region: 'europe-west2',
+  memory: '512MiB',
+  timeoutSeconds: 300,
+}, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  const db = admin.firestore();
+  const overview = await _getFitnessOverview(uid, Number(req?.data?.days) || 90);
+  await db.collection('fitness_overview').doc(uid).set(
+    { ...overview, updatedAt: admin.firestore.FieldValue.serverTimestamp() },
+    { merge: true },
+  );
+  return {
+    ok: true,
+    predictions: overview.predictions || null,
+    sessions: overview.totals?.sessions ?? null,
+  };
+});
+
 exports.syncFitnessKpisNightly = schedulerV2.onSchedule(
   { schedule: '30 3 * * *', timeZone: 'UTC', region: 'europe-west2', memory: '1GiB', timeoutSeconds: 540 },
   syncFitnessKpis
