@@ -69,15 +69,30 @@ function hasZones(workout) {
 }
 
 /**
- * Group workouts into clusters that represent one real session.
+ * Pair records that are the same session seen by **different** providers.
  *
- * Same canonical activity, and a start within `DEDUP_WINDOW_MS` of the cluster's earliest
- * start. Keyed on activity rather than the coarse group so a run and a walk finishing at
- * the same moment are never merged, and an indoor and an outdoor ride are kept apart.
+ * ## Same-provider records are never duplicates of each other
  *
- * Exported for testing — the clustering is where the judgement is.
+ * This is the whole safety property, and the first version of this file got it wrong. It
+ * clustered on time and activity alone, and a dry run against Jim's real feed flagged 16
+ * "duplicates" — every one of them a Strava/Strava pair. Looking at them: a 0.42km jog and
+ * a 5.02km parkrun twenty minutes later; four short efforts on one November afternoon that
+ * are plainly interval legs; a 0.27km warm-up before a 6.37km run. All real, all distinct,
+ * and marking the shorter one a duplicate would have quietly deleted that distance from
+ * every total.
+ *
+ * Two records from one provider are two sessions *that provider already considers
+ * distinct* — Strava dedupes its own uploads. The failure this function exists for is
+ * strictly cross-provider: one session, two systems, two ids, no join.
+ *
+ * So the rule is narrow and provable: a record is a duplicate only when a record of the
+ * same canonical activity, from a **different and higher-ranked** provider, starts within
+ * the window. Nothing else is ever touched.
+ *
+ * Returns `[{ canonical, duplicates: [...] }]`. Exported for testing — this is where the
+ * judgement is.
  */
-function clusterSessions(workouts) {
+function pairAcrossProviders(workouts) {
   const byActivity = new Map();
   for (const w of workouts) {
     if (!startOf(w)) continue;
@@ -86,37 +101,28 @@ function clusterSessions(workouts) {
     byActivity.get(activity).push(w);
   }
 
-  const clusters = [];
+  const pairs = [];
   for (const group of byActivity.values()) {
     group.sort((a, b) => startOf(a) - startOf(b));
-    let current = [];
-    for (const w of group) {
-      if (current.length === 0 || startOf(w) - startOf(current[0]) <= DEDUP_WINDOW_MS) {
-        current.push(w);
-      } else {
-        clusters.push(current);
-        current = [w];
-      }
-    }
-    if (current.length) clusters.push(current);
-  }
-  return clusters;
-}
+    const claimed = new Set();
 
-/**
- * The survivor for a cluster: highest-ranked provider, and among equals the record with
- * the most substance — a longer distance or duration means the other is a fragment.
- */
-function chooseCanonical(cluster) {
-  return cluster.slice().sort((a, b) => {
-    const rank = rankOf(b) - rankOf(a);
-    if (rank !== 0) return rank;
-    const distance = Number(b.distance_m || 0) - Number(a.distance_m || 0);
-    if (distance !== 0) return distance;
-    const durationA = Number(a.movingTime_s || a.elapsedTime_s || 0);
-    const durationB = Number(b.movingTime_s || b.elapsedTime_s || 0);
-    return durationB - durationA;
-  })[0];
+    for (const candidate of group) {
+      // Only a lower-ranked record can be superseded, so iterate those and look upward.
+      if (claimed.has(candidate)) continue;
+      const better = group.find((other) => other !== candidate
+        && !claimed.has(other)
+        && providerOf(other) !== providerOf(candidate)
+        && rankOf(other) > rankOf(candidate)
+        && Math.abs(startOf(other) - startOf(candidate)) <= DEDUP_WINDOW_MS);
+      if (!better) continue;
+
+      claimed.add(candidate);
+      const existing = pairs.find((p) => p.canonical === better);
+      if (existing) existing.duplicates.push(candidate);
+      else pairs.push({ canonical: better, duplicates: [candidate] });
+    }
+  }
+  return pairs;
 }
 
 /**
@@ -174,36 +180,18 @@ async function dedupeWorkoutsForUser(userId, options = {}) {
     .get();
 
   const workouts = snap.docs.map((d) => ({ _id: d.id, ...d.data() }));
-  const clusters = clusterSessions(workouts);
+  const pairs = pairAcrossProviders(workouts);
 
   const writes = [];
   let duplicatesFound = 0;
   let zonesMerged = 0;
   let unmarked = 0;
 
-  for (const cluster of clusters) {
-    if (cluster.length === 1) {
-      // Alone, but previously marked — its twin has gone. Restore it.
-      const only = cluster[0];
-      if (only.isDuplicate === true) {
-        unmarked += 1;
-        writes.push({
-          id: only._id,
-          data: {
-            isDuplicate: admin.firestore.FieldValue.delete(),
-            supersededBy: admin.firestore.FieldValue.delete(),
-            dedupedAt: admin.firestore.FieldValue.delete(),
-          },
-        });
-      }
-      continue;
-    }
+  const nowDuplicates = new Set();
+  for (const { canonical, duplicates } of pairs) {
+    duplicatesFound += duplicates.length;
 
-    const canonical = chooseCanonical(cluster);
-    const others = cluster.filter((w) => w._id !== canonical._id);
-    duplicatesFound += others.length;
-
-    const patch = buildMergePatch(canonical, others);
+    const patch = buildMergePatch(canonical, duplicates);
     if (patch.hrZones) zonesMerged += 1;
     if (canonical.isDuplicate === true) {
       patch.isDuplicate = admin.firestore.FieldValue.delete();
@@ -213,7 +201,8 @@ async function dedupeWorkoutsForUser(userId, options = {}) {
       writes.push({ id: canonical._id, data: patch });
     }
 
-    for (const other of others) {
+    for (const other of duplicates) {
+      nowDuplicates.add(other._id);
       if (other.isDuplicate === true && other.supersededBy === canonical._id) continue;
       writes.push({
         id: other._id,
@@ -221,6 +210,22 @@ async function dedupeWorkoutsForUser(userId, options = {}) {
           isDuplicate: true,
           supersededBy: canonical._id,
           dedupedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+      });
+    }
+  }
+
+  // Marked on a previous run but no longer paired — its twin has been deleted. Restore it
+  // rather than leaving a real session excluded from every total for ever.
+  for (const w of workouts) {
+    if (w.isDuplicate === true && !nowDuplicates.has(w._id)) {
+      unmarked += 1;
+      writes.push({
+        id: w._id,
+        data: {
+          isDuplicate: admin.firestore.FieldValue.delete(),
+          supersededBy: admin.firestore.FieldValue.delete(),
+          dedupedAt: admin.firestore.FieldValue.delete(),
         },
       });
     }
@@ -238,7 +243,7 @@ async function dedupeWorkoutsForUser(userId, options = {}) {
 
   return {
     workouts: workouts.length,
-    clusters: clusters.length,
+    pairs: pairs.length,
     duplicatesFound,
     zonesMerged,
     unmarked,
@@ -249,8 +254,7 @@ async function dedupeWorkoutsForUser(userId, options = {}) {
 
 module.exports = {
   DEDUP_WINDOW_MS,
-  clusterSessions,
-  chooseCanonical,
+  pairAcrossProviders,
   buildMergePatch,
   dedupeWorkoutsForUser,
 };

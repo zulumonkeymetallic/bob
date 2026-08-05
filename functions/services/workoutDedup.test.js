@@ -1,6 +1,5 @@
 const {
-  clusterSessions,
-  chooseCanonical,
+  pairAcrossProviders,
   buildMergePatch,
   DEDUP_WINDOW_MS,
 } = require('./workoutDedup');
@@ -17,62 +16,83 @@ const healthkit = (over = {}) => ({
   distance_m: 9950, movingTime_s: 3010, startDate: T + mins(2), ...over,
 });
 
-describe('clusterSessions', () => {
-  it('clusters the same run from both providers', () => {
-    const clusters = clusterSessions([strava(), healthkit()]);
-    expect(clusters).toHaveLength(1);
-    expect(clusters[0]).toHaveLength(2);
+describe('pairAcrossProviders', () => {
+  it('pairs the same run seen by Strava and HealthKit', () => {
+    const pairs = pairAcrossProviders([strava(), healthkit()]);
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0].canonical._id).toBe('uid_123');
+    expect(pairs[0].duplicates.map((d) => d._id)).toEqual(['uid_hk_abc']);
   });
 
-  it('keeps genuinely separate sessions apart', () => {
-    // A double day: morning run and an evening run.
-    const clusters = clusterSessions([strava(), strava({ _id: 'pm', startDate: T + mins(600) })]);
-    expect(clusters).toHaveLength(2);
+  it('NEVER pairs two records from the same provider', () => {
+    // The case that made the first version of this dangerous. A dry run against Jim's
+    // real feed flagged 16 "duplicates", every one a Strava/Strava pair: a 0.42km jog
+    // before a 5.02km parkrun, four interval legs on one afternoon, a 0.27km warm-up
+    // before a 6.37km run. All real, all distinct. Marking the shorter one would have
+    // silently deleted that distance from every total.
+    const warmup = strava({ _id: 'warmup', distance_m: 420, startDate: T });
+    const parkrun = strava({ _id: 'parkrun', distance_m: 5020, startDate: T + mins(20) });
+    expect(pairAcrossProviders([warmup, parkrun])).toHaveLength(0);
   });
 
-  it('does not merge a run and a walk that finish together', () => {
-    const clusters = clusterSessions([
-      strava(),
-      healthkit({ _id: 'walk', type: 'walk', activity: 'walk' }),
-    ]);
-    expect(clusters).toHaveLength(2);
+  it('leaves four same-provider interval legs entirely alone', () => {
+    const legs = [640, 410, 700, 2640].map((d, i) => strava({
+      _id: `leg${i}`, distance_m: d, startDate: T + mins(i * 5),
+    }));
+    expect(pairAcrossProviders(legs)).toHaveLength(0);
   });
 
-  it('does not merge an indoor and an outdoor ride at the same time', () => {
-    const clusters = clusterSessions([
-      strava({ _id: 'road', type: 'Ride' }),
-      strava({ _id: 'turbo', type: 'VirtualRide', startDate: T + mins(3) }),
-    ]);
-    expect(clusters).toHaveLength(2);
-  });
-
-  it('treats the window as inclusive at its edge', () => {
-    const inside = clusterSessions([strava(), healthkit({ startDate: T + DEDUP_WINDOW_MS })]);
-    const outside = clusterSessions([strava(), healthkit({ startDate: T + DEDUP_WINDOW_MS + 1 })]);
-    expect(inside).toHaveLength(1);
-    expect(outside).toHaveLength(2);
-  });
-
-  it('ignores records with no start time rather than clustering them together', () => {
-    const clusters = clusterSessions([strava(), healthkit({ startDate: 0 })]);
-    expect(clusters).toHaveLength(1);
-    expect(clusters[0]).toHaveLength(1);
-  });
-});
-
-describe('chooseCanonical', () => {
-  it('prefers Strava, which carries the corrected distance and the track', () => {
-    expect(chooseCanonical([healthkit(), strava()])._id).toBe('uid_123');
+  it('prefers Strava over HealthKit as the survivor', () => {
+    const pairs = pairAcrossProviders([healthkit(), strava()]);
+    expect(pairs[0].canonical.provider).toBe('strava');
   });
 
   it('prefers parkrun over HealthKit', () => {
     const pr = { _id: 'pr', provider: 'parkrun', type: 'Run', distance_m: 5000, startDate: T };
-    expect(chooseCanonical([healthkit(), pr])._id).toBe('pr');
+    const pairs = pairAcrossProviders([healthkit(), pr]);
+    expect(pairs[0].canonical._id).toBe('pr');
   });
 
-  it('between two of the same provider, keeps the fuller record', () => {
-    const fragment = strava({ _id: 'frag', distance_m: 400, movingTime_s: 120 });
-    expect(chooseCanonical([fragment, strava()])._id).toBe('uid_123');
+  it('keeps genuinely separate sessions apart', () => {
+    const pairs = pairAcrossProviders([strava(), healthkit({ startDate: T + mins(600) })]);
+    expect(pairs).toHaveLength(0);
+  });
+
+  it('does not pair a run with a walk that finished at the same moment', () => {
+    const pairs = pairAcrossProviders([
+      strava(),
+      healthkit({ _id: 'walk', type: 'walk', activity: 'walk' }),
+    ]);
+    expect(pairs).toHaveLength(0);
+  });
+
+  it('does not pair an indoor with an outdoor ride at the same time', () => {
+    const pairs = pairAcrossProviders([
+      strava({ _id: 'road', type: 'Ride' }),
+      healthkit({ _id: 'turbo', type: 'cycling', activity: 'bike_indoor', startDate: T + mins(3) }),
+    ]);
+    expect(pairs).toHaveLength(0);
+  });
+
+  it('treats the window as inclusive at its edge', () => {
+    const inside = pairAcrossProviders([strava(), healthkit({ startDate: T + DEDUP_WINDOW_MS })]);
+    const outside = pairAcrossProviders([strava(), healthkit({ startDate: T + DEDUP_WINDOW_MS + 1 })]);
+    expect(inside).toHaveLength(1);
+    expect(outside).toHaveLength(0);
+  });
+
+  it('claims each duplicate once, even with several candidates in the window', () => {
+    const pairs = pairAcrossProviders([
+      strava({ _id: 's1', startDate: T }),
+      strava({ _id: 's2', startDate: T + mins(10) }),
+      healthkit({ _id: 'hk', startDate: T + mins(5) }),
+    ]);
+    const claimed = pairs.flatMap((p) => p.duplicates.map((d) => d._id));
+    expect(claimed).toEqual(['hk']);
+  });
+
+  it('ignores records with no start time', () => {
+    expect(pairAcrossProviders([strava(), healthkit({ startDate: 0 })])).toHaveLength(0);
   });
 });
 
