@@ -647,7 +647,14 @@ exports.scheduleCoachFitnessBlocks = schedulerV2.onSchedule(
 
 // ─── Manual Trigger Callables (for testing) ──────────────────────────────────
 
-exports.triggerPollFitnessProgrammes = httpsV2.onCall({ region: REGION }, async (req) => {
+// 512MiB, matching the scheduled functions above.
+//
+// The callables inherited the 256MiB default and OOM'd at 259MiB once the scheduler began
+// loading theme allocations alongside the calendar window and the phase resolver —
+// surfacing as a bare HTTP 500. Same shape as enrichStravaHR and aggregateMetricValuesNow
+// earlier the same day: a memory ceiling set for a smaller job, and a 500 that says
+// nothing about why.
+exports.triggerPollFitnessProgrammes = httpsV2.onCall({ region: REGION, memory: '512MiB', timeoutSeconds: 300 }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
@@ -663,7 +670,7 @@ exports.triggerPollFitnessProgrammes = httpsV2.onCall({ region: REGION }, async 
   return { ok: true };
 });
 
-exports.triggerScheduleCoachFitnessBlocks = httpsV2.onCall({ region: REGION }, async (req) => {
+exports.triggerScheduleCoachFitnessBlocks = httpsV2.onCall({ region: REGION, memory: '512MiB', timeoutSeconds: 300 }, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
 
