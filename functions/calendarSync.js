@@ -6,6 +6,25 @@ const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { loadThemesForUser, mapThemeIdToLabel, mapThemeLabelToId, getGoogleColorForThemeId, DEFAULT_THEMES } = require('./services/themeManager');
 const { buildAbsoluteUrl, buildEntityUrl } = require('./utils/urlHelpers');
 const { CALENDAR_VISIBILITY_DAYS } = require('./lib/planningHorizon');
+const { defineSecret } = require('firebase-functions/params');
+
+// Every function in this file that touches Google needs these BOUND to it.
+//
+// `getGoogleOAuthConfig()` reads `process.env.GOOGLE_OAUTH_CLIENT_ID` /
+// `_CLIENT_SECRET`, and on gen 2 a secret only reaches `process.env` for functions that
+// declare it. Not one export here declared them, so `getCalendarClientForUser` threw
+// "Google OAuth not configured" on every outbound call — confirmed live 2026-08-05, once
+// per calendar block written.
+//
+// The effect was one-directional and easy to miss: inbound sync runs from
+// nightlyOrchestration, which *does* bind them (see its comment at line 54, written after
+// somebody hit exactly this), so 1,133 events flowed from Google into BOB while nothing
+// ever flowed back. Every BOB-created block — theme allocations, coach sessions, chores,
+// planner blocks — sat in Firestore with no `googleEventId`, and none of it appeared on
+// the phone.
+const GOOGLE_OAUTH_CLIENT_ID = defineSecret('GOOGLE_OAUTH_CLIENT_ID');
+const GOOGLE_OAUTH_CLIENT_SECRET = defineSecret('GOOGLE_OAUTH_CLIENT_SECRET');
+const GOOGLE_OAUTH_SECRETS = [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET];
 
 /**
  * Region MUST be stated explicitly on every function in this file.
@@ -2085,7 +2104,7 @@ async function syncBlockToGoogle(blockId, action, uid, blockData = null) {
   }
 }
 
-exports.repairDuplicateCalendarEvents = onCall({ region: REGION }, async (request) => {
+exports.repairDuplicateCalendarEvents = onCall({ region: REGION, secrets: GOOGLE_OAUTH_SECRETS }, async (request) => {
   const { data, context } = v1CallableArgs(request);
   if (!context.auth) {
     throw new HttpsError('unauthenticated', 'Must be authenticated');
@@ -2308,7 +2327,7 @@ exports._cleanupOrphanedCalendarEventsForAllUsers = async function(options = {})
   return { ok: true, results };
 };
 
-exports.cleanupOrphanedCalendarEventsNow = onCall({ region: REGION }, async (request) => {
+exports.cleanupOrphanedCalendarEventsNow = onCall({ region: REGION, secrets: GOOGLE_OAUTH_SECRETS }, async (request) => {
   const { data, context } = v1CallableArgs(request);
   if (!context.auth) throw new HttpsError('unauthenticated', 'Must be authenticated');
   const dryRun = data?.dryRun === true;
@@ -2374,7 +2393,7 @@ exports._pushPendingBlocksForAllUsers = async function() {
   return { ok: true, results };
 };
 
-exports.syncCalendarBlock = onCall({ region: REGION }, async (request) => {
+exports.syncCalendarBlock = onCall({ region: REGION, secrets: GOOGLE_OAUTH_SECRETS }, async (request) => {
   const { data, context } = v1CallableArgs(request);
   if (!context.auth) throw new HttpsError('unauthenticated', 'Must be authenticated');
   const { blockId, action } = data;
@@ -2403,12 +2422,42 @@ exports.syncCalendarBlock = onCall({ region: REGION }, async (request) => {
 });
 
 // Trigger to auto-sync changes to Google Calendar
-exports.onCalendarBlockWrite = onDocumentWritten({ document: 'calendar_blocks/{blockId}', region: REGION }, async (event) => {
+/**
+ * Is the server allowed to push this user's blocks into Google?
+ *
+ * OFF unless `profiles.serverPushesToGoogle === true`, deliberately.
+ *
+ * There are two possible outbound paths and only one may be live, or every block reaches
+ * Google twice:
+ *
+ *   - **Server → Google API** (this trigger).
+ *   - **iOS → EventKit → Apple's own Google sync** (`CalendarSyncService`, which already
+ *     writes `EKEvent`s into a BOB calendar the user picks).
+ *
+ * Binding the OAuth secrets above repaired plumbing that had been broken since these
+ * functions became gen 2 — but repairing it also *arms* this path, and turning both on at
+ * once produces exactly the duplication the design is meant to prevent. It would also have
+ * pushed the ~118 BOB blocks already sitting in Firestore into a live calendar the moment
+ * the nightly chain next touched them.
+ *
+ * So the plumbing is fixed and the switch stays off until the ownership question is
+ * settled. A flag beats a commented-out call: it is per-user, reversible, and visible.
+ */
+async function serverPushEnabled(uid) {
+  if (!uid) return false;
+  const snap = await admin.firestore().collection('profiles').doc(uid).get().catch(() => null);
+  return snap?.exists ? snap.data()?.serverPushesToGoogle === true : false;
+}
+
+exports.onCalendarBlockWrite = onDocumentWritten({ document: 'calendar_blocks/{blockId}', region: REGION, secrets: GOOGLE_OAUTH_SECRETS }, async (event) => {
   const blockId = event.params.blockId;
   // v2 delivers the snapshots under event.data, and either side can be undefined on
   // create/delete — v1's change.before/after were always present objects.
   const before = event.data?.before?.exists ? event.data.before.data() : null;
   const after = event.data?.after?.exists ? event.data.after.data() : null;
+
+  const ownerForGate = after?.ownerUid || before?.ownerUid || null;
+  if (!(await serverPushEnabled(ownerForGate))) return;
 
   if (!after) {
     // Delete
@@ -2932,7 +2981,7 @@ async function syncUserCalendar(uid, options = {}) {
 }
 
 // Sync Google Calendar changes back to Firestore (pull-only)
-exports.syncFromGoogleCalendar = onCall({ region: REGION }, async (request) => {
+exports.syncFromGoogleCalendar = onCall({ region: REGION, secrets: GOOGLE_OAUTH_SECRETS }, async (request) => {
   const { data, context } = v1CallableArgs(request);
   if (!context.auth) {
     throw new HttpsError('unauthenticated', 'Must be authenticated');
@@ -2952,7 +3001,7 @@ exports.syncFromGoogleCalendar = onCall({ region: REGION }, async (request) => {
 });
 
 // Manual "sync now" callable (push + pull)
-exports.syncCalendarNow = onCall({ region: REGION }, async (request) => {
+exports.syncCalendarNow = onCall({ region: REGION, secrets: GOOGLE_OAUTH_SECRETS }, async (request) => {
   const { data, context } = v1CallableArgs(request);
   if (!context.auth) {
     throw new HttpsError('unauthenticated', 'Must be authenticated');
@@ -2982,7 +3031,7 @@ function getColorForTheme(theme, themes, eventColors) {
 }
 
 // Scheduled function to sync calendar blocks (runs every hour)
-exports.scheduledCalendarSync = onSchedule({ schedule: 'every 1 hours', region: REGION }, async () => {
+exports.scheduledCalendarSync = onSchedule({ schedule: 'every 1 hours', region: REGION, secrets: GOOGLE_OAUTH_SECRETS }, async () => {
   console.log('Running scheduled calendar sync...');
 
   try {
@@ -3031,7 +3080,7 @@ exports.scheduledCalendarSync = onSchedule({ schedule: 'every 1 hours', region: 
  *
  * Supports dryRun: true to preview matches without writing.
  */
-exports.gcalLinkUnlinkedEvents = onCall({ region: REGION }, async (request) => {
+exports.gcalLinkUnlinkedEvents = onCall({ region: REGION, secrets: GOOGLE_OAUTH_SECRETS }, async (request) => {
   const { data, context } = v1CallableArgs(request);
   const uid = context.auth?.uid;
   if (!uid) throw new HttpsError('unauthenticated', 'Authentication required');
@@ -3149,7 +3198,7 @@ exports.gcalLinkUnlinkedEvents = onCall({ region: REGION }, async (request) => {
  * Automatically links newly created/renamed stories to existing Google-synced
  * calendar blocks that are still unlinked for the same user.
  */
-exports.onStoryCalendarAutoLink = onDocumentWritten({ document: 'stories/{storyId}', region: REGION }, async (event) => {
+exports.onStoryCalendarAutoLink = onDocumentWritten({ document: 'stories/{storyId}', region: REGION, secrets: GOOGLE_OAUTH_SECRETS }, async (event) => {
   const before = event.data?.before?.exists ? (event.data.before.data() || {}) : null;
   const after = event.data?.after?.exists ? (event.data.after.data() || {}) : null;
   if (!after) return;
@@ -3244,7 +3293,7 @@ exports.onStoryCalendarAutoLink = onDocumentWritten({ document: 'stories/{storyI
  * Manual override endpoint for correcting/clearing links between a Google event
  * and a calendar_block. Supports resolving by `blockId` or `eventId`.
  */
-exports.gcalOverrideEventLink = onCall({ region: REGION }, async (request) => {
+exports.gcalOverrideEventLink = onCall({ region: REGION, secrets: GOOGLE_OAUTH_SECRETS }, async (request) => {
   const { data, context } = v1CallableArgs(request);
   const uid = context.auth?.uid;
   if (!uid) throw new HttpsError('unauthenticated', 'Authentication required');
