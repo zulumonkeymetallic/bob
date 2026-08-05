@@ -16,6 +16,53 @@ Answer, per D1: no. The theme block becomes the session. One event.
 
 ---
 
+## 0. The premise was wrong — corrected 2026-08-05
+
+**There were not two producers. There were none.** Before touching anything, the
+live calendar held 706 blocks over a five-week window: 613 from Google, 45 work
+shifts, 26 planner, 21 chores. **Zero fitness blocks of any kind** — no
+`health_allocation`, no `coach_*`.
+
+Three things had to line up for that:
+
+1. **`materializePlannerThemeBlocks` stands down.** Health theme blocks are gated
+   behind `fitnessBlocksAutoCreate`, which is `!hasIronmanCoach`
+   (`nightlyOrchestration.js:3767`). Jim has an umbrella goal and iCal URLs, so
+   the planner deliberately skipped **15 configured Health & Fitness slots** —
+   Walk, S&C, Swim, Run, Bike, a complete weekly skeleton already sitting in
+   `theme_allocations` — in favour of the coach.
+2. **The coach could not see a single session.** `parseICalEvents` guarded on
+   `event.dtstart instanceof Date`. node-ical exposes VEVENT dates as `start`/`end`
+   and has no `dtstart` at all, so the guard skipped all 249 events in the live
+   Runna feed. Every four-hourly poll logged `ical_polled {runnerCount: 0}` — which
+   reads as a healthy run against an empty plan.
+3. **The scheduler had never executed.** It selected profiles with two `!=`
+   filters in one query; Firestore rejects more than one. Both branches threw, the
+   rejection escaped the `Promise.all`, and the 04:30 job died before processing
+   anyone. No `fitness_blocks_scheduled` event has ever been written.
+
+Both coach faults are fixed (`7f10440e`) and verified live: 12 Runna sessions
+cached, **9 coach blocks created** — 7 programme runs plus a phase swim and bike.
+
+### What this changes for the rest of WS4
+
+- The **migration in R2.3 has almost nothing to migrate.** There is no accumulated
+  history of `coach_*` blocks; the nine that now exist were created today.
+- The **double-entry has still not started**, because the planner remains stood
+  down. It would begin the moment `hasIronmanCoach` goes false or the gate is
+  removed — so R1 (fill the theme block in place) should land *before* that gate
+  is touched, not after.
+- **R4 is now the highest-value requirement, not a tidy-up.** Jim's 15 slots
+  describe when he actually trains — Tue/Wed/Thu/Sat 05:30 S&C, Wed 06:30 swim,
+  Fri 18:30 run, Sun 18:00 bike. The coach ignores all of it and uses the
+  hardcoded 06:00/06:30/07:00 literals, so today's nine blocks sit at times he
+  never chose.
+- **The weekly session shape question is answered.** It was blocked on Jim; his
+  own allocations are the answer — 4 S&C, 2 swim, 1 run, 3 bike, 5 walk. That is
+  the seed for `trainingPlan` in WS2 R5.
+
+---
+
 ## 2. Current state
 
 ### 2.1 Two block families both reach Google Calendar
