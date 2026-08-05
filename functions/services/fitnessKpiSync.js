@@ -180,6 +180,9 @@ async function syncUserFitnessKpis(userId) {
 
     const workouts = workoutsSnap.docs
       .map(d => ({ id: d.id, ...d.data() }))
+      // Duplicates are excluded, not summed — the same session arrives from Strava and
+      // from HealthKit as two documents. See services/workoutDedup.js.
+      .filter(w => w.isDuplicate !== true)
       .filter(w => {
         const workoutTime = w.startDate || (w.utcStartDate ? new Date(w.utcStartDate).getTime() : 0);
         return workoutTime > cutoffDate;

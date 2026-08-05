@@ -23,6 +23,8 @@ import FitnessKpiGrid, { FitnessKpiBox, FitnessKpiRow } from './fitness/FitnessK
 import { CoachVerdictBanner } from './coach/CoachVerdictBanner';
 import { resolveGoalKpis } from '../utils/kpiResolver';
 import type { Goal } from '../types';
+import { excludeDuplicateWorkouts } from '../utils/workoutFilters';
+import { activityFromWorkout, groupFor } from '../utils/activityTaxonomy';
 
 const BANNER_TAGS = new Set(['banner', 'daily-banner', 'focus-banner', 'rotation-banner', 'project45']);
 
@@ -160,7 +162,11 @@ const MetricsPage: React.FC = () => {
       orderBy('startDate', 'desc'),
       limit(2000)
     );
-    return onSnapshot(q, snap => setWorkouts(snap.docs.map(d => ({ id: d.id, ...d.data() }))), () => setWorkouts([]));
+    return onSnapshot(
+      q,
+      snap => setWorkouts(excludeDuplicateWorkouts(snap.docs.map(d => ({ id: d.id, ...d.data() })))),
+      () => setWorkouts([]),
+    );
   }, [currentUser?.uid]);
 
   useEffect(() => {
@@ -265,10 +271,13 @@ const MetricsPage: React.FC = () => {
       const wk = getISOWeekKey(new Date(startMs));
       if (!byWeek[wk]) continue;
       const dist = Number(w.distance_m || 0);
-      const sport = String(w.sportType || w.type || '').toLowerCase();
-      if (sport.includes('run') || sport.includes('walk')) byWeek[wk].run_m += dist;
-      else if (sport.includes('swim')) byWeek[wk].swim_m += dist;
-      else if (sport.includes('cycl') || sport.includes('ride') || sport.includes('bike')) byWeek[wk].cycle_m += dist;
+      // Canonical grouping, not substring matching. This counted every walk — and, via
+      // the same clause, every hike — as running distance, so the weekly run target was
+      // met by walking. See utils/activityTaxonomy.ts.
+      const group = groupFor(activityFromWorkout(w));
+      if (group === 'run') byWeek[wk].run_m += dist;
+      else if (group === 'swim') byWeek[wk].swim_m += dist;
+      else if (group === 'cycle') byWeek[wk].cycle_m += dist;
     }
 
     const runKms   = weekKeys.map(k => byWeek[k].run_m   / 1000);

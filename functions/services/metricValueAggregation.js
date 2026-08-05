@@ -143,7 +143,11 @@ async function aggregateMetricValuesForUser(userId, options = {}) {
     .orderBy('startDate', 'desc')
     .get();
 
-  const workouts = snap.docs.map((d) => d.data());
+  // Duplicates are excluded, not summed. The same session reaches BOB from Strava and
+  // from HealthKit as two unrelated documents; `workoutDedup` marks the loser rather than
+  // deleting it, and every consumer that adds distances must skip it or the mileage
+  // doubles. See services/workoutDedup.js.
+  const workouts = snap.docs.map((d) => d.data()).filter((w) => w.isDuplicate !== true);
 
   if (workouts.length === 0) {
     return { written: 0, workouts: 0, providers: [] };

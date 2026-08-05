@@ -208,6 +208,7 @@ const { parseTimeStringToTimeOfDay, populateBlankTimeOfDay, inferTimeOfDayFromCo
 // Import Fitness KPI Sync service
 const { syncAllUsersFitnessKpis, syncUserFitnessKpis } = require('./services/fitnessKpiSync');
 const { aggregateMetricValuesForUser } = require('./services/metricValueAggregation');
+const { dedupeWorkoutsForUser } = require('./services/workoutDedup');
 
 // Import Focus Goals functions
 try {
@@ -399,8 +400,13 @@ const syncFitnessKpis = async () => {
   try {
     const profiles = await admin.firestore().collection('profiles').get();
     let aggregated = 0;
+    let deduped = 0;
     for (const profile of profiles.docs) {
       try {
+        // Dedup first, and not optionally: the aggregation skips `isDuplicate`, so the
+        // marks have to exist before it runs or a Strava/HealthKit pair is summed twice.
+        const dedup = await dedupeWorkoutsForUser(profile.id);
+        deduped += dedup.duplicatesFound;
         const stats = await aggregateMetricValuesForUser(profile.id);
         aggregated += stats.written;
       } catch (e) {
@@ -408,6 +414,7 @@ const syncFitnessKpis = async () => {
         console.error(`[metricValues] aggregation failed uid=${profile.id}:`, e?.message || e);
       }
     }
+    console.log(`✅ workout dedup: ${deduped} duplicates marked`);
     console.log(`✅ metric_values aggregation completed: ${aggregated} rows written`);
 
     const result = await syncAllUsersFitnessKpis();
@@ -431,9 +438,10 @@ exports.syncFitnessKpisNow = httpsV2.onCall({ region: 'europe-west2' }, async (r
     throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
   }
   try {
+    const dedup = await dedupeWorkoutsForUser(uid);
     const aggregation = await aggregateMetricValuesForUser(uid);
     const result = await syncUserFitnessKpis(uid);
-    return { ok: true, ...result, aggregation };
+    return { ok: true, ...result, dedup, aggregation };
   } catch (e) {
     console.error('[fitnessKpiSync] user sync failed:', e);
     throw new httpsV2.HttpsError('internal', e?.message || 'Sync failed');
@@ -462,6 +470,33 @@ exports.aggregateMetricValuesNow = httpsV2.onCall({
   } catch (e) {
     console.error('[metricValues] manual aggregation failed:', e);
     throw new httpsV2.HttpsError('internal', e?.message || 'Aggregation failed');
+  }
+});
+
+/**
+ * Reconcile the caller's workout feed across providers. `dryRun: true` reports what it
+ * would mark without writing — worth running first on a feed that has never been deduped.
+ */
+exports.dedupeWorkoutsNow = httpsV2.onCall({
+  region: 'europe-west2',
+  memory: '512MiB',
+  timeoutSeconds: 300,
+}, async (req) => {
+  const uid = req?.auth?.uid;
+  if (!uid) {
+    throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
+  }
+  try {
+    return {
+      ok: true,
+      ...(await dedupeWorkoutsForUser(uid, {
+        lookbackDays: Number(req?.data?.lookbackDays) || undefined,
+        dryRun: req?.data?.dryRun === true,
+      })),
+    };
+  } catch (e) {
+    console.error('[workoutDedup] failed:', e);
+    throw new httpsV2.HttpsError('internal', e?.message || 'Dedup failed');
   }
 });
 
@@ -15459,11 +15494,31 @@ async function _getFitnessOverview(uid, days) {
   const sinceMs = nowMs - days * 24 * 60 * 60 * 1000;
   const db = admin.firestore();
   const excludeWithDadFromMetrics = await shouldExcludeDadTaggedWorkouts(uid);
-  const workoutsSnap = await db.collection('metrics_workouts').where('ownerUid', '==', uid).limit(1000).get();
+  // Bounded and ordered, rather than an arbitrary 1,000.
+  //
+  // `.limit(1000)` with no `orderBy` returns whichever thousand Firestore feels like on a
+  // collection that is already past 1,800 documents — so totals, YTD and the weekly series
+  // were computed over an unpredictable subset. 400 days covers the 90-day window, the
+  // rolling series and a full year-to-date with room to spare.
+  const overviewSince = Date.now() - 400 * 24 * 60 * 60 * 1000;
+  const workoutsSnap = await db.collection('metrics_workouts')
+    .where('ownerUid', '==', uid)
+    .where('startDate', '>=', overviewSince)
+    .orderBy('startDate', 'desc')
+    .limit(2000)
+    .get();
   const rawWorkouts = workoutsSnap.docs
     .map(d => ({ id: d.id, ...d.data() }))
     .filter((w) => {
-      if (!(w.provider === 'strava' || w.provider === 'parkrun')) return false;
+      // HealthKit counts. This allowed only strava and parkrun, which was accurate while
+      // the phone's workouts could not reach Firestore at all — and became a silent
+      // exclusion the moment they could. A pool swim, a gym session or a turbo ride never
+      // reaches Strava, so under the old filter the sessions HealthKit exists to capture
+      // were the exact ones the overview threw away.
+      if (!['strava', 'parkrun', 'healthkit'].includes(w.provider)) return false;
+      // The same session arrives from two providers as two documents; `workoutDedup`
+      // marks the loser rather than deleting it. Summing both doubles the mileage.
+      if (w.isDuplicate === true) return false;
       if (excludeWithDadFromMetrics && workoutHasDadMarker(w)) return false;
       return true;
     });

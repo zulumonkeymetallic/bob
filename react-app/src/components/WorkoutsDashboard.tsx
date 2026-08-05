@@ -18,6 +18,7 @@ import {
 } from 'chart.js';
 import FitnessKpiGrid from './fitness/FitnessKpiGrid';
 import { activityFromWorkout, groupFor } from '../utils/activityTaxonomy';
+import { excludeDuplicateWorkouts } from '../utils/workoutFilters';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, TimeScale);
 
@@ -529,7 +530,9 @@ const WorkoutsDashboard: React.FC = () => {
       limit(2000)
     );
     const unsub = onSnapshot(qRef, (snap) => {
-      const rows = snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as WorkoutDoc[];
+      const rows = excludeDuplicateWorkouts(
+        snap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as WorkoutDoc[],
+      );
       setWorkouts(rows);
     }, () => setWorkouts([]));
     return () => unsub();

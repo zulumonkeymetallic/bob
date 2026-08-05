@@ -4,6 +4,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { collection, query, where, orderBy, limit, getDocs } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { useAuth } from '../../contexts/AuthContext';
+import { excludeDuplicateWorkouts } from '../../utils/workoutFilters';
 
 interface WorkoutDoc {
   id: string;
@@ -63,7 +64,7 @@ const RunningHeatmap: React.FC = () => {
           limit(500),
         );
         const snap = await getDocs(q);
-        const docs = snap.docs.map(d => d.data() as WorkoutDoc);
+        const docs = excludeDuplicateWorkouts(snap.docs.map(d => d.data() as WorkoutDoc));
         setWorkouts(docs);
       } catch (err) {
         console.error('[RunningHeatmap] fetch error', err);
