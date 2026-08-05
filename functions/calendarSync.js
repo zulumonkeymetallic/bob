@@ -2502,7 +2502,10 @@ exports.onCalendarBlockWrite = onDocumentWritten({ document: 'calendar_blocks/{b
   // `pushOwner` is set when the block is created: on device → 'ios', server-side → 'server'.
   // Each path handles only its own lane. A block with no owner is treated as the server's,
   // which is the safe default for everything the nightly chain and the coach create.
-  const pushOwner = String((after || before)?.pushOwner || 'server').toLowerCase();
+  // Only blocks explicitly handed to the server. Absent means unclaimed, and the device
+  // is the default lane — see CalendarSyncService.shouldSync. Treating absent as 'server'
+  // here would have both paths claiming every unmarked block the moment this is armed.
+  const pushOwner = String((after || before)?.pushOwner || '').toLowerCase();
   if (pushOwner !== 'server') return;
 
   if (!after) {
