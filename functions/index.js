@@ -213,6 +213,7 @@ const { parseTimeStringToTimeOfDay, populateBlankTimeOfDay, inferTimeOfDayFromCo
 const { syncAllUsersFitnessKpis, syncUserFitnessKpis } = require('./services/fitnessKpiSync');
 const { aggregateMetricValuesForUser } = require('./services/metricValueAggregation');
 const { dedupeWorkoutsForUser } = require('./services/workoutDedup');
+const { resolveAndPersistForOwner } = require('./services/kpiResolution');
 
 // Import Focus Goals functions
 try {
@@ -405,6 +406,9 @@ const syncFitnessKpis = async () => {
     const profiles = await admin.firestore().collection('profiles').get();
     let aggregated = 0;
     let deduped = 0;
+    let resolvedGoals = 0;
+    let resolvedKpis = 0;
+    let legacyOnly = 0;
     for (const profile of profiles.docs) {
       try {
         // Dedup first, and not optionally: the aggregation skips `isDuplicate`, so the
@@ -413,6 +417,13 @@ const syncFitnessKpis = async () => {
         deduped += dedup.duplicatesFound;
         const stats = await aggregateMetricValuesForUser(profile.id);
         aggregated += stats.written;
+        // Resolve kpisV2 server-side. Until this existed, KPI values were computed only
+        // in the browser, so a value was as current as the last time a tab happened to be
+        // open — and nothing reached iOS, a notification, or the coach.
+        const kpiStats = await resolveAndPersistForOwner(profile.id);
+        resolvedGoals += kpiStats.goalsResolved;
+        resolvedKpis += kpiStats.kpisResolved;
+        legacyOnly += kpiStats.legacyOnlyGoals || 0;
       } catch (e) {
         // One user's workout history must not stop everyone else's KPIs updating.
         console.error(`[metricValues] aggregation failed uid=${profile.id}:`, e?.message || e);
@@ -420,10 +431,24 @@ const syncFitnessKpis = async () => {
     }
     console.log(`✅ workout dedup: ${deduped} duplicates marked`);
     console.log(`✅ metric_values aggregation completed: ${aggregated} rows written`);
+    console.log(`✅ kpisV2 resolved server-side: ${resolvedKpis} KPIs across ${resolvedGoals} goals`);
 
-    const result = await syncAllUsersFitnessKpis();
-    console.log(`✅ Fitness KPI sync completed: ${result.totalSynced} goals updated`);
-    return { ...result, metricValuesWritten: aggregated };
+    // syncAllUsersFitnessKpis is deliberately NOT called here any more.
+    //
+    // It reads the legacy `kpis` array and infers each metric's meaning from substrings of
+    // its display name, so renaming a KPI silently stops it counting. resolveAndPersistForOwner
+    // above supersedes it, resolving `kpisV2` from declared bindings.
+    //
+    // Its `where('kpis','!=',null)` query also needs a composite index that does not exist,
+    // and it threw FAILED_PRECONDITION mid-chain — taking the new resolver's work down with
+    // it. Adding an index for a path being retired would be the wrong fix.
+    //
+    // The module and its callable remain for goals that still carry only legacy `kpis`;
+    // migrating those to kpisV2 is WS2 R1, and `legacyOnly` counts how many are waiting.
+    if (legacyOnly > 0) {
+      console.warn(`⚠️ ${legacyOnly} goal(s) still carry only legacy kpis and were not resolved — see WS2 R1`);
+    }
+    return { metricValuesWritten: aggregated, resolvedGoals, resolvedKpis, legacyOnly, deduped };
   } catch (e) {
     console.error('[fitnessKpiSync] failed', e?.message || e);
     throw e;
@@ -431,12 +456,21 @@ const syncFitnessKpis = async () => {
 };
 
 exports.syncFitnessKpisNightly = schedulerV2.onSchedule(
-  { schedule: '30 3 * * *', timeZone: 'UTC', region: 'europe-west2' },
+  { schedule: '30 3 * * *', timeZone: 'UTC', region: 'europe-west2', memory: '1GiB', timeoutSeconds: 540 },
   syncFitnessKpis
 );
 
 // Manual per-user sync endpoint
-exports.syncFitnessKpisNow = httpsV2.onCall({ region: 'europe-west2' }, async (req) => {
+// 512MiB/300s. The resolver walks every goal's kpisV2 and runs several Firestore queries
+// per KPI, on top of the dedup and aggregation passes this callable already chains. The
+// 256MiB/60s default was sized for the old name-matching sync that read one collection.
+// Fifth function today to hit the same ceiling — the defaults suited the jobs these were
+// originally written for and not what they grew into.
+exports.syncFitnessKpisNow = httpsV2.onCall({
+  region: 'europe-west2',
+  memory: '512MiB',
+  timeoutSeconds: 300,
+}, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) {
     throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
@@ -444,8 +478,8 @@ exports.syncFitnessKpisNow = httpsV2.onCall({ region: 'europe-west2' }, async (r
   try {
     const dedup = await dedupeWorkoutsForUser(uid);
     const aggregation = await aggregateMetricValuesForUser(uid);
-    const result = await syncUserFitnessKpis(uid);
-    return { ok: true, ...result, dedup, aggregation };
+    const kpiResolution = await resolveAndPersistForOwner(uid);
+    return { ok: true, dedup, aggregation, kpiResolution };
   } catch (e) {
     console.error('[fitnessKpiSync] user sync failed:', e);
     throw new httpsV2.HttpsError('internal', e?.message || 'Sync failed');
