@@ -133,13 +133,17 @@ async function aggregateMetricValuesForUser(userId, options = {}) {
   const lookbackDays = Number(options.lookbackDays || 400);
   const since = Date.now() - lookbackDays * 24 * 60 * 60 * 1000;
 
+  // Bounded in the query, not in memory. Fetching the whole collection and filtering
+  // afterwards is what OOM'd `enrichRecentStravaHr` at 256MiB during the 2026-08-05
+  // backfill; this function was written with the same shape and would have grown into the
+  // same wall. The composite index (ownerUid, startDate DESC) already exists.
   const snap = await db.collection('metrics_workouts')
     .where('ownerUid', '==', userId)
+    .where('startDate', '>=', since)
+    .orderBy('startDate', 'desc')
     .get();
 
-  const workouts = snap.docs
-    .map((d) => d.data())
-    .filter((w) => Number(w.startDate || 0) >= since);
+  const workouts = snap.docs.map((d) => d.data());
 
   if (workouts.length === 0) {
     return { written: 0, workouts: 0, providers: [] };

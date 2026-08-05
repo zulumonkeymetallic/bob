@@ -445,7 +445,13 @@ exports.syncFitnessKpisNow = httpsV2.onCall({ region: 'europe-west2' }, async (r
  * KPIs. Useful after a Strava backfill or a max-HR change, where the workout rows have
  * moved but the goals have not.
  */
-exports.aggregateMetricValuesNow = httpsV2.onCall({ region: 'europe-west2' }, async (req) => {
+exports.aggregateMetricValuesNow = httpsV2.onCall({
+  region: 'europe-west2',
+  // A year of workouts fans out into thousands of per-period rows across six
+  // granularities. The defaults (256MiB/60s) are not enough to rebuild a history.
+  memory: '512MiB',
+  timeoutSeconds: 300,
+}, async (req) => {
   const uid = req?.auth?.uid;
   if (!uid) {
     throw new httpsV2.HttpsError('unauthenticated', 'Sign in required');
@@ -13849,22 +13855,31 @@ async function enrichRecentStravaHr(uid, days = 30, options = {}) {
   const db = admin.firestore();
   // Once for the whole run, rather than a profile read per activity.
   const { maxHr, source: maxHrSource } = await resolveUserMaxHr(uid);
+  // Bounded by date in the query, and ordered by Firestore rather than in memory.
+  //
+  // This used to fetch *every* Strava workout ever recorded, sort the whole array, and
+  // then discard everything outside the window with an in-loop `continue`. On a 256MiB
+  // function that is a memory bomb that grows with the training history, and it detonated
+  // on 2026-08-05 during the max-HR backfill: "Memory limit of 256 MiB exceeded with 260
+  // MiB used", returning a bare 500 with no indication of the cause.
+  //
+  // The composite index (ownerUid, provider, startDate DESC) already exists.
   const q = await db.collection('metrics_workouts')
     .where('ownerUid', '==', uid)
     .where('provider', '==', 'strava')
+    .where('startDate', '>=', since)
+    .orderBy('startDate', 'desc')
     .get();
-  const docs = q.docs.slice().sort((a, b) => {
-    const ad = Number(a.data()?.startDate || 0);
-    const bd = Number(b.data()?.startDate || 0);
-    return bd - ad;
-  });
+  const docs = q.docs;
   let enriched = 0;
   let scanned = 0;
   let eligible = 0;
   let skippedExisting = 0;
+  // Eligible, not already current, and not attempted this pass because of the cap.
+  let pending = 0;
   for (const d of docs) {
     const w = d.data();
-    if ((w.startDate || 0) < since) continue;
+    // The date bound is enforced by the query now, not here.
     if (!w.hasHeartrate && !w.avgHeartrate) continue;
     eligible++;
     // Zones computed against a different max HR do not count as "existing" — they
@@ -13876,19 +13891,38 @@ async function enrichRecentStravaHr(uid, days = 30, options = {}) {
       skippedExisting++;
       continue;
     }
-    if (scanned >= maxActivities) break;
+    // Count what still needs doing even after the work cap is reached.
+    //
+    // This used to `break` here, which meant `eligible` stopped growing at the cap and
+    // `remaining = eligible - skippedExisting - scanned` collapsed to roughly zero on
+    // every pass. A caller looping "until remaining is 0" therefore stopped after one
+    // pass believing it was finished — which is exactly what happened during the
+    // 2026-08-05 backfill, leaving nine in-window activities on the old max HR while the
+    // function reported completion.
+    if (scanned >= maxActivities) {
+      pending++;
+      continue;
+    }
     scanned++;
     const actId = String(w.stravaActivityId || '').trim();
     if (!actId) continue;
     const r = await enrichActivityHr(uid, actId, { maxHr, maxHrSource, force }).catch(() => null);
     if (r?.ok) enriched++;
   }
-  const remaining = Math.max(0, eligible - skippedExisting - scanned);
-  return { ok: true, enriched, scanned, eligible, skippedExisting, remaining, maxHr, maxHrSource };
+  // `pending` is the honest count: eligible work the cap prevented this pass from doing.
+  // A caller can loop on it and actually reach the end.
+  return { ok: true, enriched, scanned, eligible, skippedExisting, remaining: pending, maxHr, maxHrSource };
 }
 
 // Enrich recent Strava runs with HR zone breakdown
-exports.enrichStravaHR = httpsV2.onCall({ secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET] }, async (req) => {
+// 512MiB and 300s: a heart-rate stream for a long ride is a large JSON array, and a
+// backfill pass fetches several in sequence. The default 256MiB/60s was enough for the
+// incremental case this was written for and not for re-enriching a history.
+exports.enrichStravaHR = httpsV2.onCall({
+  secrets: [STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET],
+  memory: '512MiB',
+  timeoutSeconds: 300,
+}, async (req) => {
   if (!req || !req.auth) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
   const uid = req.auth.uid;
   const days = Math.min(Number(req.data?.days || 30), 3650);
