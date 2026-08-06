@@ -35,7 +35,7 @@ exports.exchangeGoogleOAuthCode = https.onCall(
         body: new URLSearchParams({
           code: String(code),
           client_id: String(clientId),
-          client_secret: String(process.env.GOOGLE_OAUTH_CLIENT_SECRET || ''),
+          client_secret: String(process.env.GOOGLE_OAUTH_CLIENT_SECRET || '').trim(),
           redirect_uri: String(redirectUri),
           grant_type: 'authorization_code',
         }).toString(),
@@ -146,7 +146,7 @@ exports.exchangeGoogleOAuthCodeLite = https.onCall(
         body: new URLSearchParams({
           code: String(code),
           client_id: String(clientId),
-          client_secret: String(process.env.GOOGLE_OAUTH_CLIENT_SECRET || ''),
+          client_secret: String(process.env.GOOGLE_OAUTH_CLIENT_SECRET || '').trim(),
           redirect_uri: String(redirectUri),
           grant_type: 'authorization_code',
         }).toString(),

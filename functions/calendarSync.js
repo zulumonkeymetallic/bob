@@ -1112,8 +1112,13 @@ function getGoogleOAuthConfig() {
   // function in this file is gen 2 — so the try/catch around it was pure ceremony. It is also
   // removed outright in firebase-functions v7, where the call would throw a TypeError instead
   // of the HttpsError the old catch was written for. Env vars are, and were, authoritative.
-  const clientId = env.GOOGLE_OAUTH_CLIENT_ID;
-  const clientSecret = env.GOOGLE_OAUTH_CLIENT_SECRET;
+  // Trimmed, because the stored GOOGLE_OAUTH_CLIENT_SECRET carries a trailing newline (36 bytes
+  // against 35 of content — an artefact of how it was piped into Secret Manager). Every consumer
+  // in index.js already trims, which is why the OAuth callback, listUpcomingEvents and the plan
+  // push all worked while every pull from here failed with a bare `invalid_client`: Google was
+  // being handed a secret with a "\n" on the end. Verified against Secret Manager 2026-08-06.
+  const clientId = String(env.GOOGLE_OAUTH_CLIENT_ID || '').trim();
+  const clientSecret = String(env.GOOGLE_OAUTH_CLIENT_SECRET || '').trim();
   const redirectUri = projectId
     ? `https://${region}-${projectId}.cloudfunctions.net/oauthCallback`
     : undefined;
@@ -2798,8 +2803,13 @@ async function pullGoogleEventsForUser(uid, { windowStart, windowEnd }) {
     // off by LEGACY_GCAL_IMPORT — so the display had been frozen since whenever that path
     // last ran, with nothing since keeping it current. Confirmed by Jim, 2026-07-24 (showing
     // "7 months ago"). Write it here instead, where the actual current sync succeeds.
+    // googleCalendarConnected rides along for the same reason: `tokens` and `users` are
+    // server-only under firestore.rules, so the profile is the only place the browser can see
+    // whether Calendar is connected. A pull that succeeded had working credentials by
+    // definition, which makes this the most reliable evidence there is.
     await db.collection('profiles').doc(uid).set({
       googleCalendarLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+      googleCalendarConnected: true,
     }, { merge: true }).catch(() => {});
     return { counts, syncResults };
   } catch (error) {
