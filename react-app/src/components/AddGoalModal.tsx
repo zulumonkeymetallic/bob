@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Modal, Button, Form, Alert } from 'react-bootstrap';
 import { db } from '../firebase';
 import { collection, addDoc, getDocs, query, where, serverTimestamp } from 'firebase/firestore';
@@ -54,7 +54,39 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<string | null>(null);
   const { themes } = useGlobalThemes();
+  // The displayed text is its own state, never derived from formData.theme with a falsy
+  // fallback. It used to be `themeInput || label(formData.theme) || ''`, which meant clearing
+  // the box to type a new theme instantly refilled it with the label for the default theme
+  // (id 1, Health & Fitness) — so the field read as "stuck" on Health & Fitness no matter
+  // what you picked. Same resolve/label helpers as EditGoalModal, which already worked.
   const [themeInput, setThemeInput] = useState('');
+  const [themeTouched, setThemeTouched] = useState(false);
+  const resolveThemeId = useCallback((input: string, fallback: number) => {
+    const trimmed = (input || '').trim();
+    if (!trimmed) return fallback;
+    const normalize = (value: string) =>
+      value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const normalizedInput = normalize(trimmed);
+    const match = themes.find(t => {
+      const label = t.label || '';
+      const name = t.name || '';
+      return (
+        normalize(label) === normalizedInput ||
+        normalize(name) === normalizedInput ||
+        normalize(String(t.id)) === normalizedInput ||
+        normalize(label).includes(normalizedInput) ||
+        normalize(name).includes(normalizedInput)
+      );
+    });
+    if (match) return match.id;
+    const numeric = Number.parseInt(trimmed, 10);
+    return Number.isFinite(numeric) ? numeric : fallback;
+  }, [themes]);
+  const themeLabelForId = useCallback((value: any) => {
+    if (value == null) return '';
+    const match = themes.find(t => String(t.id) === String(value));
+    return match?.label || match?.name || String(value);
+  }, [themes]);
   const [monzoPots, setMonzoPots] = useState<Array<{ id: string; name: string }>>([]);
   const [parentGoalSearch, setParentGoalSearch] = useState('');
   const [candidateParents, setCandidateParents] = useState<Array<{ id: string; title: string; ref?: string }>>([]);
@@ -100,6 +132,18 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
     };
     loadPots();
   }, [show, currentUser]);
+
+  // Seed the visible label from the committed theme id, but only while the user hasn't typed
+  // in the box — once they have, their text wins until blur resolves it.
+  useEffect(() => {
+    if (!show) {
+      if (themeTouched) setThemeTouched(false);
+      return;
+    }
+    if (themeTouched) return;
+    const nextLabel = themeLabelForId(formData.theme);
+    if (nextLabel && nextLabel !== themeInput) setThemeInput(nextLabel);
+  }, [show, themeTouched, themeInput, formData.theme, themeLabelForId]);
 
   // KPI Management functions
   const addKPI = () => {
@@ -252,6 +296,8 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
       setFormData(emptyForm);
       setParentGoalSearch('');
       setPotSearch('');
+      setThemeInput('');
+      setThemeTouched(false);
       
       // Auto-close after success
       setTimeout(() => {
@@ -275,6 +321,8 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
     setFormData(emptyForm);
     setParentGoalSearch('');
     setPotSearch('');
+    setThemeInput('');
+    setThemeTouched(false);
     setSubmitResult(null);
     onClose();
   };
@@ -447,19 +495,33 @@ const AddGoalModal: React.FC<AddGoalModalProps> = ({ onClose, show }) => {
                 <Form.Label>Theme</Form.Label>
                 <Form.Control
                   list="goal-theme-options"
-                  value={themeInput || (themes.find(t => t.id === formData.theme)?.label) || ''}
-                  onChange={(e) => setThemeInput(e.target.value)}
+                  value={themeInput}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setThemeInput(value);
+                    if (!themeTouched) setThemeTouched(true);
+                    setFormData(prev => ({ ...prev, theme: resolveThemeId(value, prev.theme) }));
+                  }}
                   onBlur={() => {
-                    const val = themeInput;
-                    const match = themes.find(t => t.label === val || t.name === val || String(t.id) === val);
-                    setFormData({ ...formData, theme: match ? match.id : (parseInt(val) || formData.theme) });
+                    // Snap the text back to the resolved theme's canonical label, so what's shown
+                    // can never disagree with what gets saved. Resolved from this render's values
+                    // rather than inside a setState updater — a nested updater runs during the
+                    // next render, so the label it computes arrives too late to be returned.
+                    const resolved = resolveThemeId(themeInput, formData.theme);
+                    setFormData(prev => ({ ...prev, theme: resolved }));
+                    setThemeInput(themeLabelForId(resolved) || '');
                   }}
                   placeholder="Search themes..."
                 />
                 <datalist id="goal-theme-options">
-                  {themes.map(t => (
-                    <option key={t.id} value={t.label} />
-                  ))}
+                  {themes.map(t => {
+                    const display = t.label || t.name || `${t.id}`;
+                    return <option key={`label-${t.id}`} value={display} />;
+                  })}
+                  {themes.map(t => {
+                    if (!t.name || t.name === t.label) return null;
+                    return <option key={`name-${t.id}`} value={t.name} />;
+                  })}
                 </datalist>
               </Form.Group>
             </div>

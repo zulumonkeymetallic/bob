@@ -12,6 +12,7 @@ import { formatDistanceToNow } from 'date-fns';
 interface ProfileData {
   googleCalendarLastSyncAt?: any;
   googleCalendarEventCount?: number;
+  googleCalendarConnected?: boolean;
   defaultJournalDocUrl?: string;
   journalEditorPrompt?: string;
   aiPersonality?: {
@@ -350,21 +351,38 @@ const IntegrationSettings: React.FC<IntegrationSettingsProps> = ({ section = 'al
     );
   }, [monzoPots, monzoTransactions.length]);
 
+  // Google was the only integration whose connected state came from a one-shot callable with
+  // no retry: a single transient failure (cold start, timeout) latched "Not Connected" until
+  // the page was reloaded, while sync carried on importing events perfectly happily. The
+  // profile flag — written by oauthCallback, every successful sync, and backfilled by
+  // calendarStatus itself — is the live source of truth; the callable now only ever upgrades
+  // the answer, never downgrades it.
   useEffect(() => {
+    if (!currentUser) return;
+    let cancelled = false;
     const loadStatus = async () => {
-      if (!currentUser) return;
       try {
         const calendarStatus = httpsCallable(functions, 'calendarStatus');
         const res = await calendarStatus({});
         const data = res.data as any;
-        setGoogleConnected(!!data?.connected);
+        if (!cancelled && data?.connected) setGoogleConnected(true);
       } catch (err) {
-        console.error('calendarStatus failed', err);
-        setGoogleConnected(false);
+        // Non-fatal: the profile flag below already answers this. Logged, not latched.
+        console.warn('calendarStatus failed; falling back to profile flag', err);
       }
     };
     loadStatus();
+    return () => { cancelled = true; };
   }, [currentUser]);
+
+  useEffect(() => {
+    if (profile === null) return;
+    const flag = (profile as any)?.googleCalendarConnected;
+    // Treat a recent successful sync as proof of connection for accounts that predate the
+    // flag and haven't called calendarStatus yet.
+    const syncedRecently = !!profile?.googleCalendarLastSyncAt;
+    setGoogleConnected(flag === true || (flag === undefined && syncedRecently));
+  }, [profile]);
 
   const connectGoogle = () => {
     if (!currentUser) return;

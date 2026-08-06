@@ -5122,6 +5122,18 @@ exports.oauthCallback = httpsV2.onRequest({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GO
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
 
+    // Mirror connectivity onto the client-readable profile. Without this the UI's only signal
+    // was the calendarStatus callable, fetched once with no retry — one transient failure and
+    // the screen read "Not Connected" until a reload, while sync carried on fine.
+    try {
+      await db.collection('profiles').doc(uid).set({
+        googleCalendarConnected: true,
+        googleCalendarConnectedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+    } catch (profileError) {
+      console.warn('oauthCallback: failed to stamp profile connected flag', profileError?.message || profileError);
+    }
+
     res.status(200).send("<script>window.close();</script>Connected. You can close this window.");
   } catch (e) {
     try { console.error('OAuth callback error:', e?.message || e); } catch { }
@@ -6036,8 +6048,18 @@ exports.fetchDashboardData = httpsV2.onCall({ memory: '1GiB' }, async (req) => {
 });
 
 
-// 15-min backstop transaction sync
-exports.monzoBackstopSync = schedulerV2.onSchedule({ schedule: 'every 15 minutes', memory: '512MiB' }, async () => {
+// 15-min backstop transaction sync.
+// Declares the Monzo secrets explicitly: it reaches syncMonzoDataForUser, which decrypts the
+// stored refresh token. Without the declaration the deployed service kept whatever secret
+// versions an older deploy had bound (encryption key v1 while monzoOAuthCallback had moved to
+// v2), so from 2026-08-06 it failed every 15 minutes with the AES-GCM tag error
+// "Unsupported state or unable to authenticate data" — which reads as a dead Monzo connection
+// but was only ever a stale key binding.
+exports.monzoBackstopSync = schedulerV2.onSchedule({
+  schedule: 'every 15 minutes',
+  memory: '512MiB',
+  secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
+}, async () => {
   const db = admin.firestore();
   const tokens = await db.collection('tokens').where('provider', '==', 'monzo').get();
   for (const t of tokens.docs) {
@@ -6220,7 +6242,12 @@ exports.monzoTransferPlan = httpsV2.onCall({
   return { ok: true, plan, transfers, executed };
 });
 
-exports.processMonzoSyncJob = firestoreV2.onDocumentCreated('monzo_sync_jobs/{jobId}', {
+// onDocumentCreated takes (document, handler) or (opts, handler) — never three arguments.
+// Called with three, the options object was silently taken as the handler and the real handler
+// dropped, so this trigger ran a no-op with none of its secrets or memory applied: every job
+// written to monzo_sync_jobs was accepted and then quietly never processed.
+exports.processMonzoSyncJob = firestoreV2.onDocumentCreated({
+  document: 'monzo_sync_jobs/{jobId}',
   secrets: [MONZO_CLIENT_ID, MONZO_CLIENT_SECRET, MONZO_TOKEN_ENCRYPTION_KEY],
   memory: '512MiB',
 }, async (event) => {
@@ -9892,9 +9919,13 @@ async function importGoogleCalendarEvents(uid, { startDate, endDate }) {
     console.warn(`[gcal-sync] failed stale cleanup for ${uid}`, error.message);
   }
 
+  // A sync that got this far necessarily had working credentials, so it is the most reliable
+  // evidence of "connected" there is — record it where the client can actually read it
+  // (profiles/{uid}; `tokens` and `users` are both server-only under firestore.rules).
   await db.collection('profiles').doc(uid).set({
     googleCalendarLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
     googleCalendarEventCount: seenDocIds.size,
+    googleCalendarConnected: true,
   }, { merge: true });
 
   try {
@@ -14248,6 +14279,14 @@ exports.calendarStatus = httpsV2.onCall(async (req) => {
   const legacy = legacyDoc && legacyDoc.exists ? legacyDoc.data() : {};
   const user = userDoc && userDoc.exists ? userDoc.data() : {};
   const connected = !!(user.googleCalendarTokens || legacy.refresh_token);
+  // Backfill the profile flag so accounts connected before it existed self-heal on the next
+  // call, rather than needing a pointless reconnect to fix a display-only problem.
+  try {
+    await admin.firestore().collection('profiles').doc(uid)
+      .set({ googleCalendarConnected: connected }, { merge: true });
+  } catch (profileError) {
+    console.warn('calendarStatus: failed to sync profile connected flag', profileError?.message || profileError);
+  }
   return {
     connected,
     hasUserTokens: !!user.googleCalendarTokens,
@@ -14266,6 +14305,9 @@ exports.disconnectGoogle = httpsV2.onCall({ secrets: [GOOGLE_OAUTH_CLIENT_ID, GO
     // fallback: clear refresh_token if delete fails due to rules
     try { await db.collection('tokens').doc(uid).set({ refresh_token: admin.firestore.FieldValue.delete(), updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true }); } catch { }
   }
+  try {
+    await db.collection('profiles').doc(uid).set({ googleCalendarConnected: false }, { merge: true });
+  } catch { }
   try {
     const ref = db.collection('activity_stream').doc();
     await ref.set({

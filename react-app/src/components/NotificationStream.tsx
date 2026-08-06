@@ -32,10 +32,16 @@ import { useDeviceInfo } from '../utils/deviceDetection';
 interface StreamSectionProps {
   id: string;
   onVisibilityChange: (id: string, visible: boolean) => void;
+  /**
+   * Flex order within the panel. Sections render in JSX order by default (order 0); a negative
+   * value floats one to the top without moving it in the tree — remounting it would drop its
+   * Firestore subscriptions and any in-flight OAuth state every time its severity changed.
+   */
+  order?: number;
   children: React.ReactNode;
 }
 
-const StreamSection: React.FC<StreamSectionProps> = ({ id, onVisibilityChange, children }) => {
+const StreamSection: React.FC<StreamSectionProps> = ({ id, onVisibilityChange, order = 0, children }) => {
   const innerRef = useRef<HTMLDivElement>(null);
   const [hasContent, setHasContent] = useState(false);
 
@@ -57,6 +63,7 @@ const StreamSection: React.FC<StreamSectionProps> = ({ id, onVisibilityChange, c
     <div
       style={{
         display: hasContent ? 'block' : 'none',
+        order,
         paddingBottom: 8, marginBottom: 8,
         borderBottom: '1px solid var(--border, #e5e7eb)',
       }}
@@ -97,9 +104,24 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
     setVisibleMap((prev) => (prev[id] === visible ? prev : { ...prev, [id]: visible }));
   }, []);
 
-  const activeCount = useMemo(() => Object.values(visibleMap).filter(Boolean).length, [visibleMap]);
-  const hasContent = activeCount > 0;
-  const prominent = activeCount > 1;
+  // An integration with no successful sync for more than 3 days outranks everything else in
+  // the panel — per Jim, 2026-08-06. Everything below it is advisory; a dead Monzo or Calendar
+  // feed means the numbers the rest of the stream is reasoning about are quietly wrong.
+  const [integrationCritical, setIntegrationCritical] = useState(false);
+  const handleIntegrationCritical = useCallback((critical: boolean) => {
+    setIntegrationCritical((prev) => (prev === critical ? prev : critical));
+  }, []);
+
+  // The integrations section is always populated now that it reports healthy last-sync times as
+  // well as failures, so counting it would peg the bell permanently at "prominent" and drain
+  // that signal of meaning. It contributes to the count only when something is actually broken.
+  const alertCount = useMemo(
+    () => Object.entries(visibleMap).filter(([id, visible]) => visible && id !== 'integration').length,
+    [visibleMap]
+  );
+  const activeCount = alertCount + (integrationCritical ? 1 : 0);
+  const hasContent = Object.values(visibleMap).some(Boolean);
+  const prominent = activeCount > 1 || integrationCritical;
 
   // Both this panel and GlobalSidebar's Activity Stream dock to the right edge. Previously,
   // pinning notifications while the Activity Stream was also open collapsed this panel down
@@ -179,7 +201,10 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
     <div
       ref={panelRef}
       style={{
-        display: open ? 'block' : 'none',
+        // Flex column so sections can be reordered via `order` (see StreamSection) rather than
+        // by moving them in the tree.
+        display: open ? 'flex' : 'none',
+        flexDirection: 'column',
         position: 'fixed',
         ...(effectivePinned
           ? { top: 56, right: activityStreamReservedWidth, bottom: 0, borderRadius: 0 }
@@ -203,7 +228,8 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
         zIndex: Z.panel,
       }}
     >
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 4, marginBottom: 4 }}>
+      {/* order -2 keeps the pin/close controls above anything a section floats to the top. */}
+      <div style={{ display: 'flex', order: -2, justifyContent: 'flex-end', gap: 4, marginBottom: 4 }}>
         {/* Pinning permanently docks the panel — meaningless on mobile (no room to reserve
             a permanent 340px strip), so the toggle is hidden there rather than shown as a
             no-op. */}
@@ -265,11 +291,16 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
       <StreamSection id="focusGoals" onVisibilityChange={handleVisibilityChange}>
         <GlobalGoalFocusBanner />
       </StreamSection>
-      {isLargeScreen && (
-        <StreamSection id="integration" onVisibilityChange={handleVisibilityChange}>
-          <GlobalIntegrationStatus />
-        </StreamSection>
-      )}
+      {/* Not gated on screen size: unlike the fitness/health KPI panels above, this is a
+          broken-plumbing warning, and a dead Monzo or Calendar feed matters at least as much on
+          a phone. Floats above every other section while anything is critical. */}
+      <StreamSection
+        id="integration"
+        onVisibilityChange={handleVisibilityChange}
+        order={integrationCritical ? -1 : 0}
+      >
+        <GlobalIntegrationStatus onCriticalChange={handleIntegrationCritical} />
+      </StreamSection>
     </div>
   );
 
@@ -325,20 +356,24 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
         }}
       >
         <Bell size={16} />
-        <span
-          style={{
-            position: 'absolute', top: 1, right: 1,
-            minWidth: 14, height: 14, padding: '0 3px',
-            borderRadius: 7,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 9, fontWeight: 700, lineHeight: 1,
-            background: prominent ? 'var(--brand, #5f77dc)' : 'var(--muted, #9ca3af)',
-            color: '#fff',
-            border: '1.5px solid var(--panel, #fff)',
-          }}
-        >
-          {activeCount}
-        </span>
+        {/* No badge at zero: the panel is now always reachable (it carries healthy last-sync
+            times too), so a permanent "0" would be noise rather than a count. */}
+        {activeCount > 0 && (
+          <span
+            style={{
+              position: 'absolute', top: 1, right: 1,
+              minWidth: 14, height: 14, padding: '0 3px',
+              borderRadius: 7,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 9, fontWeight: 700, lineHeight: 1,
+              background: prominent ? 'var(--brand, #5f77dc)' : 'var(--muted, #9ca3af)',
+              color: '#fff',
+              border: '1.5px solid var(--panel, #fff)',
+            }}
+          >
+            {activeCount}
+          </span>
+        )}
       </button>
 
       {host ? createPortal(overlay, host) : overlay}
