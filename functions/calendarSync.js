@@ -745,12 +745,25 @@ function parseColorToRgb(value) {
   return null;
 }
 
+/**
+ * Perceptual-ish colour distance ("redmean"), not plain RGB Euclidean.
+ *
+ * Straight Euclidean distance in RGB does not match how the eye groups colours, and it picked
+ * visibly wrong Google colours: Career & Professional's orange (#fd7e14) landed on Tomato red
+ * rather than Tangerine, because red differs less numerically than green does even though the
+ * orange is obviously the closer hue. Weighting the channels by where in the red range the two
+ * colours sit fixes those without needing a full Lab conversion.
+ * https://en.wikipedia.org/wiki/Color_difference#sRGB
+ */
 function colorDistance(a, b) {
   if (!a || !b) return Number.POSITIVE_INFINITY;
+  const rMean = (a.r + b.r) / 2;
   const dr = a.r - b.r;
   const dg = a.g - b.g;
   const db = a.b - b.b;
-  return (dr * dr) + (dg * dg) + (db * db);
+  return (((512 + rMean) * dr * dr) / 256)
+    + (4 * dg * dg)
+    + (((767 - rMean) * db * db) / 256);
 }
 
 function pickThemeColor(theme) {
@@ -778,8 +791,32 @@ function findThemeMatch(themeId, themeLabel, themes) {
   return prefixed.length === 1 ? prefixed[0] : null;
 }
 
+/** 0 = pure grey, 1 = fully saturated. */
+function colorSaturation({ r, g, b }) {
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  return max === 0 ? 0 : (max - min) / max;
+}
+
+// 0.18 catches the near-neutrals actually in use — General #6c757d sits at 0.14 — while leaving
+// a blue-grey like Random #64748b (0.28) to match Blueberry on hue, which is what it looks like.
+const GREY_SATURATION_CEILING = 0.18;
+
 function findClosestGoogleEventColorId(themeRgb, eventColors) {
   if (!themeRgb || !eventColors) return null;
+
+  // Every colour Google offers is a light pastel, and its only neutral (Graphite, #e1e1e1) is
+  // pale. A dark grey theme is numerically far from it in any metric, so nearest-match sent
+  // General, Work (Main Gig), Chores and Random off to Basil green and Lavender. Hue matters
+  // more than lightness here: a grey theme wants the grey swatch whatever its brightness.
+  if (colorSaturation(themeRgb) <= GREY_SATURATION_CEILING) {
+    const graphite = Object.entries(eventColors).find(([, color]) => {
+      const rgb = parseColorToRgb(color?.background);
+      return rgb && colorSaturation(rgb) <= GREY_SATURATION_CEILING;
+    });
+    if (graphite) return graphite[0];
+  }
+
   let bestId = null;
   let bestDistance = Number.POSITIVE_INFINITY;
   for (const [id, color] of Object.entries(eventColors)) {
@@ -2476,6 +2513,7 @@ exports._evaluateGoogleSyncPolicyForBlock = evaluateGoogleSyncPolicyForBlock;
 exports._resolvePushOwner = resolvePushOwner;
 exports._resolveThemeLabelForBlock = resolveThemeLabelForBlock;
 exports._findThemeMatch = findThemeMatch;
+exports._resolveGoogleEventColorId = resolveGoogleEventColorId;
 exports._isFitnessBlock = isFitnessBlock;
 exports._pushPendingBlocksForAllUsers = async function() {
   const db = admin.firestore();
