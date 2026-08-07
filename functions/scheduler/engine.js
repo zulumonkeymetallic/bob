@@ -591,7 +591,11 @@ async function computeStoryOccurrences(stories, windowStart, windowEnd, userId, 
     const ownerUid = story.ownerUid || userId;
     if (!ownerUid) continue;
     const status = String(story.status ?? '').toLowerCase();
-    if (status === 'done' || status === 'complete' || status === 'completed' || Number(story.status) >= 3) continue;
+    // >= 4, not >= 3. On the story scale only 4 is Done; 2 and 3 are legacy values that every
+    // other surface reads as In Progress (see workStatus.ts). The old cutoff silently refused to
+    // schedule any story sitting on 3. Nothing is on 3 today, so this changes no current output —
+    // it stops the next one that lands there vanishing without a word. (2026-08-07, ST-64186)
+    if (status === 'done' || status === 'complete' || status === 'completed' || Number(story.status) >= 4) continue;
     if (story.deleted) continue;
 
     const zone = story.timezone || story.timeZone || DEFAULT_ZONE;
@@ -1010,15 +1014,25 @@ async function planSchedule({
     .get();
   const blocks = blocksSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));; blocks.unshift(...syntheticBlocks);
 
-  // Also fetch 'calendar_blocks' which might be manual/AI overrides or specific story blocks
-  // Simplified query to avoid composite index: filter start in query, end in memory
+  // Also fetch 'calendar_blocks' which might be manual/AI overrides or specific story blocks.
+  //
+  // Bound `start` at both ends in the query. The old comment here claimed the upper bound needed
+  // a composite index, but it does not: an equality on ownerUid plus a range on a single field
+  // uses the (ownerUid, start) index that already exists in firestore.indexes.json and that the
+  // `>=` half was already using. Only a range on `end` would need a new one. Without the upper
+  // bound this read returned every block from windowStart to the end of time, growing without
+  // limit as the planner writes forward blocks — and then discarded them in memory anyway, since
+  // end >= start means a block starting after windowEnd can never satisfy the end filter below.
+  // Same results, bounded reads. (2026-08-07, ST-64186)
+  const windowEndMs = windowEnd.toMillis();
   const calBlocksSnap = await db.collection('calendar_blocks')
     .where('ownerUid', '==', userId)
     .where('start', '>=', windowStart.toMillis())
+    .where('start', '<=', windowEndMs)
     .get();
   const calBlocks = calBlocksSnap.docs
     .map(d => ({ id: d.id, ...d.data() }))
-    .filter(b => b.end <= windowEnd.toMillis()); // Filter end in memory
+    .filter(b => b.end <= windowEndMs); // Filter end in memory: it is a different field
 
   // We need to merge these. If a calBlock exists, it might block time.
   // For now, let's just pass them through or use them to adjust 'busy'.
@@ -1044,66 +1058,75 @@ async function planSchedule({
     isFixed: true // New flag to indicate this shouldn't be moved easily
   }));
 
-  const goalsSnap = await db
-    .collection('goals')
-    .where('ownerUid', '==', userId)
-    .get()
-    .catch(() => ({ docs: [] }));
-  const goalThemeById = new Map(
-    goalsSnap.docs.map((goalDoc) => {
-      const data = goalDoc.data() || {};
-      return [goalDoc.id, { theme: data.theme ?? null, themeId: data.themeId ?? data.theme_id ?? data.theme ?? null }];
-    }),
-  );
-  const attachGoalTheme = (item) => {
-    if (!item || !item.goalId) return item;
-    const fromGoal = goalThemeById.get(String(item.goalId));
-    if (!fromGoal) return item;
-    return {
-      ...item,
-      goalTheme: fromGoal.theme,
-      goalThemeId: fromGoal.themeId,
+  // chores, routines and habits — and the whole-collection `goals` read that exists only to theme
+  // them — feed computeChoreRoutineOccurrences alone, which is already gated on includeChores
+  // below. Reading them unconditionally cost four whole-collection reads per call on every path
+  // that then ignored the result. Guard the lot. (2026-08-07, ST-64186)
+  let chores = [];
+  let routinesAndHabits = [];
+  if (includeChores) {
+    const goalsSnap = await db
+      .collection('goals')
+      .where('ownerUid', '==', userId)
+      .get()
+      .catch(() => ({ docs: [] }));
+    const goalThemeById = new Map(
+      goalsSnap.docs.map((goalDoc) => {
+        const data = goalDoc.data() || {};
+        const themeId = data.themeId ?? data.theme_id ?? data.theme ?? null;
+        return [goalDoc.id, { theme: data.theme ?? null, themeId }];
+      }),
+    );
+    const attachGoalTheme = (item) => {
+      if (!item || !item.goalId) return item;
+      const fromGoal = goalThemeById.get(String(item.goalId));
+      if (!fromGoal) return item;
+      return {
+        ...item,
+        goalTheme: fromGoal.theme,
+        goalThemeId: fromGoal.themeId,
+      };
     };
-  };
 
-  const choresSnap = await db
-    .collection('chores')
-    .where('ownerUid', '==', userId)
-    .get();
-  const chores = choresSnap.docs.map((doc) => attachGoalTheme({ id: doc.id, ...doc.data() }));
-
-  const routinesSnap = await db
-    .collection('routines')
-    .where('ownerUid', '==', userId)
-    .get();
-  const routines = routinesSnap.docs.map((doc) => attachGoalTheme({ id: doc.id, ...doc.data() }));
-
-  // Treat habits as routines for scheduling
-  let habits = [];
-  try {
-    const habitsSnap = await db
-      .collection('habits')
+    const choresSnap = await db
+      .collection('chores')
       .where('ownerUid', '==', userId)
       .get();
-    habits = habitsSnap.docs.map((doc) => {
-      const data = doc.data() || {};
-      return attachGoalTheme({
-        id: doc.id,
-        ownerUid: userId,
-        title: data.title || data.name || 'Habit',
-        recurrence: data.recurrence || { rrule: 'FREQ=DAILY', timezone: DEFAULT_ZONE },
-        durationMinutes: data.durationMinutes || data.estimateMinutes || 30,
-        points: data.points || null,
-        priority: data.priority || 3,
-        tags: data.tags || [],
-        goalId: data.goalId || null,
-        theme: data.theme || data.themeId || null,
+    chores = choresSnap.docs.map((doc) => attachGoalTheme({ id: doc.id, ...doc.data() }));
+
+    const routinesSnap = await db
+      .collection('routines')
+      .where('ownerUid', '==', userId)
+      .get();
+    const routines = routinesSnap.docs.map((doc) => attachGoalTheme({ id: doc.id, ...doc.data() }));
+
+    // Treat habits as routines for scheduling
+    let habits = [];
+    try {
+      const habitsSnap = await db
+        .collection('habits')
+        .where('ownerUid', '==', userId)
+        .get();
+      habits = habitsSnap.docs.map((doc) => {
+        const data = doc.data() || {};
+        return attachGoalTheme({
+          id: doc.id,
+          ownerUid: userId,
+          title: data.title || data.name || 'Habit',
+          recurrence: data.recurrence || { rrule: 'FREQ=DAILY', timezone: DEFAULT_ZONE },
+          durationMinutes: data.durationMinutes || data.estimateMinutes || 30,
+          points: data.points || null,
+          priority: data.priority || 3,
+          tags: data.tags || [],
+          goalId: data.goalId || null,
+          theme: data.theme || data.themeId || null,
+        });
       });
-    });
-  } catch (e) {
-    console.warn('[scheduler] failed to load habits', e?.message || e);
+    } catch (e) {
+      console.warn('[scheduler] failed to load habits', e?.message || e);
+    }
+    routinesAndHabits = [...routines, ...habits];
   }
-  const routinesAndHabits = [...routines, ...habits];
 
   const existingSnap = await db
     .collection('scheduled_instances')
