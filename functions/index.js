@@ -151,6 +151,7 @@ try {
   if (delegationWorker) {
     exports.onStoryDelegationComplete = delegationWorker.onStoryDelegationComplete;
     exports.onTaskDelegationComplete = delegationWorker.onTaskDelegationComplete;
+    exports.onGoalDelegationComplete = delegationWorker.onGoalDelegationComplete;
   }
 } catch (e) {
   console.warn('[init] delegationWorker not loaded', e?.message || e);

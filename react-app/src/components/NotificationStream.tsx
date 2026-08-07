@@ -16,6 +16,7 @@ import { createPortal } from 'react-dom';
 import { Bell, Pin, PinOff, X } from 'lucide-react';
 import { Z, portalTarget } from '../utils/layoutTokens';
 import WorkOnNextBanner from './WorkOnNextBanner';
+import DelegationReviewBanner from './DelegationReviewBanner';
 import DeferralCandidatesBanner from './DeferralCandidatesBanner';
 import CheckInBanner from './checkins/CheckInBanner';
 import { CoachVerdictBanner } from './coach/CoachVerdictBanner';
@@ -261,6 +262,12 @@ const NotificationStream: React.FC<NotificationStreamProps> = ({ isLargeScreen }
           This one answers "what do I pick up now", so it leads. */}
       <StreamSection id="workOnNext" onVisibilityChange={handleVisibilityChange}>
         <WorkOnNextBanner />
+      </StreamSection>
+      {/* Directly under "what do I pick up now", because it answers the same question: work the
+          AI has already finished is the cheapest thing on the list to move. Delegated items do
+          not change lane on completion, so this is the only place they surface unprompted. */}
+      <StreamSection id="delegationReview" onVisibilityChange={handleVisibilityChange}>
+        <DelegationReviewBanner />
       </StreamSection>
       <StreamSection id="deferral" onVisibilityChange={handleVisibilityChange}>
         <DeferralCandidatesBanner />
