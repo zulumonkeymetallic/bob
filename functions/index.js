@@ -20240,6 +20240,17 @@ exports.dailySync = schedulerV2.onSchedule({
       }
     }
 
+    // Refreshes the books backlog only. Turning list entries into stories stays manual
+    // via importHardcoverListToStories — a nightly import would grow the backlog on its
+    // own. No secret needed: the token lives on the profile, not in Secret Manager.
+    if (data.hardcoverToken) {
+      try {
+        await _syncHardcover(uid);
+      } catch (error) {
+        console.error(`Failed to sync Hardcover for user ${uid}`, error);
+      }
+    }
+
     if (data.stravaConnected && data.stravaAutoSync !== false) {
       try {
         await fetchStravaActivities(uid, { maxPages: 2 });
