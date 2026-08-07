@@ -150,17 +150,25 @@ async function resolveThemeLabelForBlock(block, uid, themes) {
     ? mapThemeIdToLabel(rawThemeId, themes)
     : (block.theme || block.category || null);
 
-  // Parse numeric theme (legacy/numeric scale 1-15)
-  // If mapThemeIdToLabel returns a number or if themeLabel is numeric
-  if (Number.isFinite(Number(themeLabel)) || Number.isFinite(Number(block.theme)) || Number.isFinite(Number(rawThemeId))) {
-    const val = Number(themeLabel) || Number(block.theme) || Number(rawThemeId);
+  // Parse numeric theme (legacy/numeric scale 1-15).
+  //
+  // The guard has to reject null/undefined/'' explicitly, because Number(null) is 0 — and 0 is
+  // finite. Every block without a theme_id therefore satisfied `Number.isFinite(Number(rawThemeId))`,
+  // resolved `val` to 0, matched theme id 0, and had its perfectly good string theme overwritten
+  // with "General". That is why the coach's "Broken Miles • 8km" (theme: 'health') published as
+  // "[General]" with General's colour instead of Health & Fitness. Found 2026-08-07.
+  const numericTheme = [themeLabel, block.theme, rawThemeId]
+    .filter((value) => value !== null && value !== undefined && String(value).trim() !== '')
+    .map((value) => Number(value))
+    .find((value) => Number.isFinite(value));
+  if (numericTheme !== undefined) {
     const direct = Array.isArray(themes)
-      ? themes.find((t) => String(t.id) === String(val))
+      ? themes.find((t) => String(t.id) === String(numericTheme))
       : null;
     if (direct) {
       themeLabel = direct.label || direct.name || direct.id;
-    } else if (NUMERIC_THEME_MAP[val]) {
-      themeLabel = NUMERIC_THEME_MAP[val];
+    } else if (NUMERIC_THEME_MAP[numericTheme]) {
+      themeLabel = NUMERIC_THEME_MAP[numericTheme];
     }
   }
 
@@ -201,6 +209,12 @@ async function resolveThemeLabelForBlock(block, uid, themes) {
       }
     } catch { /* ignore */ }
   }
+
+  // Publish the theme's display label, not whatever shorthand the block happened to store, so
+  // the event title reads "[Health & Fitness]" rather than "[health]" and the colour lookup
+  // downstream gets a label it can actually match.
+  const resolved = findThemeMatch(rawThemeId, themeLabel, themes);
+  if (resolved) return resolved.label || resolved.name || String(resolved.id);
 
   return themeLabel || 'General';
 }
@@ -753,10 +767,15 @@ function findThemeMatch(themeId, themeLabel, themes) {
   const label = themeLabel || themeId;
   if (!label) return null;
   const canonical = canonicalizeThemeKey(label);
-  return themes.find((t) => {
-    const key = canonicalizeThemeKey(t.label || t.name || t.id);
-    return key === canonical;
-  }) || null;
+  const exact = themes.find((t) => canonicalizeThemeKey(t.label || t.name || t.id) === canonical);
+  if (exact) return exact;
+  // Blocks written elsewhere use the short theme key rather than the display label — the coach
+  // stores theme: 'health', which never equalled 'healthfitness' and so matched nothing at all.
+  // Accept a prefix match only when it is unambiguous, so 'health' resolves to Health & Fitness
+  // while a genuinely ambiguous key still resolves to nothing rather than to the wrong theme.
+  if (!canonical) return null;
+  const prefixed = themes.filter((t) => canonicalizeThemeKey(t.label || t.name || t.id).startsWith(canonical));
+  return prefixed.length === 1 ? prefixed[0] : null;
 }
 
 function findClosestGoogleEventColorId(themeRgb, eventColors) {
@@ -2455,6 +2474,8 @@ exports.moveGoogleCalendarEvent = async function(uid, eventId, newStartMs, newEn
 exports._syncBlockToGoogle = syncBlockToGoogle;
 exports._evaluateGoogleSyncPolicyForBlock = evaluateGoogleSyncPolicyForBlock;
 exports._resolvePushOwner = resolvePushOwner;
+exports._resolveThemeLabelForBlock = resolveThemeLabelForBlock;
+exports._findThemeMatch = findThemeMatch;
 exports._isFitnessBlock = isFitnessBlock;
 exports._pushPendingBlocksForAllUsers = async function() {
   const db = admin.firestore();
