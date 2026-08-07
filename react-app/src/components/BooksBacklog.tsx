@@ -10,6 +10,7 @@ import { Goal, Sprint } from '../types';
 import { findSprintForDate } from '../utils/taskSprintHelpers';
 import { generateRef } from '../utils/referenceGenerator';
 import { planningSprints } from '../utils/sprintFilter';
+import GoalSearchSelect from './common/GoalSearchSelect';
 
 interface BookItem {
   id: string;
@@ -363,10 +364,13 @@ const BooksBacklog: React.FC = () => {
             </Form.Group>
             <Form.Group className="mb-3">
               <Form.Label>Goal to link (optional)</Form.Label>
-              <Form.Select value={convertForm.goalId || ''} onChange={(e) => setConvertForm(prev => ({ ...prev, goalId: e.target.value || null }))}>
-                <option value="">No goal</option>
-                {goals.map((g) => (<option key={g.id} value={g.id}>{g.title}</option>))}
-              </Form.Select>
+              <GoalSearchSelect
+                id="books-convert-goal-options"
+                goals={goals}
+                value={convertForm.goalId || null}
+                onChange={(goalId) => setConvertForm(prev => ({ ...prev, goalId }))}
+                placeholder="Search goals by title (optional)..."
+              />
             </Form.Group>
             <Form.Group className="mb-3">
               <Form.Label>Target / Completed date</Form.Label>
@@ -396,10 +400,13 @@ const BooksBacklog: React.FC = () => {
             </Form.Group>
             <Form.Group className="mb-3">
               <Form.Label>Goal to link (optional)</Form.Label>
-              <Form.Select value={importGoalId} onChange={(e) => setImportGoalId(e.target.value)}>
-                <option value="">Select goal…</option>
-                {goals.map(g => (<option key={g.id} value={g.id}>{g.title}</option>))}
-              </Form.Select>
+              <GoalSearchSelect
+                id="books-import-goal-options"
+                goals={goals}
+                value={importGoalId || null}
+                onChange={(goalId) => setImportGoalId(goalId || '')}
+                placeholder="Search goals by title (optional)..."
+              />
             </Form.Group>
             <Form.Group className="mb-3">
               <Form.Label>Priority</Form.Label>

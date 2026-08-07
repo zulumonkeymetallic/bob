@@ -10,6 +10,7 @@ import { useSprint } from '../contexts/SprintContext';
 import { Goal, Sprint } from '../types';
 import { findSprintForDate } from '../utils/taskSprintHelpers';
 import { generateRef } from '../utils/referenceGenerator';
+import GoalSearchSelect from './common/GoalSearchSelect';
 
 interface SteamGame {
   id: string;
@@ -596,15 +597,13 @@ const GamesBacklog: React.FC = () => {
           <Form>
             <Form.Group className="mb-3">
               <Form.Label>Goal</Form.Label>
-              <Form.Select
-                value={convertForm.goalId}
-                onChange={(e) => setConvertForm(prev => ({ ...prev, goalId: e.target.value }))}
-              >
-                <option value="">Select goal…</option>
-                {goals.map(goal => (
-                  <option key={goal.id} value={goal.id}>{goal.title}</option>
-                ))}
-              </Form.Select>
+              <GoalSearchSelect
+                id="games-convert-goal-options"
+                goals={goals}
+                value={convertForm.goalId || null}
+                onChange={(goalId) => setConvertForm(prev => ({ ...prev, goalId: goalId || '' }))}
+                placeholder="Search goals by title..."
+              />
             </Form.Group>
             <Form.Group className="mb-3">
               <Form.Label>Sprint (optional)</Form.Label>
@@ -724,15 +723,13 @@ const GamesBacklog: React.FC = () => {
 
             <Form.Group className="mb-3">
               <Form.Label>Goal</Form.Label>
-              <Form.Select
-                value={manualForm.goalId}
-                onChange={(e) => setManualForm(prev => ({ ...prev, goalId: e.target.value }))}
-              >
-                <option value="">Select goal…</option>
-                {goals.map(goal => (
-                  <option key={goal.id} value={goal.id}>{goal.title}</option>
-                ))}
-              </Form.Select>
+              <GoalSearchSelect
+                id="games-manual-goal-options"
+                goals={goals}
+                value={manualForm.goalId || null}
+                onChange={(goalId) => setManualForm(prev => ({ ...prev, goalId: goalId || '' }))}
+                placeholder="Search goals by title..."
+              />
             </Form.Group>
             <Form.Group className="mb-3">
               <Form.Label>Sprint (optional)</Form.Label>

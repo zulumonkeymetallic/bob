@@ -10,6 +10,7 @@ import { Goal, Sprint } from '../types';
 import { findSprintForDate } from '../utils/taskSprintHelpers';
 import { generateRef } from '../utils/referenceGenerator';
 import { planningSprints } from '../utils/sprintFilter';
+import GoalSearchSelect from './common/GoalSearchSelect';
 
 interface TraktIds {
   trakt?: number;
@@ -320,12 +321,13 @@ const ShowsBacklog: React.FC = () => {
           <Form>
             <Form.Group className="mb-3">
               <Form.Label>Goal (optional)</Form.Label>
-              <Form.Select value={convertForm.goalId || ''} onChange={(e) => setConvertForm(prev => ({ ...prev, goalId: e.target.value || null }))}>
-                <option value="">No goal</option>
-                {goals.map((g: Goal) => (
-                  <option key={g.id} value={g.id}>{g.title}</option>
-                ))}
-              </Form.Select>
+              <GoalSearchSelect
+                id="shows-convert-goal-options"
+                goals={goals}
+                value={convertForm.goalId || null}
+                onChange={(goalId) => setConvertForm(prev => ({ ...prev, goalId }))}
+                placeholder="Search goals by title (optional)..."
+              />
             </Form.Group>
             <Form.Group className="mb-3">
               <Form.Label>Sprint (optional)</Form.Label>
