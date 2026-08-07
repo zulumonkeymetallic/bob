@@ -19936,10 +19936,18 @@ exports.importHardcoverListToStories = httpsV2.onCall(async (req) => {
     return rawSlug.replace(/^\//, '');
   })();
 
+  // Hardcover list slugs are unique per account, not globally — several users have a
+  // list called "2026". Without a user_id filter the lookup returns a stranger's list
+  // (slug "2026" matches at least six accounts), so resolve our own id and scope to it.
+  const me = await getHardcoverMe(uid);
+  if (me.username !== HARDCOVER_ALLOWED_USERNAME) {
+    throw new httpsV2.HttpsError('permission-denied', `Hardcover token must belong to @${HARDCOVER_ALLOWED_USERNAME}.`);
+  }
+
   const fetchListPage = async (offset) => {
     const q = `
-      query ListBooks($slug: String!, $offset: Int) {
-        lists(where: { slug: { _eq: $slug } }, limit: 1) {
+      query ListBooks($slug: String!, $offset: Int, $userId: Int!) {
+        lists(where: { slug: { _eq: $slug }, user_id: { _eq: $userId } }, limit: 1) {
           id
           name
           list_books(order_by: { position: asc }, limit: 100, offset: $offset) {
@@ -19959,9 +19967,9 @@ exports.importHardcoverListToStories = httpsV2.onCall(async (req) => {
         }
       }
     `;
-    const data = await callHardcoverGraphQL(uid, q, { slug, offset });
+    const data = await callHardcoverGraphQL(uid, q, { slug, offset, userId: me.id });
     const list = Array.isArray(data?.lists) ? data.lists[0] : null;
-    if (!list) throw new httpsV2.HttpsError('not-found', `Hardcover list not found: ${slug}`);
+    if (!list) throw new httpsV2.HttpsError('not-found', `Hardcover list not found on @${me.username}: ${slug}`);
     return list;
   };
 
