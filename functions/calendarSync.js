@@ -2892,39 +2892,44 @@ async function runLightCalendarReplan(uid, options = {}) {
   }
 }
 
+/** How many in-window blocks to examine per run before taking the first `limit` pushable ones. */
+const PUSH_SCAN_LIMIT = 500;
+
 async function pushPendingBlocks(uid, limit = 30) {
-  // Primary fetch: explicit null googleEventId
+  const pushWindowStart = Date.now() - (GCAL_PAST_DAYS * MS_IN_DAY);
+  const pushWindowEnd = Date.now() + (GCAL_FUTURE_DAYS * MS_IN_DAY);
+
+  // Scope the candidate query to the push window and order it, instead of taking whatever 30
+  // documents Firestore returned first.
+  //
+  // The old query was `where('googleEventId','==',null).limit(30)` over every block the user
+  // has ever had — 4,903 of them here — in document-id order, with no date filter. Two thirds
+  // of each batch (20 of 30, measured 2026-08-07) then failed the `start < pushWindowStart`
+  // check further down and were discarded, so a run that was allowed to push 30 events pushed
+  // at most 10, and which 10 was an accident of document id. Worse, `== null` matches only an
+  // explicitly-null field, never an absent one: 322 blocks had no googleEventId key at all and
+  // were therefore invisible to the push no matter how often it ran. The `aiGenerated == true`
+  // fallback only rescued AI-generated blocks, so planner_scheduler, theme_allocation and
+  // coach_runner blocks stayed stuck. Net effect: 190 blocks sat pending in-window while
+  // Google held 2 events.
+  //
+  // Ordering by start also makes progress deterministic — earliest first — rather than
+  // re-examining the same arbitrary head of the collection every hour.
   const snap = await admin.firestore()
     .collection('calendar_blocks')
     .where('ownerUid', '==', uid)
-    .where('googleEventId', '==', null)
-    .limit(limit)
+    .where('start', '>=', pushWindowStart)
+    .where('start', '<=', pushWindowEnd)
+    .orderBy('start')
+    .limit(PUSH_SCAN_LIMIT)
     .get();
 
-  // Fallback: capture docs missing googleEventId (field not set) by filtering client-side
-  let docs = [...snap.docs];
-  if (docs.length < limit) {
-    const fallback = await admin.firestore()
-      .collection('calendar_blocks')
-      .where('ownerUid', '==', uid)
-      .where('aiGenerated', '==', true)
-      .limit(limit)
-      .get()
-      .catch(() => ({ docs: [] }));
-    const seen = new Set(docs.map((d) => d.id));
-    fallback.docs.forEach((d) => {
-      const data = d.data() || {};
-      if (seen.has(d.id)) return;
-      if (data.googleEventId) return;
-      docs.push(d);
-      seen.add(d.id);
-    });
-  }
+  // Absent and null are both "not yet pushed"; only a truthy id means Google already has it.
+  const docs = snap.docs.filter((d) => !(d.data() || {}).googleEventId);
 
   let pushed = 0;
   let errors = 0;
   let skipped = 0;
-  const pushWindowStart = Date.now() - (GCAL_PAST_DAYS * MS_IN_DAY);
   const candidates = docs.slice(0, limit);
   await logCalendarIntegration(uid, {
     action: 'push',
