@@ -20017,8 +20017,13 @@ exports.importHardcoverListToStories = httpsV2.onCall(async (req) => {
       if (alreadyConverted) { skipped += 1; continue; }
 
       const storyRef = db.collection('stories').doc();
+      // Without a ref the story renders with a blank ST- number and has no working
+      // deep link, so mint one the same way the other creation paths do.
+      let refVal = null;
+      try { refVal = await generateStoryRef(db, uid); } catch { refVal = `ST-${String(storyRef.id).slice(-6).toUpperCase()}`; }
       await storyRef.set(ensureTaskPoints({
         id: storyRef.id,
+        ref: refVal,
         ownerUid: uid,
         persona,
         personaKey: persona,
