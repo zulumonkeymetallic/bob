@@ -3210,7 +3210,15 @@ function getColorForTheme(theme, themes, eventColors) {
 }
 
 // Scheduled function to sync calendar blocks (runs every hour)
-exports.scheduledCalendarSync = onSchedule({ schedule: 'every 1 hours', region: REGION, secrets: GOOGLE_OAUTH_SECRETS }, async () => {
+// memory: 512MiB, not the 256MiB default this ran on for months. Requiring index.js costs
+// 201 MiB RSS across 2343 modules before a single request is served — every function in the
+// deployment loads the whole export graph at cold start, including googleapis, vertexai and
+// the rest that this sync never touches. That left ~55 MiB for actual work and the function
+// spent its hourly runs logging "Memory limit of 256 MiB exceeded with 258 MiB used" and
+// dying part-way through. Nothing about the sync's own workload is large — the user's entire
+// calendar_blocks collection is ~3 MiB of JSON. The real fix is lazy-loading the heavy
+// dependencies so the baseline drops; this buys headroom until then. (2026-08-07, ST-64186)
+exports.scheduledCalendarSync = onSchedule({ schedule: 'every 1 hours', region: REGION, memory: '512MiB', secrets: GOOGLE_OAUTH_SECRETS }, async () => {
   console.log('Running scheduled calendar sync...');
 
   try {
