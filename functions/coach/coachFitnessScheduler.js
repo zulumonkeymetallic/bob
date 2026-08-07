@@ -483,6 +483,9 @@ async function _scheduleBlocksForUser(uid, profile) {
       activity: 'run',
       placementSource: placement.source,
       aiGenerated: true,
+      // Claim the server lane explicitly: iOS reads an absent pushOwner as its own, so without
+      // this both lanes would push the same session and Google would show it twice.
+      pushOwner: 'server',
       description: event.description || '',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),

@@ -4380,6 +4380,21 @@ async function enforceGoogleSyncPolicyForWindow(db, userId, windowStart, windowE
     }));
 
     if (policy.eligible) {
+      // Re-enable anything a previous run switched off that now qualifies. This pass only ever
+      // disabled blocks, so when a category becomes eligible — fitness did on 2026-08-07 — every
+      // block it had already set syncToGoogle=false on stayed off permanently, and the policy
+      // change would have looked like it did nothing.
+      if (block.syncToGoogle === false) {
+        await docSnap.ref.set({
+          syncToGoogle: admin.firestore.FieldValue.delete(),
+          googleSyncPolicyReason: admin.firestore.FieldValue.delete(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true }).catch((error) => {
+          console.warn('[GoogleSyncPolicy] failed to re-enable sync for block', docSnap.id, error?.message || error);
+        });
+        updated += 1;
+        continue;
+      }
       kept += 1;
       continue;
     }

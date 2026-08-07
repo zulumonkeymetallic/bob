@@ -587,10 +587,47 @@ async function loadRoutineEntityForBlock(block) {
   };
 }
 
+/**
+ * Which of the two outbound lanes owns this block.
+ *
+ * Both lanes run concurrently, so exactly one must own each block. iOS writes an EKEvent into
+ * Apple Calendar; if Apple then syncs that up to Google it arrives with an id BOB never sees,
+ * so a block pushed by both lanes cannot be reconciled back into a single event — the user just
+ * gets two. iOS reads this same field and treats an ABSENT value as its own (see
+ * CalendarSyncService.shouldSync), so anything the server intends to own has to say so
+ * explicitly; an unstamped block belongs to the phone.
+ *
+ * Per Jim, 2026-08-07: the server owns everything it can reach, because it works whether or not
+ * the phone is on; the phone keeps only what it creates itself while offline.
+ */
+const IOS_OWNED_SOURCES = new Set(['local_orchestration']);
+
+function resolvePushOwner(block) {
+  const source = String(block?.source || '').trim().toLowerCase();
+  return IOS_OWNED_SOURCES.has(source) ? 'ios' : 'server';
+}
+
+/**
+ * Coach-generated training. These carry no storyId/taskId/choreId because the programme emits
+ * them directly, so getSyncEntityKindFromBlock returns null and they used to fall out of the
+ * policy as 'unsupported_block' — the single category of block Jim most wants in his calendar
+ * was the one category that could never reach it.
+ */
+function isFitnessBlock(block) {
+  const source = String(block?.source || '').trim().toLowerCase();
+  const entityType = String(block?.entityType || '').trim().toLowerCase();
+  return source.startsWith('coach_') || entityType === 'fitness';
+}
+
 async function evaluateGoogleSyncPolicyForBlock(block) {
   if (!block) return { eligible: false, reason: 'missing_block', kind: null };
   if (isExternalCalendarBlock(block)) {
     return { eligible: false, reason: 'external_gcal_block', kind: null };
+  }
+
+  // Eligible on their own terms rather than through a linked entity — there is nothing to link.
+  if (isFitnessBlock(block)) {
+    return { eligible: true, reason: 'fitness_session', kind: 'fitness' };
   }
 
   const entityKind = getSyncEntityKindFromBlock(block);
@@ -2417,6 +2454,8 @@ exports.moveGoogleCalendarEvent = async function(uid, eventId, newStartMs, newEn
 
 exports._syncBlockToGoogle = syncBlockToGoogle;
 exports._evaluateGoogleSyncPolicyForBlock = evaluateGoogleSyncPolicyForBlock;
+exports._resolvePushOwner = resolvePushOwner;
+exports._isFitnessBlock = isFitnessBlock;
 exports._pushPendingBlocksForAllUsers = async function() {
   const db = admin.firestore();
   const profiles = await db.collection('profiles').get().catch(() => ({ docs: [] }));
@@ -2925,7 +2964,14 @@ async function pushPendingBlocks(uid, limit = 30) {
     .get();
 
   // Absent and null are both "not yet pushed"; only a truthy id means Google already has it.
-  const docs = snap.docs.filter((d) => !(d.data() || {}).googleEventId);
+  // Ownership is then checked strictly: iOS treats an absent pushOwner as its own, so the
+  // server must leave unstamped blocks alone or both lanes would push the same block and
+  // produce two events that cannot be reconciled. Only an explicit 'server' claim is ours.
+  const docs = snap.docs.filter((d) => {
+    const data = d.data() || {};
+    if (data.googleEventId) return false;
+    return String(data.pushOwner || '').trim().toLowerCase() === 'server';
+  });
 
   let pushed = 0;
   let errors = 0;
