@@ -322,14 +322,27 @@ async function _runOrchestratorForUser(uid) {
   const hmPrev = hmPrevSnap.exists ? hmPrevSnap.data() : {};
   const fitnessOverview = fitnessOverviewSnap.exists ? fitnessOverviewSnap.data() : {};
 
-  const hasRecovery = (m) => m && (m.hrvMs != null || m.sleepDurationH != null);
-  const hm = hasRecovery(hmToday) ? hmToday : (hasRecovery(hmPrev) ? hmPrev : {});
-  const readinessBasisDate = hasRecovery(hmToday)
-    ? today
-    : (hasRecovery(hmPrev) ? todayDt.minus({ days: 1 }).toISODate() : null);
+  // Fall back to yesterday PER FIELD, not per document.
+  //
+  // Picking one document wholesale meant a day carrying only one of the two measures lost the
+  // other outright. Apple writes sleep for a night as soon as it ends but publishes HRV later
+  // in the morning, so today's document routinely holds sleep and no HRV — and because it did
+  // hold *something*, yesterday's perfectly good HRV was never consulted. Observed 2026-08-07:
+  // sleep 5.32h present, hrvMs absent, while 6 August held hrvMs 64.5, and readiness was
+  // computed with hrvToday null regardless.
+  const yesterdayIso = todayDt.minus({ days: 1 }).toISODate();
+  const pickRecovery = (field) => {
+    if (hmToday && hmToday[field] != null) return { value: hmToday[field], date: today };
+    if (hmPrev && hmPrev[field] != null) return { value: hmPrev[field], date: yesterdayIso };
+    return { value: null, date: null };
+  };
+  const hrvPick = pickRecovery('hrvMs');
+  const sleepPick = pickRecovery('sleepDurationH');
 
-  const hrvToday = hm.hrvMs ?? null;
-  const sleepToday = hm.sleepDurationH ?? null;
+  const hrvToday = hrvPick.value;
+  const sleepToday = sleepPick.value;
+  // The older of the two, so a stale basis is visible rather than flattered by the fresher one.
+  const readinessBasisDate = [hrvPick.date, sleepPick.date].filter(Boolean).sort()[0] || null;
 
   // 3. HRV 7-day average — use fitness_overview.hrv.last7Avg (already computed nightly)
   //    Fall back to querying health_metrics if not available
@@ -840,6 +853,13 @@ exports.runCoachOrchestratorNightly = schedulerV2.onSchedule(
     timeZone: TZ,
     region: REGION,
     secrets: [OPENROUTER_API_KEY_SECRET],
+    // Declared, because the 256MiB default was not survivable: this ran out of memory roughly
+    // five seconds after start — before doing any work at all — on every night from 4 to 7
+    // August 2026, so no coach_daily document was written at all and readiness silently went
+    // stale. The sibling scheduler in coachFitnessScheduler.js already asks for 512MiB for the
+    // same reason. 60s was also far too tight for a job that calls an LLM.
+    memory: '512MiB',
+    timeoutSeconds: 540,
   },
   async () => {
     const firestore = db();

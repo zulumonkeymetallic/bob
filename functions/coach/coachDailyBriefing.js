@@ -61,7 +61,9 @@ async function _sendMorningBriefingForUser(uid, chatId) {
 }
 
 exports.sendCoachMorningBriefing = schedulerV2.onSchedule(
-  { schedule: '0 7 * * *', timeZone: TZ, region: REGION },
+  // Same reasoning as runCoachOrchestratorNightly: the 256MiB default leaves no headroom once
+  // this codebase is loaded, and this iterates every linked session before sending.
+  { schedule: '0 7 * * *', timeZone: TZ, region: REGION, memory: '512MiB', timeoutSeconds: 300 },
   async () => {
     const sessions = await getAllLinkedSessions();
     for (const { uid, chatId } of sessions) {
