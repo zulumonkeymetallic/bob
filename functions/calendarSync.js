@@ -2875,24 +2875,17 @@ async function pullGoogleEventsForUser(uid, { windowStart, windowEnd }) {
       }
     }
 
-    if (syncResults.length > 0) {
-      try {
-        const { planSchedule } = require('./scheduler/engine');
-        const today = new Date();
-        const ws = new Date(today);
-        const we = new Date(today);
-        we.setDate(today.getDate() + 7);
-        await planSchedule({
-          db,
-          userId: uid,
-          windowStart: ws,
-          windowEnd: we,
-          busy: [],
-        });
-      } catch (err) {
-        console.warn('[calendarSync] replan after pull failed', err?.message || err);
-      }
-    }
+    // No replan here. There used to be a planSchedule() call at this point, and it never once
+    // worked: it passed plain JS Dates into scheduler/engine.js, which treats the window as a
+    // Luxon DateTime throughout (toMillis/toISODate/startOf/toJSDate), so it threw
+    // "windowStart.toMillis is not a function" on every run from the moment the pull started
+    // succeeding. It also discarded planSchedule's return value, and planSchedule writes
+    // nothing — so even repaired it would have loaded every block, task and story into a
+    // 256 MiB function once an hour to produce a plan nobody read.
+    //
+    // The replan that actually follows a pull is runLightCalendarReplan, called by
+    // syncUserCalendar below; scheduledCalendarSync passes replanAlways so it runs regardless
+    // of what the pull returned. Removed 2026-08-07 (ST-64186).
 
     await logCalendarIntegration(uid, { action: 'pull', status: 'success', windowStart: timeMin, windowEnd: timeMax, counts, syncResults });
     // Settings -> Integrations reads profiles/{uid}.googleCalendarLastSyncAt for its "Last
