@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Form, InputGroup, ListGroup, Spinner, Badge, Button } from 'react-bootstrap';
-import { addDoc, collection, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp, startAfter, where } from 'firebase/firestore';
+import { addDoc, collection, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePersona } from '../contexts/PersonaContext';
@@ -11,21 +11,60 @@ import EditGoalModal from './EditGoalModal';
 import { generateRef } from '../utils/referenceGenerator';
 // Soft-deleted records (merged-away duplicates) must not be listed — see utils/softDelete.
 import { excludeSoftDeleted } from '../utils/softDelete';
+// The corpus is fetched once per session and filtered in memory; see utils/searchIndex for why
+// the per-keystroke Firestore queries this replaced were as slow as they were.
+import {
+  fetchSearchIndex,
+  loadCachedIndex,
+  rankSearchRows,
+  visibleForPersona,
+  type SearchRow,
+} from '../utils/searchIndex';
 
 type ResultType = 'task' | 'story' | 'goal';
 
-interface SearchResult {
-  id: string;
-  ref?: string;
-  title: string;
-  type: ResultType;
-}
+type SearchResult = SearchRow;
+
+/** More than fits the dropdown; ranking means the tail is never what you wanted anyway. */
+const MAX_RESULTS = 25;
+
+/**
+ * The floating results panel.
+ *
+ * Two things were wrong with the previous inline style. It set no `background`, and a
+ * `<ListGroup>` paints nothing itself — only its `.list-group-item` children carry a background —
+ * so the scroll gutter, the rounded corners and the strip below the last row let the page show
+ * straight through, which read as the whole panel being semi-transparent.
+ *
+ * And it set `overflowY: 'auto'` while leaving `overflowX` at its `visible` default. CSS resolves
+ * that combination by promoting the visible axis to `auto`, so one long title put a horizontal
+ * scrollbar across the bottom of the dropdown. Pinning `overflowX` to `hidden` and letting titles
+ * wrap is what actually removes it.
+ */
+const dropdownPanelStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: '36px',
+  right: 0,
+  left: 0,
+  zIndex: 1100,
+  maxHeight: '320px',
+  overflowY: 'auto',
+  overflowX: 'hidden',
+  background: 'var(--bs-body-bg)',
+  border: '1px solid var(--bs-border-color)',
+  borderRadius: '8px',
+  boxShadow: '0 8px 24px var(--glass-shadow-color, rgba(0, 0, 0, 0.18))',
+  // Overlay scrollbars render as a heavy dark slab over an opaque panel on macOS; thin, tinted
+  // to the border colour, reads as part of the panel.
+  scrollbarWidth: 'thin',
+  scrollbarColor: 'var(--bs-border-color) transparent',
+};
 
 const GlobalSearchBar: React.FC = () => {
   const { currentUser } = useAuth();
   const { currentPersona } = usePersona();
   const [queryText, setQueryText] = useState('');
-  const [results, setResults] = useState<SearchResult[]>([]);
+  const [index, setIndex] = useState<SearchRow[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const [toast, setToast] = useState<{ message: string; variant?: 'warning' | 'danger' } | null>(null);
@@ -35,10 +74,17 @@ const GlobalSearchBar: React.FC = () => {
   const [selectedGoal, setSelectedGoal] = useState<Goal | null>(null);
   const [supportingGoals, setSupportingGoals] = useState<Goal[]>([]);
   const [activeModal, setActiveModal] = useState<ResultType | null>(null);
-  const debounceRef = useRef<NodeJS.Timeout | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
+  const warmedRef = useRef(false);
 
   const normalizedQuery = useMemo(() => queryText.trim().toLowerCase(), [queryText]);
+
+  const results = useMemo(() => {
+    if (normalizedQuery.length < 2 || !index) return [];
+    return rankSearchRows(visibleForPersona(index, currentPersona), normalizedQuery)
+      .slice(0, MAX_RESULTS);
+  }, [index, normalizedQuery, currentPersona]);
+
   const hasExactMatch = useMemo(
     () => results.some((result) => {
       const title = String(result.title || '').trim().toLowerCase();
@@ -58,109 +104,74 @@ const GlobalSearchBar: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  useEffect(() => {
-    if (!currentUser || !currentPersona) return;
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (normalizedQuery.length < 2) {
-      setResults([]);
-      return;
-    }
+  /**
+   * Warm the corpus. Cached copy first so a repeat visit is instant, then a background refresh
+   * so anything created since arrives. Called on focus rather than on mount: this component is
+   * in the toolbar of every page, and most page loads never touch search.
+   */
+  const warmIndex = useCallback(async () => {
+    const uid = currentUser?.uid;
+    if (!uid || warmedRef.current) return;
+    warmedRef.current = true;
 
-    debounceRef.current = setTimeout(async () => {
-      setLoading(true);
-      try {
-        const owner = currentUser.uid;
-        const matchesQuery = (row: any) => {
-          const title = String(row.title || '').toLowerCase();
-          const description = String(row.description || '').toLowerCase();
-          const ref = String(row.ref || row.reference || row.referenceNumber || row.displayId || '').toLowerCase();
-          return title.includes(normalizedQuery) || ref.includes(normalizedQuery) || description.includes(normalizedQuery);
-        };
-        const toResult = (row: any, type: ResultType): SearchResult => {
-          const ref = row.ref || row.reference || row.referenceNumber || row.displayId || null;
-          return {
-            id: row.id,
-            ref,
-            title: row.title || row.id,
-            type,
-          };
-        };
-        const fetchSet = async (col: 'tasks' | 'stories' | 'goals', type: ResultType): Promise<SearchResult[]> => {
-          console.log('[global-search] query start', { col, owner, persona: currentPersona, q: normalizedQuery });
-          const baseConstraints = [
-            collection(db, col),
-            where('ownerUid', '==', owner),
-            where('persona', '==', currentPersona),
-            orderBy('updatedAt', 'desc'),
-          ] as const;
-          const firstPageSize = 30;
-          const deepPageSize = 120;
-          const maxDeepScanDocs = normalizedQuery.length >= 4 ? 600 : 360;
-          const maxResultsPerType = 12;
+    const cached = loadCachedIndex(uid);
+    if (cached) setIndex(cached);
+    else setLoading(true);
 
-          const firstSnap = await getDocs(query(...baseConstraints, limit(firstPageSize)));
-          let scannedDocs = firstSnap.size;
-          let lastDoc: any = firstSnap.docs[firstSnap.docs.length - 1] || null;
-          const rows = firstSnap.docs.map((item) => ({ id: item.id, ...(item.data() as any) }));
-          let matches = rows.filter(matchesQuery).map((row) => toResult(row, type));
-
-          // If the recent window has no hits, scan older pages so stale-but-relevant items are still discoverable.
-          while (
-            matches.length === 0 &&
-            normalizedQuery.length >= 3 &&
-            lastDoc &&
-            scannedDocs < maxDeepScanDocs
-          ) {
-            const nextSnap = await getDocs(query(
-              ...baseConstraints,
-              startAfter(lastDoc),
-              limit(deepPageSize),
-            ));
-            if (nextSnap.empty) break;
-            scannedDocs += nextSnap.size;
-            lastDoc = nextSnap.docs[nextSnap.docs.length - 1] || null;
-            const nextRows = nextSnap.docs.map((item) => ({ id: item.id, ...(item.data() as any) }));
-            matches = nextRows.filter(matchesQuery).map((row) => toResult(row, type));
-            if (nextSnap.size < deepPageSize) break;
-          }
-
-          const limited = matches.slice(0, maxResultsPerType);
-          console.log('[global-search] fetched', {
-            col,
-            scannedDocs,
-            firstPageSize,
-            deepScanEnabled: normalizedQuery.length >= 3,
-            matches: limited.length,
-          });
-          return limited;
-        };
-
-        const [taskResults, storyResults, goalResults] = await Promise.all([
-          fetchSet('tasks', 'task'),
-          fetchSet('stories', 'story'),
-          fetchSet('goals', 'goal'),
-        ]);
-
-        const merged = [...taskResults, ...storyResults, ...goalResults].slice(0, 25);
-        console.log('[global-search] results merged', { q: normalizedQuery, tasks: taskResults.length, stories: storyResults.length, goals: goalResults.length, merged: merged.length });
-        setResults(merged);
-        setOpen(true);
-      } catch (err: any) {
-        console.warn('[global-search] failed', err);
-        const msg = err?.message || '';
-        if (msg.includes('indexes?create_composite') || msg.toLowerCase().includes('failed-precondition')) {
-          setToast({ message: 'Search index is still building. Try again in a minute.', variant: 'warning' });
-        } else if (msg.toLowerCase().includes('permission-denied')) {
-          setToast({ message: 'Search unavailable: permission denied.', variant: 'danger' });
-        } else {
-          setToast({ message: 'Search failed. Please try again.', variant: 'warning' });
-        }
-        setResults([]);
-      } finally {
-        setLoading(false);
+    try {
+      setIndex(await fetchSearchIndex(uid));
+    } catch (err: any) {
+      console.warn('[global-search] index load failed', err);
+      // A cached corpus is still perfectly usable, so only surface a failure that left us with
+      // nothing at all to search.
+      if (!cached) {
+        warmedRef.current = false;
+        const msg = String(err?.message || '').toLowerCase();
+        setToast({
+          message: msg.includes('permission-denied')
+            ? 'Search unavailable: permission denied.'
+            : 'Could not load search. Please try again.',
+          variant: msg.includes('permission-denied') ? 'danger' : 'warning',
+        });
       }
-    }, 250);
-  }, [currentPersona, currentUser, normalizedQuery]);
+    } finally {
+      setLoading(false);
+    }
+  }, [currentUser]);
+
+  /**
+   * Drop the corpus when the account changes. The cache is keyed by uid, so nothing leaks
+   * across users on disk — but this component does not remount on a sign-out/sign-in, and
+   * without this the previous user's rows would stay in state and keep being searched. Easy to
+   * hit in practice: the demo and agent test accounts are signed into on the same browser.
+   *
+   * Declared above the warm-up so that on a uid change it is the reset that runs first and the
+   * warm-up that runs second, rather than the other way round.
+   */
+  useEffect(() => {
+    warmedRef.current = false;
+    setIndex(null);
+  }, [currentUser?.uid]);
+
+  // Sign-in lands after first render on a cold load, so warm on whichever comes second.
+  useEffect(() => {
+    if (currentUser?.uid && queryText) void warmIndex();
+  }, [currentUser, queryText, warmIndex]);
+
+  /**
+   * Refs already in use, for `generateRef`'s collision check. The quick-create handlers each
+   * used to read 500 documents purely to build this list — the index already holds every ref
+   * the user owns, and holds them for all three types rather than one persona's worth.
+   */
+  const existingRefs = useMemo(
+    () => (index || []).map((row) => String(row.ref || '').trim()).filter(Boolean),
+    [index],
+  );
+
+  /** Keep a just-created item searchable without paying for a full refetch. */
+  const addToIndex = useCallback((row: SearchRow) => {
+    setIndex((current) => [row, ...(current || [])]);
+  }, []);
 
   const closeModal = () => {
     setActiveModal(null);
@@ -185,7 +196,6 @@ const GlobalSearchBar: React.FC = () => {
   const handleSelect = async (result: SearchResult) => {
     setOpen(false);
     setQueryText('');
-    setResults([]);
     try {
       const collectionName = result.type === 'task' ? 'tasks' : result.type === 'story' ? 'stories' : 'goals';
       const selectedSnap = await getDoc(doc(db, collectionName, result.id));
@@ -221,20 +231,11 @@ const GlobalSearchBar: React.FC = () => {
     setLoading(true);
     setOpen(false);
     try {
-      const storiesSnap = await getDocs(query(
-        collection(db, 'stories'),
-        where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona),
-        limit(500),
-      ));
       const sprintsSnap = await getDocs(query(
         collection(db, 'sprints'),
         where('ownerUid', '==', currentUser.uid),
         limit(200),
       ));
-      const existingRefs = storiesSnap.docs
-        .map((item) => String((item.data() as any)?.ref || '').trim())
-        .filter(Boolean);
 
       const now = new Date();
       const dueDateMs = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0, 0).getTime();
@@ -273,12 +274,19 @@ const GlobalSearchBar: React.FC = () => {
       };
       const storyRef = await addDoc(collection(db, 'stories'), payload);
       const createdStory = { id: storyRef.id, ...(payload as any) } as Story;
+      addToIndex({
+        id: storyRef.id,
+        type: 'story',
+        title: payload.title,
+        ref: payload.ref,
+        persona: currentPersona,
+        updatedAt: Date.now(),
+      });
       setSelectedStory(createdStory);
       const goals = await loadGoalsForModal();
       setSupportingGoals(goals);
       setActiveModal('story');
       setQueryText('');
-      setResults([]);
       setToast(null);
     } catch (err) {
       console.warn('[global-search] quick create story failed', err);
@@ -294,15 +302,6 @@ const GlobalSearchBar: React.FC = () => {
     setLoading(true);
     setOpen(false);
     try {
-      const tasksSnap = await getDocs(query(
-        collection(db, 'tasks'),
-        where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona),
-        limit(500),
-      ));
-      const existingRefs = tasksSnap.docs
-        .map((item) => String((item.data() as any)?.ref || '').trim())
-        .filter(Boolean);
       const now = new Date();
       const dueDateMs = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0, 0).getTime();
       const taskRef = generateRef('task', existingRefs);
@@ -331,10 +330,17 @@ const GlobalSearchBar: React.FC = () => {
       };
       const taskDoc = await addDoc(collection(db, 'tasks'), payload);
       const createdTask = { id: taskDoc.id, ...(payload as any) } as Task;
+      addToIndex({
+        id: taskDoc.id,
+        type: 'task',
+        title: payload.title,
+        ref: taskRef,
+        persona: currentPersona,
+        updatedAt: Date.now(),
+      });
       setSelectedTask(createdTask);
       setActiveModal('task');
       setQueryText('');
-      setResults([]);
       setToast({ message: `Created task ${taskRef}` });
     } catch (err) {
       console.warn('[global-search] quick create task failed', err);
@@ -351,15 +357,6 @@ const GlobalSearchBar: React.FC = () => {
     setLoading(true);
     setOpen(false);
     try {
-      const goalsSnap = await getDocs(query(
-        collection(db, 'goals'),
-        where('ownerUid', '==', currentUser.uid),
-        where('persona', '==', currentPersona),
-        limit(500),
-      ));
-      const existingRefs = goalsSnap.docs
-        .map((item) => String((item.data() as any)?.ref || '').trim())
-        .filter(Boolean);
       const goalRef = generateRef('goal', existingRefs);
       const payload: any = {
         title: queryText.trim(),
@@ -375,12 +372,19 @@ const GlobalSearchBar: React.FC = () => {
       };
       const goalDoc = await addDoc(collection(db, 'goals'), payload);
       const createdGoal = { id: goalDoc.id, ...(payload as any) } as Goal;
+      addToIndex({
+        id: goalDoc.id,
+        type: 'goal',
+        title: payload.title,
+        ref: goalRef,
+        persona: currentPersona,
+        updatedAt: Date.now(),
+      });
       const goals = await loadGoalsForModal();
       setSupportingGoals(goals);
       setSelectedGoal(createdGoal);
       setActiveModal('goal');
       setQueryText('');
-      setResults([]);
       setToast({ message: `Created goal ${goalRef}` });
     } catch (err) {
       console.warn('[global-search] quick create goal failed', err);
@@ -397,8 +401,15 @@ const GlobalSearchBar: React.FC = () => {
         <Form.Control
           placeholder="Search goals, stories, tasks"
           value={queryText}
-          onChange={(e) => setQueryText(e.target.value)}
-          onFocus={() => normalizedQuery.length >= 2 && setOpen(true)}
+          onChange={(e) => {
+            setQueryText(e.target.value);
+            setOpen(e.target.value.trim().length >= 2);
+          }}
+          onFocus={() => {
+            void warmIndex();
+            if (normalizedQuery.length >= 2) setOpen(true);
+          }}
+          onKeyDown={(e) => { if (e.key === 'Escape') setOpen(false); }}
         />
         {loading && (
           <InputGroup.Text>
@@ -407,32 +418,26 @@ const GlobalSearchBar: React.FC = () => {
         )}
       </InputGroup>
       {open && results.length > 0 && (
-        <ListGroup
-          style={{
-            position: 'absolute',
-            top: '36px',
-            right: 0,
-            left: 0,
-            zIndex: 1100,
-            maxHeight: '320px',
-            overflowY: 'auto',
-            boxShadow: '0 8px 24px rgba(0,0,0,0.15)',
-          }}
-        >
+        <ListGroup style={dropdownPanelStyle}>
           {results.map((r) => (
             <ListGroup.Item
               action
               key={`${r.type}-${r.id}`}
               onClick={() => handleSelect(r)}
-              className="d-flex justify-content-between align-items-start"
+              className="d-flex justify-content-between align-items-start gap-2"
             >
-              <div>
-                <div className="fw-semibold">{r.title}</div>
+              {/* minWidth:0 is what lets a flex child actually shrink; without it a long title
+                  pushes the row wider than the panel instead of wrapping inside it. */}
+              <div style={{ minWidth: 0 }}>
+                <div className="fw-semibold" style={{ overflowWrap: 'anywhere' }}>{r.title}</div>
                 <div className="text-muted small">
                   {(r.ref || r.id)} · {r.type}
                 </div>
               </div>
-              <Badge bg={r.type === 'goal' ? 'success' : r.type === 'story' ? 'primary' : 'secondary'}>
+              <Badge
+                bg={r.type === 'goal' ? 'success' : r.type === 'story' ? 'primary' : 'secondary'}
+                style={{ flexShrink: 0 }}
+              >
                 {r.type}
               </Badge>
             </ListGroup.Item>
@@ -475,19 +480,11 @@ const GlobalSearchBar: React.FC = () => {
           )}
         </ListGroup>
       )}
-      {open && !loading && results.length === 0 && normalizedQuery.length >= 2 && (
+      {/* `index &&` matters: without it this panel flashes "No matches" for a frame between the
+          first keystroke and the corpus arriving, offering to create something that exists. */}
+      {open && !loading && index && results.length === 0 && normalizedQuery.length >= 2 && (
         <div
-          style={{
-            position: 'absolute',
-            top: '36px',
-            right: 0,
-            left: 0,
-            zIndex: 1100,
-            background: 'var(--bs-body-bg)',
-            border: '1px solid var(--bs-border-color)',
-            padding: '8px',
-            fontSize: '12px',
-          }}
+          style={{ ...dropdownPanelStyle, padding: '8px', fontSize: '12px' }}
         >
           <div className="d-flex align-items-center justify-content-between gap-2">
             <span>No matches.</span>
